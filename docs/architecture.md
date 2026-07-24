@@ -51,10 +51,14 @@ architecture should be built to expect, or wait for, autonomous movement between
   idea — see AD-3), and a namespaced `.pHive` state directory on `startRun`; looks up an
   existing run's paths on every subsequent call.
 - **Kickoff+Plan Engine** — wraps plugin-hive's existing `kickoff` + `plan` skills, running them
-  against the run's isolated workspace/state.
-- **Escalation Classifier** — for each question the Kickoff+Plan Engine generates, emits a
-  structured suggestion (`suggested_channel`, `confidence`, `reason`) per the anchored principle
-  (see AD-2). It does not itself decide the enforced channel.
+  headlessly against the run's isolated workspace/state via `claude -p`/`--resume`. Includes a
+  **question-extraction step**: headlessly, plugin-hive's `AskUserQuestion`-based gate questions
+  are unavailable and the underlying skill degrades to asking them as prose at turn-end (see
+  `docs/spike-plugin-hive-drivability-findings.md`), so this component parses the question out
+  of that prose rather than reading a structured tool-call payload.
+- **Escalation Classifier** — for each *extracted* question, emits a structured suggestion
+  (`suggested_channel`, `confidence`, `reason`) per the anchored principle (see AD-2). It does
+  not itself decide the enforced channel.
 - **Output Emitter** — on human approval of the final gate, writes the approved epic+stories in
   plugin-hive's native `.pHive/epics/` schema into the run's state dir, and serves it back
   through `getOutput`.

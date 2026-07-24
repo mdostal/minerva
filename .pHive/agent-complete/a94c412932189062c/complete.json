@@ -1,0 +1,16 @@
+{
+  "agent_id": "a94c412932189062c",
+  "session_id": "2204dbcf-05c0-47ad-bd05-0ccb5bf85582",
+  "agent_type": "",
+  "cwd": "/Users/dostal/Documents/work/dostal/code/minerva",
+  "agent_transcript_path": "/Users/dostal/.claude/projects/-Users-dostal-Documents-work-dostal-code-minerva/2204dbcf-05c0-47ad-bd05-0ccb5bf85582/subagents/agent-a94c412932189062c.jsonl",
+  "last_assistant_message": "Analyzing build order and escalation mechanism",
+  "prompt_id": "a63f1186-b91c-42d7-824a-9c29d0c2121a",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-07-24T17:33:24Z"
+}

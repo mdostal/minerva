@@ -1,0 +1,16 @@
+{
+  "agent_id": "a9e01eb9bdeb8430c",
+  "session_id": "2204dbcf-05c0-47ad-bd05-0ccb5bf85582",
+  "agent_type": "",
+  "cwd": "/Users/dostal/Documents/work/dostal/code/minerva",
+  "agent_transcript_path": "/Users/dostal/.claude/projects/-Users-dostal-Documents-work-dostal-code-minerva/2204dbcf-05c0-47ad-bd05-0ccb5bf85582/subagents/agent-a9e01eb9bdeb8430c.jsonl",
+  "last_assistant_message": "Reading architecture.md and prd.md",
+  "prompt_id": "a63f1186-b91c-42d7-824a-9c29d0c2121a",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-07-24T17:32:22Z"
+}

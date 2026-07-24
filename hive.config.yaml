@@ -1,0 +1,17 @@
+metrics:
+  enabled: true
+
+execution:
+  default_methodology: tdd    # fixed by README discipline: named -> interfaced -> full TDD -> locked
+
+developer:
+  pr_style: single-commit
+  commit_granularity: feature-scoped
+  review_depth: thorough
+  notes: null
+
+planning:
+  collaborative_review: true
+
+meta_team:
+  github_forwarding: false

@@ -1,0 +1,81 @@
+project_name: "minerva"
+type: greenfield
+discovered: "2026-07-24"
+source: "README.md + docs/north-star.md"
+
+project_type: service
+has_ui: false
+
+ship_target:
+  kind: npm
+  notes: "Publishes as a TS package other Pantheon components (Auriga, Vulcan) depend on."
+
+tech_stack:
+  languages:
+    - typescript
+  frameworks: []
+  build_tools: []
+  package_managers: []
+  versions: {}
+
+claude_md_summary: |
+  No CLAUDE.md yet. Project conventions so far (from README.md / docs/north-star.md):
+  - TS by default; Pantheon subprocess ABI is interchangeable/any-language.
+  - Full TDD discipline: named -> interfaced -> full TDD -> locked.
+  - Local CI only, no GitHub Actions.
+  - Rogue-overwrite guardrails expected.
+  - Minerva is headless: it drives Delphi (the human surface) rather than rendering its own UI.
+
+discovery_brief: "docs/initial-info.md"  # resolved/refined source of truth: v1 = agent-drivable, standalone; Delphi/Auriga/Vulcan/Multica/votem are v2 behind contracts
+
+north_star:
+  goal: "Turn an idea into an approved, planned spec autonomously by running kickoff+plan. v1: an agent operator drives the Q&A and escalates strategic decisions to a human gate; v2 upgrades the human surface to Delphi and wires Auriga/Vulcan/Multica/votem behind contracts. See docs/initial-info.md."
+  audience: "Both the human operator (the user) and other Pantheon services -- Minerva is invoked directly by a person AND by Auriga's routing."
+  expected_scale: "Low concurrency per instance, but must support spinning up many separate Minerva instances in parallel (one per repo / one per idea-intake session) so a person can push many ideas through at once instead of hand-running kickoff+plan per idea in separate terminals."
+  pain_points: "(1) Manual per-idea kickoff -- currently means SSHing into a box and hand-running the flow per idea, which doesn't scale. (2) Needs to run asynchronously, without an SSH session, with compute pushed onto other boxes via Multica -- Minerva should be the persona/toolset that drives kickoff+plan remotely on Multica-managed compute."
+  success: >
+    Drop an idea in; Minerva runs kickoff+plan and generates the human-gate questions,
+    surfaced somewhere else (most likely Delphi, which supports surveys, AI chat, and
+    back-and-forth). The user fills that out / chats with the AI and continues the
+    intake asynchronously -- while it runs, the user can go do other work with the
+    orchestrator (deep research, tool CBAs in Delphi), make selections, and kick off a
+    new project that starts its own question intake. Once intake is done, it feeds
+    scope/tickets forward so the pipeline keeps going -- fully async, multi-instance,
+    no manual babysitting.
+  avoid: >
+    Never auto-approve. Minerva must not make assumptions, cut corners, or kick off
+    work when uncertain or under-informed -- it should keep building out the full
+    requirements until there's enough to proceed. A real approval process (human, or
+    via the votem plugin) sits in front of every kickoff, surfaced through Delphi and
+    configured outside Minerva itself.
+
+integrations:
+  cli_tools:
+    codex:
+      detected: true
+      path: "/Users/dostal/.npm-global/bin/codex"
+      impact: "Adversarial code review"
+    multica:
+      detected: true
+      path: "/Users/dostal/.local/bin/multica"
+      impact: "v2 remote compute dispatch -- core to Minerva's stated pain point (push execution off the local/SSH box), but wiring is deferred to v2 per docs/initial-info.md"
+    linearis:
+      detected: false
+    frame0:
+      detected: false
+    maestro:
+      detected: false
+  mcp_servers:
+    firecrawl:
+      detected: false
+    context7:
+      detected: false
+    posthog:
+      detected: false
+    firebase:
+      detected: false
+    mobile-mcp:
+      detected: false
+  vaults:
+    obsidian:
+      detected: false

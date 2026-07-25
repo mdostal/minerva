@@ -1,0 +1,9 @@
+run_id: 2026-07-24-agent-drivable-core
+skill: plan
+timestamp: "2026-07-24T00:00:00Z"
+gate_lift_fired: false
+methodology: tdd
+methodology_source: hive-config
+story_specs_produced: 8
+nonsensical_defaults: []
+warnings_emitted: 0

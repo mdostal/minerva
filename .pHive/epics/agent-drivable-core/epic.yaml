@@ -1,0 +1,59 @@
+name: agent-drivable-core
+title: Minerva v1 — agent-drivable idea-to-spec engine
+target_codebase: /Users/dostal/Documents/work/dostal/code/minerva
+methodology: tdd
+version_bump: none
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main   # hive/lib/git_flow.py not vendored in this consumer project; fell back
+                       # per protocol (no origin/develop exists on this repo either way)
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [greenfield-service, cli-subprocess-abi, headless-agent-driven, no-ui]
+  roster: [researcher, technical-writer, tpm, architect]
+  per_tag_reasoning:
+    greenfield-service: "No existing Minerva source; project_type: service, has_ui: false per project-profile.yaml"
+    cli-subprocess-abi: "AD-1 commits to a JSON-over-stdio wire format; architect review needed for feasibility of the subprocess/worktree mechanics"
+    headless-agent-driven: "Core epic risk is headless claude -p drivability (validated by prior Risk-A spike) plus two unprototyped extraction/classification components"
+    no-ui: "has_ui: false — no ui-designer needed on the planning team, no UI story detection expected"
+  confidence: high
+  gate_decisions:
+    grill: enabled (1 round, converged — 12 findings, all resolved)
+    collaborative_review: enabled (planning.collaborative_review: true) — architect + tpm lenses on design discussion, architect self-review on H/V docs (Agent-tool spawn blocked by a plugin-hive guardrail hook mid-epic; conducted as orchestrator-narrated review instead)
+    hv_gate: skipped (Medium scope, no --gate-hv flag)
+
+stories:
+  - id: wire-protocol-skeleton
+    title: Minerva wire-protocol skeleton (scaffold + capabilities)
+    complexity: low
+    depends_on: []
+  - id: run-workspace-allocation
+    title: Run Manager — two-case isolated workspace allocation (AD-3)
+    complexity: medium
+    depends_on: [wire-protocol-skeleton]
+  - id: kickoff-engine-plumbing
+    title: Kickoff+Plan Engine plumbing — headless drive/resume + raw-prose passthrough
+    complexity: medium
+    depends_on: [run-workspace-allocation]
+  - id: question-extraction
+    title: Question extraction from headless prose turns (TIMEBOXED spike-with-checkpoint)
+    complexity: high
+    depends_on: [kickoff-engine-plumbing]
+  - id: escalation-classification
+    title: Escalation Classifier — self-classification + channel enforcement (AD-2, TIMEBOXED spike-with-checkpoint)
+    complexity: high
+    depends_on: [question-extraction]
+  - id: output-emitter
+    title: Output Emitter — write + serve approved epic+stories (REQ-04)
+    complexity: medium
+    depends_on: [escalation-classification]
+  - id: cleanup-ledger-events
+    title: Cleanup Ledger / Event Sink + abortRun (AD-4)
+    complexity: low
+    depends_on: [output-emitter]
+  - id: completeness-pass
+    title: Completeness pass — error-enum coverage, concurrency proof, REQ-07 traceability marker
+    complexity: low
+    depends_on: [cleanup-ledger-events]

@@ -1,0 +1,123 @@
+id: escalation-classification
+epic: agent-drivable-core
+title: Escalation Classifier — self-classification + channel enforcement (AD-2, TIMEBOXED spike-with-checkpoint)
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [question-extraction]
+
+description: |
+  Implement AD-2's escalation classification: when the Kickoff+Plan Engine drives a headless
+  session, append instructions asking that same turn to self-classify each question it asks
+  against the anchored escalate/absorb principle (strategic/ambiguous/irreversible/
+  low-confidence -> escalate; routine/mechanical/pre-decided -> absorb), emitting
+  {suggested_channel, confidence, reason} alongside the question text for question-extraction
+  to pull out. The enforced `channel` defaults to `suggested_channel` in v1 (no Vesta/Delphi to
+  override it yet). Upgrade Channel Routing / Answer Submission from kickoff-engine-plumbing's
+  hardcoded human-only stub to real enforcement: getQuestions/submitAnswers now route by the
+  actual enforced channel, and WRONG_CHANNEL is exercised for real. This is vertical-plan.md's
+  Slice 5 — TIMEBOXED as a spike-with-checkpoint like question-extraction, and depends on it
+  directly (classification is extracted alongside the question in the same pass).
+
+  TIMEBOX AND CONVERGENCE BAR (per vertical-plan.md Slice 5 — do not silently loosen these):
+    - Timebox: 2 implementation days.
+    - Convergence bar (both required): (1) parseable {suggested_channel, confidence, reason}
+      for >=90% of the same corpus used in question-extraction; (2) correctly matches the
+      anchored principle's expected channel for >=80% of a separately curated set of >=10
+      question/expected-channel pairs spanning both "should escalate" and "should absorb"
+      cases. Parseability alone does NOT satisfy this bar — judgment quality is a distinct
+      failure mode from parseability (architect review finding).
+    - IF EITHER BAR ISN'T MET: do not block the epic. Ship kickoff-engine-plumbing's
+      always-human default as v1's actual behavior (safe, consistent with "when uncertain,
+      escalate"), update docs/architecture.md to document this as a known limitation, and hand
+      off a follow-up epic. A documented "not met" is a valid, complete outcome.
+
+  KNOWN LIMITATION, NAMED NOT SOLVED: a model self-grading the ambiguity/confidence of a
+  question it just chose to ask is a biased judge — no independent perspective. AD-2's
+  "suggestion, not ground truth" framing mitigates how much Minerva's architecture TRUSTS the
+  signal; it does not mitigate the risk that the signal itself is unreliable. This story's
+  judgment-quality convergence bar exists specifically to catch that, not just paper over it.
+
+acceptance_criteria:
+  - "Given the same >=15-entry corpus used in question-extraction, when self-classification runs against each, then it produces a parseable {suggested_channel, confidence, reason} for >=90% of them"
+  - "Given a separately curated set of >=10 question/expected-channel pairs (spanning both escalate and absorb cases), when self-classification runs against each, then it matches the anchored principle's expected channel for >=80% of them"
+  - "Given a question with no external override present (v1 has none), when getQuestions is called, then the enforced channel equals the classifier's suggested_channel"
+  - "Given an answer submitted on a channel that doesn't match a question's enforced channel, when submitAnswers is called, then it returns WRONG_CHANNEL and the run does not advance — now exercised against REAL classified questions, not kickoff-engine-plumbing's hardcoded human-only stub"
+  - "Given the timebox/convergence bars are NOT met, when the story is closed out, then docs/architecture.md is updated to document the always-human default as v1's shipped behavior, and a follow-up epic is identified"
+
+scope_boundaries:
+  do:
+    - "Implement self-classification + enforced-channel defaulting + real WRONG_CHANNEL enforcement"
+    - "Honor the 2-day timebox literally, same discipline as question-extraction"
+  do_not:
+    - "Do not build any external override mechanism (Vesta/Delphi) — v1 has none; enforced channel simply defaults to suggested_channel, full stop"
+    - "Do not silently extend past the 2-day timebox — a documented 'not met' is this story's valid alternate completion"
+    - "Do not treat parseability alone as convergence — the judgment-quality bar (>=80% match against curated pairs) must be evaluated separately and both bars must pass"
+
+steps:
+  - id: research
+    description: Design the classification-instruction prompt to append at the Kickoff+Plan Engine's spawn point, and build the separately curated >=10-entry question/expected-channel pairs set (distinct from question-extraction's phrasing corpus) covering both escalate and absorb cases per the anchored principle.
+    agent: researcher
+  - id: test-spec
+    description: Write failing node:test tests asserting both convergence bars (parseability >=90%, judgment-match >=80%) plus WRONG_CHANNEL enforcement against real classified questions. Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Implement the classification-instruction injection, extraction-side classification
+      parsing (extending question-extraction's parser), and enforced-channel defaulting +
+      real WRONG_CHANNEL enforcement. TIMEBOXED: if the 2-day box elapses without meeting both
+      bars, stop and produce the checkpoint-not-met documentation instead.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests, specifically checking that the judgment-quality bar was actually evaluated (not just parseability) before declaring convergence.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch, including whichever outcome (converged implementation, or checkpoint-not-met documentation) actually resulted.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, claude -p --append-system-prompt or --json-schema"
+  key_files:
+    - path: docs/architecture.md
+      purpose: "AD-2 defines the classification mechanism, the suggestion-vs-enforced-channel distinction, and the Question wire shape ({suggested_channel, confidence, reason, channel})"
+
+files_to_modify:
+  - file: src/escalation-classifier.ts
+    change: "Create — classification-instruction injection, self-classification parsing, enforced-channel defaulting"
+  - file: src/channel-routing.ts
+    change: "Create — real getQuestions/submitAnswers channel enforcement, replacing kickoff-engine-plumbing's hardcoded human-only stub"
+
+design_decisions:
+  - decision: "Same honesty-under-timebox principle as question-extraction: a documented 'not met' is a complete, valid outcome"
+    rationale: "Consistency with question-extraction's precedent — both risky slices get the same discipline, per the TPM review's original ask applying to both."
+  - decision: "Judgment-quality bar (80% match against curated pairs) is separate from and additional to the parseability bar (90%)"
+    rationale: "Architect review explicitly distinguished these as different failure modes — a classifier that always parses but always guesses wrong would pass a parseability-only bar and shouldn't."
+
+cross_cutting:
+  - concern: documentation
+    action: "Same as question-extraction: update docs/architecture.md's Escalation Classifier component description with the actual as-built behavior (real self-classification, or always-human-default if checkpoint not met)."
+
+risks:
+  - severity: high
+    description: "Unprototyped, and compounds question-extraction's risk (depends on it directly) plus carries an inherent self-grading bias that the convergence bar can catch but not eliminate"
+    mitigation: "Explicit timebox + dual convergence bars (parseability AND judgment-quality) + a safe, working fallback (always-human, consistent with the hard 'never guess' exclusion) if either bar isn't met"
+
+references:
+  - path: docs/architecture.md
+    relevant_excerpt: |
+      AD-2 — Escalation = structured output + confidence, decided externally... in v1, with
+      neither wired yet, the enforced channel simply defaults to suggested_channel — nothing
+      currently overrides it.
+  - path: .pHive/epics/agent-drivable-core/docs/design-discussion.md
+    relevant_excerpt: |
+      a model self-grading the ambiguity/confidence of a question it just chose to ask is a
+      biased judge — no independent perspective, mild incentive to resolve cleanly. This is
+      exactly why AD-2 makes the channel a "suggestion" decided externally rather than ground
+      truth Minerva trusts.

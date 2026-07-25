@@ -1,0 +1,117 @@
+id: kickoff-engine-plumbing
+epic: agent-drivable-core
+title: Kickoff+Plan Engine plumbing — headless drive/resume + raw-prose passthrough
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [run-workspace-allocation]
+
+description: |
+  Wire the Run Manager to actually drive plugin-hive's kickoff (and later plan) headlessly:
+  spawn `claude -p --session-id <uuid>` inside the run's workspace on startRun, persist the
+  session_id as part of the Run record, and on submitAnswers spawn `claude -p --resume
+  <session_id> "<answer text>"` to continue. Surface the raw final-turn prose text through
+  getQuestions as a single always-`channel:"human"` question (no extraction or classification
+  yet — those are separate follow-on stories). This is vertical-plan.md's Slice 3: the first
+  story where the full idea-in -> question -> answer -> continue loop works end-to-end, proving
+  the core async mechanism this whole epic exists to deliver, even before the question surface
+  is polished. Directly reuses the mechanism `docs/spike-plugin-hive-drivability-findings.md`
+  already validated — this story is wiring proven plumbing behind Minerva's own CLI boundary,
+  not re-deriving whether headless drive/resume works at all.
+
+acceptance_criteria:
+  - "Given startRun{idea} on an allocated workspace, when the engine spawns claude -p, then the run reaches waiting_on_human (via getRunStatus) once the driven session asks its first gate question — mirroring the spike's own observed behavior (stop_reason: end_turn, clean exit)"
+  - "Given a run in waiting_on_human, when getQuestions{channel:\"human\"} is called, then it returns the raw final-turn prose text as a single question; getQuestions{channel:\"agent\"} returns empty (nothing is agent-channel yet)"
+  - "Given a human answer submitted via submitAnswers{channel:\"human\", answers}, when the engine resumes via claude -p --resume, then the run genuinely advances — the resumed session has correct context of the prior question and answer (mirroring the spike's own resume verification)"
+  - "Given no caller ever calls submitAnswers, when time passes, then the run's status stays exactly waiting_on_human indefinitely — no polling, no autonomous re-drive, no timeout-triggered advance (architecture.md's 'No Autonomous Progress' invariant)"
+  - "Given an answer submitted on the wrong channel for a pending question, when submitAnswers is called, then it returns WRONG_CHANNEL and the run does not advance"
+
+scope_boundaries:
+  do:
+    - "Spawn/resume claude -p and surface its raw, unparsed final-turn text through getQuestions"
+    - "Hardcode channel:\"human\" for every question — no classification logic at all in this story"
+  do_not:
+    - "Do not attempt to parse or extract a clean question from the prose — that's question-extraction's scope. Surface the raw text as-is."
+    - "Do not implement any classification, confidence, or suggested_channel logic — that's escalation-classification's scope"
+    - "Do not add any retry/auto-advance logic that could cause a run to progress without an explicit submitAnswers call — this directly violates the 'No Autonomous Progress' invariant this story must test for"
+
+steps:
+  - id: research
+    description: Re-read docs/spike-plugin-hive-drivability-spike.test.ts and docs/spike-plugin-hive-drivability-findings.md for the exact claude -p / --resume invocation shape, session-id handling, and the observed stop_reason/output shape this story wires behind bin/minerva.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing node:test tests spawning bin/minerva as a real subprocess end-to-end
+      (startRun -> getQuestions -> submitAnswers -> getRunStatus), reusing the spike test's
+      pattern of driving a real throwaway kickoff run in a scratch repo. Include an explicit
+      test that polling getRunStatus repeatedly without calling submitAnswers never advances
+      the run (the "No Autonomous Progress" acceptance criterion). Do NOT read the
+      implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the engine spawn/resume wiring, session_id persistence via the Run record, and the raw-prose getQuestions/submitAnswers passthrough with the hardcoded human-only channel. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests, with particular scrutiny on whether any retry/error-handling path could accidentally re-drive a run without an explicit caller submitAnswers call (design-discussion §4's medium risk).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, tsx, child_process for claude -p"
+  key_files:
+    - path: docs/spike-plugin-hive-drivability-spike.test.ts
+      purpose: "The proven headless invoke/resume pattern this story wires behind bin/minerva — copy the mechanism, don't re-derive it"
+    - path: docs/architecture.md
+      purpose: "\"No Autonomous Progress\" section — the invariant this story's tests must actively verify, not just document"
+
+files_to_modify:
+  - file: src/kickoff-engine.ts
+    change: "Create — claude -p spawn on startRun, --resume on submitAnswers, raw-prose surfacing"
+  - file: bin/minerva
+    change: "Wire getQuestions/submitAnswers dispatch to the engine"
+
+code_examples:
+  - title: "Proven headless spawn + resume pattern from this epic's own spike"
+    file: docs/spike-plugin-hive-drivability-spike.test.ts
+    snippet: |
+      function claudeP(args, opts = {}) {
+        const out = execFileSync("claude", ["-p", "--model", MODEL, "--output-format", "json",
+          "--permission-mode", "bypassPermissions", ...args], {
+          cwd: scratchRepo, encoding: "utf8", timeout: opts.timeout ?? 60_000,
+        });
+        return JSON.parse(out);
+      }
+      // resume: claudeP(["--resume", sessionId, answerText])
+
+design_decisions:
+  - decision: "Ship raw-prose passthrough now; extraction and classification are separate, later stories"
+    rationale: "Architect + TPM collaborative review both independently flagged that bundling engine plumbing (spike-proven, low risk) with question extraction (unprototyped, high risk) gates the low-risk plumbing on solving the hardest unknown in the epic. Splitting lets this story ship and verify the core async loop on its own."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "submitAnswers is the only thing that should advance a run, and that's easy to violate by accident (e.g. a retry loop around a flaky claude -p call)"
+    mitigation: "Explicit acceptance criterion + test asserting repeated getRunStatus polling never advances a run without a submitAnswers call"
+
+references:
+  - path: docs/architecture.md
+    relevant_excerpt: |
+      Minerva has no daemon and nothing polls or advances a run on its own. A run only moves
+      when a caller invokes `submitAnswers`... `getRunStatus: in_progress` between calls does
+      not mean work is happening in the background; it means the run is paused, awaiting the
+      next drive call.
+  - path: docs/spike-plugin-hive-drivability-findings.md
+    relevant_excerpt: |
+      Real kickoff skill resume: claude -p --resume <session_id> "no, keep metrics off" —
+      same session_id, 2 turns, $0.031, and it advanced to the next gate in the actual kickoff
+      protocol, not just a generic acknowledgement.

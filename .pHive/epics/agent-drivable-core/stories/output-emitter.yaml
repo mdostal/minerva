@@ -1,0 +1,82 @@
+id: output-emitter
+epic: agent-drivable-core
+title: Output Emitter — write + serve approved epic+stories (REQ-04)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [escalation-classification]
+
+description: |
+  Implement the Output Emitter: on human approval of a run's final gate, write the approved
+  epic+stories in plugin-hive's own native `.pHive/epics/` schema into the run's state dir, and
+  serve it back through `getOutput`. `getOutput` returns NOT_READY (never a partial or
+  fabricated artifact) until the run's status is `complete`. This is vertical-plan.md's Slice 6
+  — the point where the PRD's stated minimum success bar ("an agent can kick off Minerva
+  programmatically... and receive an approved epic + stories back") is first achieved
+  end-to-end. Depends on escalation-classification but works identically regardless of whether
+  that story's checkpoint converged or fell back to always-human — this slice only depends on a
+  run reaching its final gate, not on how questions got there along the way.
+
+acceptance_criteria:
+  - "Given a run reaches human approval on its final gate, when approval is granted, then Minerva writes an epic+stories artifact conforming to plugin-hive's own schema into the run's state dir, and marks the run complete"
+  - "Given a completed run, when getOutput{run_id} is called, then it returns the written epic+stories artifact"
+  - "Given a run that has NOT reached final approval, when getOutput{run_id} is called, then it returns a NOT_READY error — never a partial or fabricated epic"
+  - "Given the written artifact, when validated against plugin-hive's own epic.yaml / story YAML schema conventions, then it is schema-valid and would be usable by /hive:execute without modification"
+
+scope_boundaries:
+  do:
+    - "Write the approved epic+stories artifact on final-gate approval, and serve it via getOutput"
+  do_not:
+    - "Do not write ANY output before status is complete — getOutput must return NOT_READY, never a partial or best-guess artifact"
+    - "Do not invent a new schema — the artifact must conform exactly to plugin-hive's existing .pHive/epics/ schema, the same one this very epic's own files use"
+
+steps:
+  - id: research
+    description: Re-read plugin-hive's epic.yaml and story YAML schema (hive/references/story-yaml-schema.md in the plugin cache) to confirm the exact shape this story must write — this is the same schema this very /plan run's own epic.yaml and story files use, so it's directly self-referential and easy to verify by example.
+    agent: researcher
+  - id: test-spec
+    description: Write failing node:test tests driving a full run through bin/minerva from startRun to a written, schema-valid epic+stories artifact, retrievable via getOutput; plus a NOT_READY test on an incomplete run. Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the Output Emitter's write-on-approval and getOutput serve paths. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests for schema fidelity against plugin-hive's real conventions, not just internal consistency.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: docs/prd.md
+      purpose: "REQ-04's acceptance criteria (output/hand-off contract) are this story's direct source of truth"
+
+files_to_modify:
+  - file: src/output-emitter.ts
+    change: "Create — writes plugin-hive-schema epic+stories on final-gate approval, serves via getOutput"
+
+design_decisions:
+  - decision: "getOutput never returns a partial artifact"
+    rationale: "REQ-04's explicit hard exclusion — an agent driving Minerva must never mistake an in-progress run's partial state for an approved spec."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Mechanical schema-conformant file write once a run reaches its final gate; no new external dependency"
+    mitigation: "Schema-validity test against plugin-hive's real conventions, not just this project's own re-derivation of them"
+
+references:
+  - path: docs/prd.md
+    relevant_excerpt: |
+      REQ-04: Output / hand-off contract (epic out)... Given a run reaches human approval on
+      its final gate, when approval is granted, then Minerva writes an epic+stories artifact
+      conforming to plugin-hive's schema and marks the run complete.

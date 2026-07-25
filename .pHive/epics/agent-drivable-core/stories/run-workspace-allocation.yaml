@@ -1,0 +1,110 @@
+id: run-workspace-allocation
+epic: agent-drivable-core
+title: Run Manager — two-case isolated workspace allocation (AD-3)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [wire-protocol-skeleton]
+
+description: |
+  Implement `startRun`, `getRunStatus`, and `listRuns`, plus the Run Manager's two-case
+  workspace allocation (AD-3, revised): when `target_repo` is given, allocate a git worktree
+  checking out a NEW run-scoped branch (`run/<run_id>`) cut from that repo's `dev` — not `dev`
+  itself, which the architect review caught as a real concurrency bug (git refuses the same
+  branch checked out in two worktrees; two concurrent runs against the same target_repo would
+  break under the naive reading). When `target_repo` is absent, allocate a fresh `git init`
+  scratch repo with an initial commit. Either way, allocate a namespaced `.pHive` state dir
+  inside the workspace and write the initial Run record. This is vertical-plan.md's Slice 2 —
+  nothing drives kickoff+plan inside the workspace yet; this story only proves runs are created,
+  isolated from each other, and inspectable.
+
+acceptance_criteria:
+  - "Given a startRun call with a target_repo pointing at a real existing repo with a dev branch, when the run is allocated, then a git worktree is created checking out a NEW branch run/<run_id> cut from dev — NOT dev itself"
+  - "Given two concurrent startRun calls with the SAME target_repo, when both are allocated, then both succeed (each gets its own run/<run_id> branch and worktree) — this directly tests the architect-review concurrency fix"
+  - "Given a startRun call with no target_repo, when the run is allocated, then a fresh git-init scratch repo is created in the run directory with an initial commit"
+  - "Given a target_repo with no dev branch, when startRun is called, then it returns a clear error rather than a confusing git failure (design-discussion Open Question 3: don't duplicate git's own error reporting, but do surface a clear one)"
+  - "Given two runs allocated (either case), when either writes to its own state_path, then no file under the other run's workspace_path or state_path is modified"
+  - "Given a run has been allocated, when getRunStatus{run_id} is called, then it returns status: in_progress and the run persists across process restarts (read from disk, not memory)"
+  - "Given N runs have been allocated, when listRuns is called, then all N are returned with correct status"
+
+scope_boundaries:
+  do:
+    - "Implement startRun/getRunStatus/listRuns and both AD-3 workspace-allocation cases"
+    - "Write and read the Run record from disk (State Store conventions) — no in-memory-only state"
+  do_not:
+    - "Do not spawn claude -p or drive kickoff+plan in any way — that's kickoff-engine-plumbing's scope. A run allocated by this story simply sits in in_progress with no engine attached."
+    - "Do not implement getQuestions/submitAnswers/getOutput/abortRun — later stories' scope"
+    - "Do not add target_repo pre-validation beyond a clear error on worktree-add failure (design-discussion Open Question 3's resolution)"
+
+steps:
+  - id: research
+    description: Confirm git worktree + branch-cutting command sequence (git branch run/<id> dev && git worktree add <path> run/<id>) and git init + initial-commit sequence; check for edge cases (target_repo not a git repo, dev branch missing, worktree path collisions).
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing node:test tests against real throwaway git repos (created/torn down in
+      before/after hooks, per this epic's spike test's own pattern) covering both AD-3 cases,
+      the concurrency fix, isolation, and the missing-dev-branch error path. Do NOT read the
+      implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the Run Manager, both AD-3 allocation paths, the namespaced .pHive state dir convention, and the Run record write/read (State Store layer). Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests, with particular scrutiny on the concurrency fix (does it actually prevent the git worktree collision, not just avoid triggering it in the test's specific ordering?).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, tsx, child_process for git commands"
+  key_files:
+    - path: docs/architecture.md
+      purpose: "AD-3 defines the two-case base and the Run data model shape (workspace_path, workspace_kind, state_path)"
+
+files_to_modify:
+  - file: src/run-manager.ts
+    change: "Create — startRun/getRunStatus/listRuns logic, two-case workspace allocation, Run record read/write"
+  - file: bin/minerva
+    change: "Wire startRun/getRunStatus/listRuns dispatch to the Run Manager"
+
+design_decisions:
+  - decision: "Worktree case checks out a run-scoped branch (run/<run_id>) cut from dev, not dev itself"
+    rationale: "Architect review of the design discussion found the naive 'worktree off dev' reading breaks under concurrency (git refuses the same branch in two worktrees). A run-scoped branch preserves AD-3's actual requirement (isolated workspace inside a valid git repo) while fixing the collision."
+  - decision: "No target_repo validation beyond a clear error on worktree-add failure"
+    rationale: "Design-discussion Open Question 3, resolved toward not duplicating git's own error reporting — but the acceptance criteria still require the error be CLEAR, not just whatever git prints raw."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "This is spike-unverified end-to-end — the PoC spike only exercised the fresh-init case, in isolation, not via a real startRun path"
+    mitigation: "Both node:test coverage AND a required, non-bypassable manual dry-run acceptance criterion (see manual_verdict below) against a real target repo before this story is considered done"
+
+manual_verdict:
+  scenario_ref: .pHive/test-scenarios/run-workspace-allocation-manual.yaml
+  required: true
+  verdict: null
+  timestamp: null
+  agent: null
+
+references:
+  - path: .pHive/epics/agent-drivable-core/docs/design-discussion.md
+    relevant_excerpt: |
+      Fixing a real concurrency bug the architect review caught: "worktree off `dev`," read
+      literally, means checking out branch `dev` itself into the new worktree. Git refuses to
+      have the same branch checked out in two worktrees at once... Fix: each run's worktree
+      checks out a run-scoped branch cut from `dev` (e.g. `run/<run_id>`), not `dev` itself.
+  - path: .pHive/cycle-state/agent-drivable-core.yaml
+    relevant_excerpt: |
+      trigger: manual-dry-run-completion-gate ... Needs an explicit human-gated acceptance
+      criterion on the run-workspace-allocation story, not just a doc note, so automated
+      completion checks can't bypass it.

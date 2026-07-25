@@ -1,0 +1,26 @@
+epic: agent-drivable-core
+
+escalations:
+  - trigger: manual-dry-run-completion-gate
+    placement: pre-exec
+    severity: moderate
+    stories: [run-workspace-allocation]
+    reason: >
+      §7 of the design discussion requires a manual dry-run against a real repo for BOTH AD-3
+      workspace cases (worktree-off-dev has zero spike coverage) before the epic is called
+      done, but nothing in the design discussion originally specified how that manual step is
+      represented in the actual completion/acceptance criteria that execution tooling checks.
+      Needs an explicit human-gated acceptance criterion on the run-workspace-allocation story,
+      not just a doc note, so automated completion checks can't bypass it.
+    raised_by: tpm
+    raised_at: "2026-07-24T00:00:00Z"
+
+phase_records:
+  - phase: plan:phase-b
+    note: >
+      Design discussion round 1 grill (12 findings) + collaborative review (architect: flag,
+      tpm: approve-with-escalation) — both resolved in the revised draft.
+  - phase: plan:phase-b2
+    note: >
+      Horizontal + vertical planning (8 slices). Self-review found and fixed one gap
+      (quantitative checkpoint criteria for slices 4/5, originally qualitative).

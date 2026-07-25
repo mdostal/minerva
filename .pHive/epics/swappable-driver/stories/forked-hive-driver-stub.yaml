@@ -1,0 +1,80 @@
+id: forked-hive-driver-stub
+epic: swappable-driver
+title: Prep the ForkedHiveDriver seam (stub only)
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [wire-driver-selection]
+
+description: |
+  Leave a clean, documented, but non-functional extension point for the future plugin-hive-fork
+  driver: a ForkedHiveDriver class implementing the Driver interface, throwing a clear
+  NotImplemented error, with a doc comment pointing at
+  docs/minerva-next-tests-and-driver-paths.md §3 and the future
+  docs/scope/plugin-hive-headless-question-protocol.md. This is deliberately NOT a working
+  implementation -- the fork doesn't exist yet. The point is that adding it later is a drop-in
+  against an already-proven interface, with zero ABI change.
+
+acceptance_criteria:
+  - "Given ForkedHiveDriver, when runTurn() is called, then it throws a clear, typed error naming it as not-yet-implemented and pointing at the doc that will define its real behavior -- never silently no-ops or returns fabricated data"
+  - "Given ForkedHiveDriver is NOT wired into MINERVA_DRIVER's selection logic, when kickoff-engine.ts is inspected, then there is no way to accidentally select it in production yet -- it exists as a class, not a live option"
+  - "Given the Driver interface itself, when ForkedHiveDriver is added, then driver.ts required NO changes to the interface shape -- confirming the seam really is clean, not just claimed to be"
+
+scope_boundaries:
+  do:
+    - "Add the ForkedHiveDriver stub class + a short doc comment"
+  do_not:
+    - "Do not implement any real plugin-hive-fork consumption logic -- the fork doesn't exist yet"
+    - "Do not wire ForkedHiveDriver into MINERVA_DRIVER selection -- it's not a real option yet"
+
+steps:
+  - id: research
+    description: Re-read docs/minerva-next-tests-and-driver-paths.md §3 to confirm the exact framing for the stub's doc comment.
+    agent: researcher
+  - id: test-spec
+    description: Write a failing test asserting ForkedHiveDriver.runTurn() throws the documented NotImplemented error (rather than silently no-op-ing). Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the ForkedHiveDriver stub class to src/driver.ts. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the Driver interface itself needed zero changes to accommodate the stub -- this is the actual claim being validated, not just "does it compile."
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes epic swappable-driver.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: docs/minerva-next-tests-and-driver-paths.md
+      purpose: "§3 defines what ForkedHiveDriver will eventually do -- this stub's doc comment cites it directly"
+
+files_to_modify:
+  - file: src/driver.ts
+    change: "Add ForkedHiveDriver stub class"
+
+design_decisions:
+  - decision: "Stub throws rather than returning a fabricated/mocked result"
+    rationale: "Consistent with the whole epic's 'never guess' discipline (AD-5 from agent-drivable-core) -- a Driver that silently no-ops would be worse than one that fails loudly, since a caller might not notice the swap happened."
+
+cross_cutting:
+  - concern: documentation
+    action: "Update docs/architecture.md's Kickoff+Plan Engine component note to mention the Driver abstraction and the three implementations (spawn, subagent, forked-stub), matching the as-built documentation pattern already established for question-extraction/escalation-classification in epic agent-drivable-core."
+
+risks:
+  - severity: low
+    description: "None -- this is an intentionally inert stub"
+    mitigation: "N/A"
+
+references:
+  - path: docs/minerva-next-tests-and-driver-paths.md
+    relevant_excerpt: |
+      Because §1 pins the contract, adding ForkedHiveDriver later is a drop-in -- the ABI/types
+      dont move. Prep now: keep the Driver seam clean so the fork slots in.

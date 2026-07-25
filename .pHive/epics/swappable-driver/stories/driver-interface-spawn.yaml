@@ -1,0 +1,94 @@
+id: driver-interface-spawn
+epic: swappable-driver
+title: Driver interface + SpawnDriver (extract + harden today's mechanism)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [lock-core-types]
+
+description: |
+  Define the Driver interface (src/driver.ts): one method, runTurn(input: {cwd, sessionId,
+  prompt}) -> {session_id, raw_result}. Extract kickoff-engine.ts's current execFileSync-based
+  spawnClaude logic into a SpawnDriver implementation, unchanged in mechanism, plus real
+  hardening: register SIGINT/SIGTERM handlers that kill any in-flight child before the process
+  exits. This closes the graceful-interrupt orphaning case (it cannot catch SIGKILL -- nothing
+  can -- but that's the case SubagentDriver solves architecturally, not this story).
+
+acceptance_criteria:
+  - "Given the Driver interface, when SpawnDriver.runTurn is called with sessionId: null, then it spawns claude -p --session-id <new-uuid> with the combined classification schema, matching today's startRun behavior exactly"
+  - "Given SpawnDriver.runTurn with a non-null sessionId, then it spawns claude -p --resume <sessionId>, matching today's submitAnswers behavior exactly"
+  - "Given a SpawnDriver-driven child process is running, when the Minerva process receives SIGINT or SIGTERM, then the in-flight child is killed before the process exits -- no orphan for the graceful-interrupt case"
+  - "Given kickoff-engine.ts refactored to use SpawnDriver, when the full existing kickoff-engine.test.ts / run-manager.test.ts / output-emitter.test.ts / cleanup-ledger.test.ts / completeness.test.ts suite runs, then all tests still pass unchanged -- this is a pure extraction, not a behavior change"
+
+scope_boundaries:
+  do:
+    - "Define Driver interface, extract SpawnDriver, add signal-handling hardening"
+    - "Refactor kickoff-engine.ts to call driver.runTurn() instead of its own inline spawnClaude"
+  do_not:
+    - "Do not change SpawnDriver's actual spawn mechanism (still claude -p / execFileSync) -- that's a deliberate 'keep for standalone' per the brief, not a rewrite"
+    - "Do not implement SubagentDriver here -- separate story"
+    - "Do not wire driver SELECTION (env var) here -- that's wire-driver-selection's scope; this story can hardcode SpawnDriver as the only active implementation"
+
+steps:
+  - id: research
+    description: Re-read kickoff-engine.ts's current spawnClaude/startRun/submitAnswers to confirm exact current behavior before extracting it.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the Driver interface contract and the SIGINT/SIGTERM hardening (send a real signal to a live subprocess, confirm it's killed). Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Create src/driver.ts (interface + SpawnDriver), refactor kickoff-engine.ts to use it, add signal handlers. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that this is genuinely a pure extraction (no behavior drift) plus the additive signal-handling fix, and that the full pre-existing test suite still passes unchanged.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, tsx, node:process signal handling"
+  key_files:
+    - path: src/kickoff-engine.ts
+      purpose: "spawnClaude() is the exact logic being extracted into SpawnDriver"
+
+files_to_modify:
+  - file: src/driver.ts
+    change: "Create -- Driver interface + SpawnDriver implementation"
+  - file: src/kickoff-engine.ts
+    change: "Refactor to call driver.runTurn() instead of inline spawnClaude"
+
+code_examples:
+  - title: "Current spawn logic being extracted (unchanged mechanism)"
+    file: src/kickoff-engine.ts
+    snippet: |
+      function spawnClaude(cwd: string, args: string[]): ClaudePResult {
+        const out = execFileSync("claude", ["-p", "--model", MODEL, "--output-format", "json",
+          "--permission-mode", "bypassPermissions", ...args], { encoding: "utf8", timeout: CLAUDE_TIMEOUT_MS, cwd });
+        return JSON.parse(out) as ClaudePResult;
+      }
+
+design_decisions:
+  - decision: "session_id is always returned fresh from runTurn() and persisted by the caller after EVERY turn, not just on start"
+    rationale: "Real bug found in research: SubagentDriver's tracked session_id changes on every --bg --resume call, even though conversation context is correctly retained. kickoff-engine.ts currently only persists session_id once, at startRun. Fixing this here (in the Driver contract) rather than as a SubagentDriver-only patch keeps the interface honest for both implementations."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "SIGKILL cannot be caught by any process-level handler -- this hardening only closes the graceful-interrupt case"
+    mitigation: "Documented explicitly in the story and design-discussion rather than implied as a full fix; SubagentDriver is the actual architectural answer to the SIGKILL case"
+
+references:
+  - path: .pHive/epics/swappable-driver/docs/design-discussion.md
+    relevant_excerpt: |
+      SpawnDriver -- extract kickoff-engine.ts's current spawnClaude into this interface,
+      unchanged in mechanism, plus: register SIGINT/SIGTERM handlers that kill any in-flight
+      child before the process exits.

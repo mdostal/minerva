@@ -12,18 +12,23 @@
 // No prose-parsing fallback was needed -- see the story's checkpoint outcome in
 // docs/architecture.md's Kickoff+Plan Engine section for the full result.
 
+// Exported so escalation-classification.ts can compose it into a superset schema (question +
+// classification fields) for the actual live engine calls, without duplicating this
+// description text. See that module for why the two are combined into one call.
+export const QUESTION_SCHEMA_PROPERTY = {
+  type: "string",
+  description:
+    "The exact, verbatim text of exactly ONE single question -- the very next atomic " +
+    "question you would ask right now, and nothing else. Do NOT bundle, batch, combine, " +
+    "or list multiple questions together, even if the underlying protocol has several " +
+    "upcoming questions -- ask only the single next one, exactly as you would phrase it " +
+    "in prose, including any consequence/explanation lines for that one question only.",
+} as const;
+
 const EXTRACTION_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
-    question: {
-      type: "string",
-      description:
-        "The exact, verbatim text of exactly ONE single question -- the very next atomic " +
-        "question you would ask right now, and nothing else. Do NOT bundle, batch, combine, " +
-        "or list multiple questions together, even if the underlying protocol has several " +
-        "upcoming questions -- ask only the single next one, exactly as you would phrase it " +
-        "in prose, including any consequence/explanation lines for that one question only.",
-    },
+    question: QUESTION_SCHEMA_PROPERTY,
   },
   required: ["question"],
 });

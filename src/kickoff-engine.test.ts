@@ -117,6 +117,21 @@ test("WRONG_CHANNEL: submitting on the wrong channel is rejected and the run doe
   assert.equal(stillPending.result.questions[0].status, "pending");
 });
 
+test("questions carry real escalation-classification fields, not the old hardcoded stub", () => {
+  const runId = call("startRun", { idea: "a bookmark manager" }, env()).result.run_id;
+  const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
+
+  assert.ok(["agent", "human"].includes(q1.suggested_channel));
+  assert.equal(typeof q1.confidence, "number");
+  assert.ok(q1.confidence >= 0 && q1.confidence <= 1);
+  assert.ok(q1.reason.length > 0);
+  // The old kickoff-engine-plumbing stub always said this exact placeholder string --
+  // confirms real classification replaced it, not just that SOME string is present.
+  assert.doesNotMatch(q1.reason, /escalation classification not yet implemented/);
+  // Enforced channel defaults to the classifier's suggestion (v1, no external override yet).
+  assert.equal(q1.channel, q1.suggested_channel);
+});
+
 test("submitAnswers validation: missing/invalid params return VALIDATION_FAILED without spawning claude", () => {
   const runId = call("startRun", { idea: "a link shortener" }, env()).result.run_id;
 

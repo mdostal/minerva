@@ -1,13 +1,13 @@
 // Kickoff+Plan Engine — headless claude -p drive/resume plumbing, composed with real question
-// extraction (see question-extraction.ts). Escalation classification is still a separate story
-// -- see docs/architecture.md "No Autonomous Progress" and AD-2. This story hardcodes
-// channel:"human" for every question.
+// extraction + escalation classification (see question-extraction.ts and
+// escalation-classification.ts) in one combined --json-schema call. See docs/architecture.md
+// "No Autonomous Progress" and AD-2.
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
-import { extractionSchemaArgs, extractQuestion } from "./question-extraction.ts";
+import { classificationSchemaArgs, extractClassifiedQuestion } from "./escalation-classification.ts";
 
 const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
 const CLAUDE_TIMEOUT_MS = 120_000;
@@ -41,13 +41,16 @@ function spawnClaude(cwd: string, args: string[]): ClaudePResult {
 
 function appendQuestion(runId: string, rawResult: string): void {
   const record = readRunRecord(runId);
+  const classified = extractClassifiedQuestion(rawResult);
   const question: Question = {
     id: `q-${record.questions.length + 1}`,
-    text: extractQuestion(rawResult),
-    suggested_channel: "human",
-    confidence: 1,
-    reason: "escalation classification not yet implemented -- kickoff-engine-plumbing hardcodes human",
-    channel: "human",
+    text: classified.text,
+    suggested_channel: classified.suggested_channel,
+    confidence: classified.confidence,
+    reason: classified.reason,
+    // Enforced channel defaults to the classifier's suggestion (v1: no Vesta/Delphi override
+    // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
+    channel: classified.suggested_channel,
     status: "pending",
   };
   updateRunRecord(runId, {
@@ -71,7 +74,7 @@ export function startRun(params: Record<string, unknown>): Record<string, unknow
   const claudeResult = spawnClaude(record.workspace_path, [
     "--session-id",
     sessionId,
-    ...extractionSchemaArgs(),
+    ...classificationSchemaArgs(),
     drivePrompt,
   ]);
 
@@ -151,7 +154,7 @@ export function submitAnswers(params: Record<string, unknown>): Record<string, u
   const claudeResult = spawnClaude(record.workspace_path, [
     "--resume",
     record.session_id,
-    ...extractionSchemaArgs(),
+    ...classificationSchemaArgs(),
     answer,
   ]);
   appendQuestion(runId, claudeResult.result);

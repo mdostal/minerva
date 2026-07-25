@@ -72,6 +72,18 @@ architecture should be built to expect, or wait for, autonomous movement between
 - **Escalation Classifier** — for each *extracted* question, emits a structured suggestion
   (`suggested_channel`, `confidence`, `reason`) per the anchored principle (see AD-2). It does
   not itself decide the enforced channel.
+
+  **As-built (escalation-classification story, checkpoint MET — see
+  `.pHive/epics/agent-drivable-core/docs/classification-pairs.md`):** the classification fields
+  are added directly into the SAME `--json-schema` question-extraction.ts already uses (one
+  combined call, not a second model invocation — matches AD-2's "same planning persona, same
+  turn" requirement). Result: 10/10 (100%) parseable across a live kickoff-driven corpus, and
+  10/10 (100%) correct escalate/absorb judgment against a deliberately diverse curated
+  question/expected-channel set spanning both directions of the anchored principle (real
+  kickoff gate questions were, without exception, classified `human` — consistent with
+  kickoff's protocol design as genuine human decision points; the "agent" side of the
+  discrimination proof used constructed synthetic scenarios instead, since real kickoff doesn't
+  naturally ask mechanical questions). No fallback to an always-human default was needed.
 - **Output Emitter** — on human approval of the final gate, writes the approved epic+stories in
   plugin-hive's native `.pHive/epics/` schema into the run's state dir, and serves it back
   through `getOutput`.

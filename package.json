@@ -1,0 +1,22 @@
+{
+  "name": "minerva",
+  "version": "0.1.0",
+  "description": "Minerva — the Pantheon's Planner. Agent-drivable idea-to-spec engine.",
+  "type": "module",
+  "bin": {
+    "minerva": "./bin/minerva.ts"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "test": "tsx --test \"src/**/*.test.ts\" \"bin/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "ci": "npm test && npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.7.0"
+  }
+}

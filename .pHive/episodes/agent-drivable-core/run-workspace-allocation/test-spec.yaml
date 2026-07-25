@@ -1,0 +1,6 @@
+step_id: test-spec
+status: completed
+timestamp: "2026-07-24T00:32:00Z"
+artifacts:
+  - src/run-manager.test.ts
+  - src/test-cli.ts

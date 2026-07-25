@@ -92,9 +92,9 @@ risks:
 manual_verdict:
   scenario_ref: .pHive/test-scenarios/run-workspace-allocation-manual.yaml
   required: true
-  verdict: null
-  timestamp: null
-  agent: null
+  verdict: pass
+  timestamp: "2026-07-24T00:40:00Z"
+  agent: developer
 
 references:
   - path: .pHive/epics/agent-drivable-core/docs/design-discussion.md

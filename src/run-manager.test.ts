@@ -14,8 +14,20 @@ let minervaHome: string;
 let existingRepo: string; // throwaway repo WITH a dev branch, for the worktree case
 let noDevRepo: string; // throwaway repo WITHOUT a dev branch
 
+// Since kickoff-engine-plumbing, startRun composes workspace allocation with a REAL claude -p
+// drive call. These tests care about workspace allocation, not engine behavior, so they use
+// the same cost-control test seam kickoff-engine.test.ts introduced -- otherwise every startRun
+// here would trigger a full, slow, expensive real /plugin-hive:kickoff run.
+const TEST_DRIVE_PROMPT =
+  "You are running headlessly for idea '{idea}'. Ask exactly one short question ending in " +
+  "'?', then stop and wait -- do not guess, do not proceed further this turn.";
+
 function env() {
-  return { MINERVA_HOME: minervaHome };
+  return {
+    MINERVA_HOME: minervaHome,
+    MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
+    MINERVA_TEST_DRIVE_PROMPT: TEST_DRIVE_PROMPT,
+  };
 }
 
 before(() => {
@@ -69,7 +81,9 @@ test("startRun with no target_repo creates a fresh git-init scratch repo with an
 
   const status = call("getRunStatus", { run_id: runId }, env());
   assert.equal(status.status, 0);
-  assert.equal(status.result.status, "in_progress");
+  // Post kickoff-engine-plumbing, startRun drives the workspace to its first question --
+  // "in_progress" was correct before the engine existed; now it's waiting_on_human.
+  assert.equal(status.result.status, "waiting_on_human");
 });
 
 test("target_repo with no dev branch returns a clear VALIDATION_FAILED error, not a raw git failure", () => {
@@ -93,13 +107,13 @@ test("two runs' workspaces are isolated -- writing to one does not affect the ot
   assert.ok(existsSync(recB.state_path));
 });
 
-test("getRunStatus on an allocated run returns in_progress and persists across separate CLI invocations", () => {
+test("getRunStatus on an allocated run persists across separate CLI invocations", () => {
   const runId = call("startRun", { idea: "persistence test" }, env()).result.run_id;
   // Each call() is a fresh subprocess -- this genuinely tests disk persistence, not memory.
   const first = call("getRunStatus", { run_id: runId }, env());
   const second = call("getRunStatus", { run_id: runId }, env());
-  assert.equal(first.result.status, "in_progress");
-  assert.equal(second.result.status, "in_progress");
+  assert.equal(first.result.status, "waiting_on_human");
+  assert.equal(second.result.status, "waiting_on_human");
 });
 
 test("getRunStatus on an unknown run_id returns NOT_FOUND", () => {
@@ -122,7 +136,7 @@ test("listRuns returns all allocated runs with correct status", () => {
     assert.equal(res.result.runs.length, 3);
     const returnedIds = res.result.runs.map((r: any) => r.run_id).sort();
     assert.deepEqual(returnedIds, [...ids].sort());
-    for (const r of res.result.runs) assert.equal(r.status, "in_progress");
+    for (const r of res.result.runs) assert.equal(r.status, "waiting_on_human");
   } finally {
     rmSync(localHome, { recursive: true, force: true });
   }

@@ -9,18 +9,30 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 
-type WorkspaceKind = "worktree" | "fresh_init";
-type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
+export type WorkspaceKind = "worktree" | "fresh_init";
+export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
+export type Channel = "agent" | "human";
 
-interface RunRecord {
+export interface Question {
+  id: string;
+  text: string;
+  suggested_channel: Channel;
+  confidence: number;
+  reason: string;
+  channel: Channel;
+  status: "pending" | "answered";
+}
+
+export interface RunRecord {
   run_id: string;
   workspace_path: string;
   workspace_kind: WorkspaceKind;
   state_path: string;
   status: RunStatus;
   created_at: string;
-  questions: unknown[];
-  output: unknown | null;
+  session_id: string | null;
+  questions: Question[];
+  output: Record<string, unknown> | null;
 }
 
 function minervaHome(): string {
@@ -52,6 +64,15 @@ export function readRunRecord(runId: string): RunRecord {
   return JSON.parse(readFileSync(path, "utf8")) as RunRecord;
 }
 
+// Read-modify-write patch helper. Every mutation goes through here so state always round-trips
+// through disk (no in-memory state survives between CLI invocations, per the State Store's
+// statelessness principle in docs/architecture.md).
+export function updateRunRecord(runId: string, patch: Partial<RunRecord>): RunRecord {
+  const record = { ...readRunRecord(runId), ...patch };
+  writeRunRecord(record);
+  return record;
+}
+
 function allocateWorktreeWorkspace(targetRepo: string, runId: string, workspacePath: string): void {
   if (!existsSync(targetRepo)) {
     throw new MinervaError("VALIDATION_FAILED", `target_repo does not exist: ${targetRepo}`);
@@ -80,13 +101,9 @@ function allocateFreshInitWorkspace(runId: string, workspacePath: string): void 
   );
 }
 
-export function startRun(params: Record<string, unknown>): Record<string, unknown> {
-  const idea = params.idea;
-  if (typeof idea !== "string" || idea.length === 0) {
-    throw new MinervaError("VALIDATION_FAILED", "startRun requires a non-empty string `idea`");
-  }
-  const targetRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
-
+// Workspace + record allocation only -- does NOT drive kickoff+plan. kickoff-engine.ts's
+// startRun composes this with driveStart() to produce the full API-contract startRun method.
+export function allocateRun(idea: string, targetRepo: string | undefined): { run_id: string } {
   const runId = randomUUID();
   const workspacePath = join(runDir(runId), "workspace");
   let workspaceKind: WorkspaceKind;
@@ -109,6 +126,7 @@ export function startRun(params: Record<string, unknown>): Record<string, unknow
     state_path: statePath,
     status: "in_progress",
     created_at: new Date().toISOString(),
+    session_id: null,
     questions: [],
     output: null,
   });

@@ -1,6 +1,7 @@
 import { MinervaError, type ErrorCode } from "./errors.ts";
 import { capabilities } from "./capabilities.ts";
-import { startRun, getRunStatus, listRuns } from "./run-manager.ts";
+import { getRunStatus, listRuns } from "./run-manager.ts";
+import { startRun, getQuestions, submitAnswers } from "./kickoff-engine.ts";
 
 export interface Envelope {
   method: string;
@@ -23,6 +24,8 @@ const handlers: Record<string, Handler> = {
   startRun,
   getRunStatus,
   listRuns,
+  getQuestions,
+  submitAnswers,
 };
 
 function isValidEnvelope(req: unknown): req is Envelope {

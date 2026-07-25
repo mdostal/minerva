@@ -2,6 +2,7 @@ import { MinervaError, type ErrorCode } from "./errors.ts";
 import { capabilities } from "./capabilities.ts";
 import { getRunStatus, listRuns } from "./run-manager.ts";
 import { startRun, getQuestions, submitAnswers } from "./kickoff-engine.ts";
+import { getOutput } from "./output-emitter.ts";
 
 export interface Envelope {
   method: string;
@@ -16,9 +17,8 @@ export type Response =
   | { result: Record<string, unknown> }
   | { error: { code: ErrorCode; message: string; retry_after_ms: null } };
 
-// Method registry — later stories (kickoff-engine-plumbing, question-extraction,
-// escalation-classification, output-emitter, cleanup-ledger-events) each add their own
-// method(s) here. Anything not registered falls through to UNKNOWN_METHOD.
+// Method registry — later stories (cleanup-ledger-events) still add their own method(s) here.
+// Anything not registered falls through to UNKNOWN_METHOD.
 const handlers: Record<string, Handler> = {
   capabilities,
   startRun,
@@ -26,6 +26,7 @@ const handlers: Record<string, Handler> = {
   listRuns,
   getQuestions,
   submitAnswers,
+  getOutput,
 };
 
 function isValidEnvelope(req: unknown): req is Envelope {

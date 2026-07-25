@@ -32,7 +32,9 @@ export interface RunRecord {
   created_at: string;
   session_id: string | null;
   questions: Question[];
-  output: Record<string, unknown> | null;
+  // Opaque from run-manager's perspective -- output-emitter.ts owns the actual shape
+  // (CompletedEpic: plugin-hive's own epic.yaml + story YAML content, passed through as-is).
+  output: unknown | null;
 }
 
 function minervaHome(): string {

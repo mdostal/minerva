@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
 import { classificationSchemaArgs, extractClassifiedQuestion } from "./escalation-classification.ts";
+import { checkAndMarkComplete } from "./output-emitter.ts";
 
 const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
 const CLAUDE_TIMEOUT_MS = 120_000;
@@ -39,7 +40,16 @@ function spawnClaude(cwd: string, args: string[]): ClaudePResult {
   return JSON.parse(out) as ClaudePResult;
 }
 
-function appendQuestion(runId: string, rawResult: string): void {
+// Called after every drive/resume call. Checks completion (a filesystem fact -- see
+// output-emitter.ts) BEFORE parsing the schema-forced chat response for a question. The
+// combined --json-schema always requires a "question" field, so a turn where plugin-hive's own
+// skill has actually finished and written its epic.yaml would otherwise still be forced to
+// emit SOME filler question text -- the filesystem check routes around that entirely, ignoring
+// whatever the schema-forced response said once completion is detected.
+function recordTurn(runId: string, rawResult: string): void {
+  if (checkAndMarkComplete(runId)) {
+    return; // run is complete -- no pending question to append, ever
+  }
   const record = readRunRecord(runId);
   const classified = extractClassifiedQuestion(rawResult);
   const question: Question = {
@@ -79,7 +89,7 @@ export function startRun(params: Record<string, unknown>): Record<string, unknow
   ]);
 
   updateRunRecord(runId, { session_id: sessionId });
-  appendQuestion(runId, claudeResult.result);
+  recordTurn(runId, claudeResult.result);
 
   return { run_id: runId };
 }
@@ -157,7 +167,7 @@ export function submitAnswers(params: Record<string, unknown>): Record<string, u
     ...classificationSchemaArgs(),
     answer,
   ]);
-  appendQuestion(runId, claudeResult.result);
+  recordTurn(runId, claudeResult.result);
 
   return { result: {} };
 }

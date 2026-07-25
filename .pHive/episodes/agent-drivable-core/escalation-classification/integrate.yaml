@@ -1,0 +1,5 @@
+step_id: integrate
+status: completed
+timestamp: "2026-07-25T02:30:00Z"
+artifacts:
+  - commit:93bab80

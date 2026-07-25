@@ -24,6 +24,17 @@ planning_team:
     collaborative_review: enabled (planning.collaborative_review: true) — architect + tpm lenses on design discussion, architect self-review on H/V docs (Agent-tool spawn blocked by a plugin-hive guardrail hook mid-epic; conducted as orchestrator-narrated review instead)
     hv_gate: skipped (Medium scope, no --gate-hv flag)
 
+deferred_requirements:
+  # Explicit marker per the completeness-pass story's own acceptance criteria -- REQ-07 is not
+  # silently absent, it's a confirmed, deliberate deferral. See docs/prd.md REQ-07 and
+  # docs/product-brief.md's Scope Boundaries for the original decision.
+  - id: REQ-07
+    title: Local CLI convenience wrapper
+    reason: >
+      Thin convenience layer over the same startRun/getQuestions/submitAnswers surface every
+      story in this epic already builds, with no architecture component of its own. Deferred
+      past this epic, not built by any story here.
+
 stories:
   - id: wire-protocol-skeleton
     title: Minerva wire-protocol skeleton (scaffold + capabilities)

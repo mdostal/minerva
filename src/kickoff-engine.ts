@@ -1,12 +1,13 @@
-// Kickoff+Plan Engine — headless claude -p drive/resume plumbing (plumbing only; question
-// extraction and escalation classification are separate stories -- see docs/architecture.md
-// "No Autonomous Progress" and AD-1/AD-2). This story hardcodes channel:"human" for every
-// question and surfaces the driven session's raw prose turn unparsed.
+// Kickoff+Plan Engine — headless claude -p drive/resume plumbing, composed with real question
+// extraction (see question-extraction.ts). Escalation classification is still a separate story
+// -- see docs/architecture.md "No Autonomous Progress" and AD-2. This story hardcodes
+// channel:"human" for every question.
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
+import { extractionSchemaArgs, extractQuestion } from "./question-extraction.ts";
 
 const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
 const CLAUDE_TIMEOUT_MS = 120_000;
@@ -38,11 +39,11 @@ function spawnClaude(cwd: string, args: string[]): ClaudePResult {
   return JSON.parse(out) as ClaudePResult;
 }
 
-function appendQuestion(runId: string, text: string): void {
+function appendQuestion(runId: string, rawResult: string): void {
   const record = readRunRecord(runId);
   const question: Question = {
     id: `q-${record.questions.length + 1}`,
-    text,
+    text: extractQuestion(rawResult),
     suggested_channel: "human",
     confidence: 1,
     reason: "escalation classification not yet implemented -- kickoff-engine-plumbing hardcodes human",
@@ -67,7 +68,12 @@ export function startRun(params: Record<string, unknown>): Record<string, unknow
 
   const sessionId = randomUUID();
   const drivePrompt = buildDrivePrompt(idea);
-  const claudeResult = spawnClaude(record.workspace_path, ["--session-id", sessionId, drivePrompt]);
+  const claudeResult = spawnClaude(record.workspace_path, [
+    "--session-id",
+    sessionId,
+    ...extractionSchemaArgs(),
+    drivePrompt,
+  ]);
 
   updateRunRecord(runId, { session_id: sessionId });
   appendQuestion(runId, claudeResult.result);
@@ -142,7 +148,12 @@ export function submitAnswers(params: Record<string, unknown>): Record<string, u
   const updatedQuestions = record.questions.map((q) => (q.id === questionId ? { ...q, status: "answered" as const } : q));
   updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
-  const claudeResult = spawnClaude(record.workspace_path, ["--resume", record.session_id, answer]);
+  const claudeResult = spawnClaude(record.workspace_path, [
+    "--resume",
+    record.session_id,
+    ...extractionSchemaArgs(),
+    answer,
+  ]);
   appendQuestion(runId, claudeResult.result);
 
   return { result: {} };

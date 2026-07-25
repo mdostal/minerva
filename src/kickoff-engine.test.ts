@@ -68,10 +68,14 @@ test("submitAnswers resumes the real session with correct context, mirroring the
   const runId = call("startRun", { idea: "a habit tracker" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
+  // Ask a follow-up that forces the retained context word INTO the grammatical body of the
+  // next question itself, not into surrounding narrative -- extraction correctly strips framing
+  // clauses ("given that your favorite fruit is mango, ...") down to the bare interrogative, so
+  // a preamble-based proof doesn't survive extraction. Embedding the word inside a fill-in-the-
+  // blank the model must complete does survive, since it's syntactically part of the question.
   const followUp =
-    "My answer: mango. Now, in your final response, state the exact question you just asked " +
-    "me and the exact answer I just gave you in one sentence, then ask 'Is that correct?' and " +
-    "stop -- do not proceed further.";
+    "My answer: mango. Now ask me exactly this one follow-up question, with the blank filled " +
+    "in using what I just told you: 'Would you like a ___-flavored recipe?' Then stop and wait.";
   const submitted = call(
     "submitAnswers",
     { run_id: runId, channel: "human", answers: [{ question_id: q1.id, answer: followUp }] },
@@ -84,8 +88,8 @@ test("submitAnswers resumes the real session with correct context, mirroring the
 
   const q2 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
   assert.notEqual(q2.id, q1.id);
-  assert.match(q2.text.toLowerCase(), /fruit/);
   assert.match(q2.text.toLowerCase(), /mango/);
+  assert.match(q2.text.toLowerCase(), /recipe/);
 
   // The first question must now be answered, not pending -- confirms submitAnswers is what
   // advances the run and old questions don't linger as pending forever.

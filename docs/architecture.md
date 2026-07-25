@@ -56,6 +56,19 @@ architecture should be built to expect, or wait for, autonomous movement between
   are unavailable and the underlying skill degrades to asking them as prose at turn-end (see
   `docs/spike-plugin-hive-drivability-findings.md`), so this component parses the question out
   of that prose rather than reading a structured tool-call payload.
+
+  **As-built (question-extraction story, checkpoint MET — see
+  `.pHive/epics/agent-drivable-core/docs/extraction-corpus.md`):** every `claude -p`/`--resume`
+  call passes `--json-schema {question: string}`, constraining the driven turn's own final
+  output directly rather than parsing free prose after the fact. Two prompt-engineering guards
+  in the schema field description were required to hit the convergence bar: an explicit
+  "reproduce verbatim, don't paraphrase" instruction, and an explicit "exactly ONE atomic
+  question, never batch multiple gates together" instruction (without the latter, one real run
+  bundled five upcoming kickoff-protocol gates into a single response, which would have broken
+  the engine's one-question-per-turn `submitAnswers` semantics). Result: 16/16 real corpus
+  entries extracted cleanly, including both spike-verified phrasings. No prose-parsing fallback
+  was needed in practice, though `src/question-extraction.ts` still keeps one for the
+  architecturally-real case of a turn ending without the schema firing.
 - **Escalation Classifier** — for each *extracted* question, emits a structured suggestion
   (`suggested_channel`, `confidence`, `reason`) per the anchored principle (see AD-2). It does
   not itself decide the enforced channel.

@@ -114,17 +114,17 @@ test("dispatch: a handler's thrown MinervaError maps 1:1 to {error} with the sam
 
 // --- submitAnswers: keyed on question_id, not id -----------------------------------------
 
-test("submitAnswers regression-locks the answers[] key as question_id -- payloads keyed on `id` are rejected as malformed", () => {
+test("submitAnswers regression-locks the answers[] key as question_id -- payloads keyed on `id` are rejected as malformed", async () => {
   const { run_id: runId } = allocateRun("regression check", undefined);
-  assert.throws(
+  await assert.rejects(
     () => submitAnswers({ run_id: runId, channel: "human", answers: [{ id: "q-1", answer: "foo" }] }),
     (e) => e instanceof MinervaError && e.code === "VALIDATION_FAILED",
   );
 });
 
-test("submitAnswers accepts the correctly-keyed question_id shape past the shape check (fails later, on NOT_FOUND, not on shape)", () => {
+test("submitAnswers accepts the correctly-keyed question_id shape past the shape check (fails later, on NOT_FOUND, not on shape)", async () => {
   const { run_id: runId } = allocateRun("regression check 2", undefined);
-  assert.throws(
+  await assert.rejects(
     () => submitAnswers({ run_id: runId, channel: "human", answers: [{ question_id: "q-1", answer: "foo" }] }),
     (e) => e instanceof MinervaError && e.code === "NOT_FOUND",
   );
@@ -158,7 +158,7 @@ test("allocateRun starts a run in_progress with no pending questions", () => {
   assert.deepEqual(record.questions, []);
 });
 
-test("stall invariant: a rejected submitAnswers call (wrong channel) never advances status or answers the question", () => {
+test("stall invariant: a rejected submitAnswers call (wrong channel) never advances status or answers the question", async () => {
   const { run_id: runId } = allocateRun("stall check 1", undefined);
   updateRunRecord(runId, {
     status: "waiting_on_human",
@@ -167,7 +167,7 @@ test("stall invariant: a rejected submitAnswers call (wrong channel) never advan
     ],
   });
 
-  assert.throws(
+  await assert.rejects(
     () => submitAnswers({ run_id: runId, channel: "agent", answers: [{ question_id: "q-1", answer: "blue" }] }),
     (e) => e instanceof MinervaError && e.code === "WRONG_CHANNEL",
   );
@@ -177,7 +177,7 @@ test("stall invariant: a rejected submitAnswers call (wrong channel) never advan
   assert.equal(after.questions[0]?.status, "pending");
 });
 
-test("stall invariant: a rejected submitAnswers call (unknown question_id) never advances status", () => {
+test("stall invariant: a rejected submitAnswers call (unknown question_id) never advances status", async () => {
   const { run_id: runId } = allocateRun("stall check 2", undefined);
   updateRunRecord(runId, {
     status: "waiting_on_human",
@@ -186,7 +186,7 @@ test("stall invariant: a rejected submitAnswers call (unknown question_id) never
     ],
   });
 
-  assert.throws(
+  await assert.rejects(
     () => submitAnswers({ run_id: runId, channel: "human", answers: [{ question_id: "q-nonexistent", answer: "blue" }] }),
     (e) => e instanceof MinervaError && e.code === "NOT_FOUND",
   );

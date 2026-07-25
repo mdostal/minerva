@@ -1,0 +1,16 @@
+{
+  "agent_id": "ae1305d1144ad9eac",
+  "session_id": "2204dbcf-05c0-47ad-bd05-0ccb5bf85582",
+  "agent_type": "",
+  "cwd": "/Users/dostal/Documents/work/dostal/code/minerva",
+  "agent_transcript_path": "/Users/dostal/.claude/projects/-Users-dostal-Documents-work-dostal-code-minerva/2204dbcf-05c0-47ad-bd05-0ccb5bf85582/subagents/agent-ae1305d1144ad9eac.jsonl",
+  "last_assistant_message": "Reading spike-plugin-hive-drivability-findings.md",
+  "prompt_id": "62470033-b424-4d14-b198-a0d12051d73c",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-07-24T17:16:50Z"
+}

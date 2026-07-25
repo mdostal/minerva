@@ -1,0 +1,81 @@
+id: cleanup-ledger-events
+epic: agent-drivable-core
+title: Cleanup Ledger / Event Sink + abortRun (AD-4)
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [output-emitter]
+
+description: |
+  Implement AD-4's cleanup bookkeeping: on run completion or `abortRun`, append a durable
+  `CleanupLedgerRecord` ({run_id, workspace_path, state_path, status, closed_at}) to a shared,
+  append-only ledger, and emit a `cleanup_needed` event following this ecosystem's existing
+  events-sink convention (plugin-hive's own `<state_dir>/metrics/events/` pattern). Minerva
+  never deletes `workspace_path` or `state_path` itself — record and signal only. Also
+  implements the `abortRun` CLI method. This is vertical-plan.md's Slice 7 — small and
+  mechanical, but explicitly mandated by the Delphi kickoff-review, not optional polish.
+
+acceptance_criteria:
+  - "Given a run completes (reaches its final gate via output-emitter), when completion happens, then exactly one CleanupLedgerRecord is appended to the shared ledger and exactly one cleanup_needed event is emitted"
+  - "Given abortRun{run_id} is called on an in-progress run, when it executes, then the same ledger-append + event-emit happens, and the run's status becomes aborted"
+  - "Given either completion or abort has occurred, when the run's workspace_path and state_path are checked afterward, then both are still present on disk — Minerva never deletes them"
+  - "Given the shared ledger, when multiple runs across the epic's own test suite complete or abort, then the ledger contains one record per run, not overwritten or merged"
+
+scope_boundaries:
+  do:
+    - "Append ledger records and emit events on completion/abort; implement abortRun's status transition"
+  do_not:
+    - "Do not delete workspace_path or state_path under any circumstance — Minerva records and signals, an external system deletes"
+    - "Do not build the external GC/consumer of the cleanup_needed event — that's out of this epic entirely (v2 or another system's concern)"
+
+steps:
+  - id: research
+    description: Confirm the exact shape of plugin-hive's own <state_dir>/metrics/events/ convention (already observed in this project's own .pHive/metrics/events/ directory from the kickoff session) to match its file-naming and content-shape conventions for the cleanup_needed event.
+    agent: researcher
+  - id: test-spec
+    description: Write failing node:test tests for ledger-append-on-completion, ledger-append-on-abort, non-deletion of workspace/state paths, and correct per-run ledger accumulation. Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the Cleanup Ledger / Event Sink and the abortRun CLI method. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests for correctness, particularly that no deletion logic was accidentally introduced.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: docs/architecture.md
+      purpose: "AD-4 defines the exact CleanupLedgerRecord shape and the record+emit, never-delete contract"
+
+files_to_modify:
+  - file: src/cleanup-ledger.ts
+    change: "Create — ledger append + event emit on completion/abort"
+  - file: bin/minerva
+    change: "Wire abortRun dispatch"
+
+design_decisions:
+  - decision: "Ledger is shared across all runs, not per-run state"
+    rationale: "AD-4: an external GC process needs one place to read from, not N per-run files to discover and aggregate."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Append-only bookkeeping, no deletion, no complex logic"
+    mitigation: "Standard test coverage is sufficient — no elevated verification need"
+
+references:
+  - path: docs/architecture.md
+    relevant_excerpt: |
+      AD-4 — No automatic cleanup of completed runs in v1; record + emit instead... Minerva
+      still never auto-deletes a run's workspace — deletion is another system's responsibility.

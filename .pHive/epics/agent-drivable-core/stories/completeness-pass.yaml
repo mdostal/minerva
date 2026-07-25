@@ -1,0 +1,89 @@
+id: completeness-pass
+epic: agent-drivable-core
+title: Completeness pass — error-enum coverage, concurrency proof, REQ-07 traceability marker
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [cleanup-ledger-events]
+
+description: |
+  Close out the epic: ensure `listRuns` is accurate across many concurrent runs, every closed
+  error-enum branch (NOT_FOUND, WRONG_CHANNEL, NOT_READY, UNKNOWN_METHOD, VALIDATION_FAILED)
+  has explicit test coverage, and the PRD's own anchored success metric (>=3 concurrent runs,
+  zero hand-run commands per idea) is exercised directly rather than left as an inference from
+  individual story tests. Document whichever outcome question-extraction and
+  escalation-classification's checkpoints actually produced (converged, or fell back — either
+  is valid) explicitly in `docs/architecture.md` if those stories' own documentation steps
+  didn't already fully capture it. This is vertical-plan.md's Slice 8 — verification and
+  documentation, not new capability.
+
+acceptance_criteria:
+  - "Given 3 concurrent runs started against 3 different scratch repos, when all three are driven to completion via bin/minerva, then all three reach status: complete with no cross-run interference — directly exercising the PRD's anchored >=3-concurrent success metric"
+  - "Given each of the 5 closed error codes (NOT_FOUND, WRONG_CHANNEL, NOT_READY, UNKNOWN_METHOD, VALIDATION_FAILED), when its triggering condition is exercised, then it has explicit, passing test coverage — not just incidental coverage from other stories' tests"
+  - "Given listRuns is called while several runs are in different states (in_progress, waiting_on_human, complete, aborted), when the result is inspected, then every run's reported status is accurate"
+  - "Given REQ-07 (local CLI convenience wrapper) is not built by this epic, when Phase C traceability is reviewed, then it carries an explicit 'deferred' marker in epic.yaml / the traceability record — not silent absence"
+  - "Given question-extraction and escalation-classification's actual checkpoint outcomes, when this story closes, then docs/architecture.md accurately reflects the as-built behavior for both (whichever outcome each landed on)"
+
+scope_boundaries:
+  do:
+    - "Add missing test coverage, fix bugs the concurrency/error-enum tests reveal, and reconcile docs/architecture.md with as-built reality"
+  do_not:
+    - "Do not add new capabilities or API methods — if a real feature gap is discovered here, scope it as a follow-up epic instead of absorbing it into this closing story"
+    - "Do not relitigate question-extraction/escalation-classification's checkpoint outcomes — document them as they actually landed, don't retry them here"
+
+steps:
+  - id: research
+    description: Review the actual outcomes of question-extraction and escalation-classification (converged or checkpoint-not-met) and the current state of docs/architecture.md to identify any gaps between as-built behavior and documented behavior.
+    agent: researcher
+  - id: test-spec
+    description: Write failing node:test tests for the 3-concurrent-runs proof and any error-enum branches not already covered by prior stories' tests. Do NOT read the implementation (there should be little to no new implementation — this is primarily a verification pass).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Fix any gaps the tests reveal (e.g., a listRuns accuracy bug under concurrency); update docs/architecture.md if the research step found undocumented as-built divergence.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review the full epic's test suite for green status end-to-end, and confirm docs/architecture.md accurately reflects reality before signing off.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes epic agent-drivable-core.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: docs/prd.md
+      purpose: "Success Metrics section — the >=3-concurrent, zero-hand-run-commands bar this story exercises directly"
+
+files_to_modify:
+  - file: docs/architecture.md
+    change: "Update Kickoff+Plan Engine / Escalation Classifier sections with as-built behavior if question-extraction/escalation-classification's own documentation steps left any gap"
+
+design_decisions:
+  - decision: "This story is verification/documentation only — no new capability"
+    rationale: "vertical-plan.md's Slice 8 is explicitly a completeness pass, not a feature slice; keeping it that way avoids scope creep at the epic's tail end."
+
+cross_cutting:
+  - concern: documentation
+    action: "Final reconciliation pass — confirm docs/architecture.md, docs/prd.md's traceability, and the actual shipped code agree, closing any gap opened by question-extraction/escalation-classification's checkpoint outcomes."
+
+risks:
+  - severity: low
+    description: "Verification/documentation pass — main risk is scope creep (turning this into a feature story)"
+    mitigation: "Explicit 'no new capability' design decision above; any bug found here that's larger than a listRuns accuracy fix should be scoped as a follow-up, not absorbed into this story"
+
+references:
+  - path: .pHive/epics/agent-drivable-core/docs/vertical-plan.md
+    relevant_excerpt: |
+      ## Slice 8: Completeness pass ... VERIFIED BY: full node:test suite green across all
+      prior slices' tests; the >=3-concurrent-runs success metric exercised directly.
+  - path: docs/prd.md
+    relevant_excerpt: |
+      Primary: >=3 ideas in flight concurrently, each progressing idea->spec with zero
+      hand-run commands per idea (Architecture may tune the target N upward; >=3 is the v1
+      floor).

@@ -1,0 +1,5 @@
+step_id: test-spec
+status: completed
+timestamp: "2026-07-25T03:45:00Z"
+artifacts:
+  - src/cleanup-ledger.test.ts

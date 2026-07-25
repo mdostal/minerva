@@ -1,0 +1,28 @@
+scenario: run-workspace-allocation-manual
+story: run-workspace-allocation
+description: >
+  Non-bypassable manual dry-run of both AD-3 workspace-allocation cases against real repos,
+  per the TPM escalation logged in .pHive/cycle-state/agent-drivable-core.yaml
+  (manual-dry-run-completion-gate) — automated tests alone do not satisfy this story's
+  acceptance criteria.
+
+cases:
+  - name: worktree-off-dev (existing repo)
+    steps: >
+      Real throwaway repo with a dev branch as target_repo; startRun via bin/minerva.ts.
+    result: >
+      A NEW worktree was created checking out run/<run_id> cut from dev — confirmed via
+      `git worktree list` showing two entries: the origin repo still on [dev], the new
+      worktree on [run/<run_id>]. No collision, no branch-checked-out-twice error.
+    outcome: pass
+  - name: fresh git-init (greenfield, no target_repo)
+    steps: >
+      startRun with no target_repo via bin/minerva.ts.
+    result: >
+      A fresh .git + .pHive directory was created with one initial commit
+      ("minerva run <run_id> -- scratch workspace init"), confirmed via `git log --oneline`.
+    outcome: pass
+
+verdict: pass
+timestamp: "2026-07-24T00:40:00Z"
+agent: developer

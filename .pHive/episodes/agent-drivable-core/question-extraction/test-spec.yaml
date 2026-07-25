@@ -1,0 +1,5 @@
+step_id: test-spec
+status: completed
+timestamp: "2026-07-24T01:35:00Z"
+artifacts:
+  - src/question-extraction.test.ts

@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { MinervaError } from "./errors.ts";
 import { readRunRecord, updateRunRecord } from "./run-manager.ts";
+import { recordCleanup } from "./cleanup-ledger.ts";
 
 export interface CompletedEpic {
   epic_id: string;
@@ -52,6 +53,10 @@ export function checkAndMarkComplete(runId: string): boolean {
   const found = findCompletedEpic(record.workspace_path);
   if (!found) return false;
   updateRunRecord(runId, { status: "complete", output: found });
+  // AD-4: exactly one ledger record + one cleanup_needed event per run, at the moment it
+  // transitions to a terminal state. This branch only runs once per run (guarded by the
+  // status === "complete" early return above), so this call is not repeated on re-checks.
+  recordCleanup(runId, "complete");
   return true;
 }
 

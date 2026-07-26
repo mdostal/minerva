@@ -36,7 +36,26 @@ import { randomUUID } from "node:crypto";
 import { classificationSchemaArgs } from "./escalation-classification.ts";
 
 const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
-const CLAUDE_TIMEOUT_MS = 120_000;
+
+// Production finding (2026-07-26): a real kickoff->planning transition turn legitimately runs
+// past the old hardcoded 120s ceiling, causing SubagentDriver's poll to time out short of
+// planning ("did not reach done/blocked within 120000ms"). MINERVA_TURN_TIMEOUT_MS makes this
+// configurable, with a much higher default -- fails loudly (not silently) on an invalid value,
+// consistent with this epic's "never guess" discipline (see MINERVA_DRIVER's selectDriver() in
+// kickoff-engine.ts for the same pattern).
+const DEFAULT_TURN_TIMEOUT_MS = 600_000; // 10 min
+function resolveTurnTimeoutMs(): number {
+  const raw = process.env.MINERVA_TURN_TIMEOUT_MS;
+  if (raw === undefined) return DEFAULT_TURN_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid MINERVA_TURN_TIMEOUT_MS value "${raw}" -- expected a positive number of milliseconds`,
+    );
+  }
+  return parsed;
+}
+const CLAUDE_TIMEOUT_MS = resolveTurnTimeoutMs();
 
 export interface DriverInput {
   cwd: string;
@@ -215,12 +234,35 @@ function stopBackground(shortId: string): void {
   runClaudeUtility(["stop", shortId]);
 }
 
+// Best-effort reap used on failure paths -- a failure to stop an already-gone/already-stopped
+// session must not mask the original error being propagated up to the caller.
+function reapBackground(shortId: string): void {
+  try {
+    stopBackground(shortId);
+  } catch {
+    // already stopped/finished/gone -- fine, this is best-effort cleanup on a failure path
+  }
+}
+
 export class SubagentDriver implements Driver {
   async runTurn(input: DriverInput): Promise<DriverResult> {
     const shortId = dispatchBackground(input.cwd, input.sessionId, input.prompt);
-    const entry = await pollUntilTerminal(shortId);
+
+    let entry: BackgroundAgentEntry;
+    try {
+      entry = await pollUntilTerminal(shortId);
+    } catch (e) {
+      // Production finding (2026-07-26): a poll timeout previously left the underlying --bg
+      // session running and untracked -- never stopped, accumulating and burning tokens until
+      // manually reaped. Reap it here even though we're giving up on this turn; the original
+      // timeout error still propagates to the caller.
+      reapBackground(shortId);
+      throw e;
+    }
+
     const fullSessionId = entry.sessionId;
     if (!fullSessionId) {
+      reapBackground(shortId);
       throw new Error(`background session ${shortId} reached a terminal state with no sessionId`);
     }
     stopBackground(shortId);

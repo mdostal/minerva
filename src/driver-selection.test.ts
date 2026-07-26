@@ -8,6 +8,11 @@
 // by design, the pure-parsing escalation-classification/question-extraction tests, driver.test.ts
 // and subagent-driver.test.ts which already test each driver directly) aren't rerun here --
 // they'd be identical regardless of which driver is selected.
+//
+// Also covers MINERVA_TURN_TIMEOUT_MS validation (post-merge hardening, 2026-07-26 production
+// finding): CLAUDE_TIMEOUT_MS is computed unconditionally at driver.ts's module top level on
+// every CLI invocation -- including a bare `capabilities` call -- so these are just as fast and
+// live-API-free as the MINERVA_DRIVER tests above.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -55,3 +60,23 @@ test("MINERVA_DRIVER set to an unrecognized value fails loudly at startup -- nev
   assert.match(result.stderr, /MINERVA_DRIVER/);
   assert.match(result.stderr, /bogus/);
 });
+
+test("MINERVA_TURN_TIMEOUT_MS unset uses the default -- the process starts and responds normally", () => {
+  const result = runCliRaw({});
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /abi_version/);
+});
+
+test("MINERVA_TURN_TIMEOUT_MS set to a valid positive number is accepted -- process starts and responds normally", () => {
+  const result = runCliRaw({ MINERVA_TURN_TIMEOUT_MS: "300000" });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /abi_version/);
+});
+
+for (const bad of ["0", "-5000", "not-a-number", ""]) {
+  test(`MINERVA_TURN_TIMEOUT_MS="${bad}" fails loudly at startup -- never silently falls back or guesses`, () => {
+    const result = runCliRaw({ MINERVA_TURN_TIMEOUT_MS: bad });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /MINERVA_TURN_TIMEOUT_MS/);
+  });
+}

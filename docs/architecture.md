@@ -91,6 +91,17 @@ architecture should be built to expect, or wait for, autonomous movement between
   re-persisted after every turn, not just at `startRun` — required because SubagentDriver's
   tracked session id changes on every `--bg --resume` call even though conversation context is
   correctly retained.
+
+  **Post-merge hardening (2026-07-26 production finding):** a real kickoff→planning transition
+  turn legitimately runs past the original hardcoded 120s poll ceiling, causing SubagentDriver
+  to time out short of planning. The ceiling (shared by SpawnDriver's own spawn timeout and
+  SubagentDriver's poll budget) is now `MINERVA_TURN_TIMEOUT_MS`-configurable, defaulting to
+  10 minutes. Separately, a poll timeout previously left the underlying `--bg` session running
+  and untracked — never `claude stop`'d — accumulating until manually reaped; `SubagentDriver`
+  now reaps it on any failure path, not just on success. (An empirical side-investigation into
+  whether a `--bg` session needs to be *polled* periodically to stay alive found no evidence for
+  that — an unpolled session that reached a terminal state stayed alive and trackable for
+  several minutes untouched; the orphaning was purely our own missing `stop` call on timeout.)
 - **Escalation Classifier** — for each *extracted* question, emits a structured suggestion
   (`suggested_channel`, `confidence`, `reason`) per the anchored principle (see AD-2). It does
   not itself decide the enforced channel.

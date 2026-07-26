@@ -21,11 +21,12 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { SubagentDriver } from "./driver.ts";
+import { call } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
@@ -109,6 +110,25 @@ test("a --bg turn that completes a task rather than asking a question reaches st
   // No question is asked here -- the turn just performs a quick task and stops, so the
   // background session should settle into state: done rather than blocked. SubagentDriver
   // must poll through to extraction either way (blocked and done are both terminal-for-us).
+  //
+  // KNOWN EXTERNAL FLAKINESS (2026-07-25, still open upstream): this specific test can hang for
+  // the full MINERVA_TURN_TIMEOUT_MS ceiling and fail on an otherwise-healthy machine/token.
+  // Root-caused to plugin-hive's globally-registered Stop hook (matcher "" -- fires on every
+  // Claude Code session close, not just Hive-initialized projects; reproduced independently in a
+  // bare scratch dir with no project-level Hive config at all). The model's own turn completes
+  // in ~2s; the background job then sits in "running stop hooks… 0/3" and never reports
+  // done/blocked. The three registered Stop hooks declare 10s+15s+5s=30s worst-case combined
+  // timeout, yet the observed hang was 10+ minutes, twice, back to back -- a ~20x gap, meaning
+  // either the CLI's own hook-timeout enforcement isn't honored in --bg mode, or --bg's
+  // background-job status tracking doesn't correctly reflect hook completion. This is NOT a
+  // Minerva bug and there is no in-scope fix on Minerva's side: the only CLI flag that disables
+  // hooks (--bare) also disables plugin loading entirely, which would break the very
+  // `/plugin-hive:kickoff`/`/plugin-hive:plan` invocation Minerva exists to drive. Minerva's own
+  // mitigation (this epic: MINERVA_TURN_TIMEOUT_MS + reap-on-timeout) is the correct and
+  // sufficient response from Minerva's side -- it can't prevent the hang, but it now degrades
+  // gracefully (bounded wait, clean reap, no orphan) instead of hanging or leaking indefinitely,
+  // confirmed via the dedicated reap-on-timeout regression test below. This test itself should
+  // become reliably fast again once the upstream plugin-hive/Claude-Code-CLI issue is fixed.
   const result = await driver.runTurn({
     cwd: scratchCwd,
     sessionId: null,
@@ -119,6 +139,61 @@ test("a --bg turn that completes a task rather than asking a question reaches st
   // structured into SOME question-shaped result -- what matters here is that runTurn resolved
   // at all (proving the done path was handled), not the specific text.
   assert.ok(result.raw_result.length > 0);
+});
+
+// Regression test, production finding (2026-07-26): a real kickoff->planning transition turn
+// legitimately exceeds the old hardcoded 120s poll ceiling. When SubagentDriver's poll times
+// out, the underlying --bg session must still be reaped (stopped) rather than left running --
+// previously it was not, and orphaned/accumulating sessions had to be manually `claude stop`'d.
+// CLAUDE_TIMEOUT_MS/POLL_CEILING_MS are computed once at driver.ts's module top level, so this
+// can't be exercised by importing SubagentDriver directly within this same process (the module
+// is already cached with whatever timeout was in effect at first import) -- it goes through the
+// full CLI instead, a fresh process per call (AD-1), which naturally picks up a fresh env.
+test("SubagentDriver poll timeout reaps the underlying --bg session instead of leaving it running", async () => {
+  const minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-reap-"));
+  try {
+    const env = {
+      MINERVA_HOME: minervaHome,
+      MINERVA_DRIVER: "subagent",
+      MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
+      MINERVA_TURN_TIMEOUT_MS: "3000", // deliberately tiny -- forces a poll timeout fast
+    };
+
+    const started = call("startRun", { idea: "a tiny scratch project" }, env);
+    assert.equal(started.status, 1);
+    assert.match(started.error.message, /did not reach done\/blocked/);
+
+    // Identify the run's workspace (created by allocateRun before the driver was ever invoked)
+    // to find the --bg session dispatched against it.
+    const runsDir = join(minervaHome, "runs");
+    const runIds = readdirSync(runsDir);
+    assert.equal(runIds.length, 1);
+    const [runId] = runIds;
+    assert.ok(runId);
+    const record = JSON.parse(readFileSync(join(runsDir, runId, "run.yaml"), "utf8"));
+    // realpath'd: macOS's os.tmpdir() returns /var/folders/... but `claude agents --json`
+    // reports the resolved /private/var/folders/... form -- compare like-for-like.
+    const workspacePath = realpathSync(record.workspace_path);
+
+    // Give claude's own bookkeeping a moment to reflect our reap call.
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // Directly confirmed (manual repro, both with and without this fix): a genuinely orphaned
+    // session (fix reverted) stays listed in `claude agents --json` with a live pid; a reaped
+    // one (fix applied) vanishes from the list entirely -- not merely marked stopped. So strict
+    // absence is the correct, non-vacuous assertion here (an earlier version of this test used
+    // an `if (found) assert pid dead` shape that passed vacuously either way whenever the entry
+    // wasn't found -- confirmed that bug by deliberately reverting the fix and re-running).
+    const all = listBackgroundAgentsRaw();
+    const orphan = all.find((a) => a.cwd === workspacePath);
+    assert.equal(
+      orphan,
+      undefined,
+      `expected no lingering --bg session for this run's workspace after reap; found: ${JSON.stringify(orphan)}, all: ${JSON.stringify(all)}`,
+    );
+  } finally {
+    rmSync(minervaHome, { recursive: true, force: true });
+  }
 });
 
 test("SIGKILL of the launching process does not orphan or lose the underlying --bg session -- it remains independently trackable", async () => {

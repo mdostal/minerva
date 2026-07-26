@@ -1,0 +1,87 @@
+id: lock-core-types
+epic: swappable-driver
+title: Lock the core types with fast, driver-independent unit tests
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Add a fast, deterministic, live-API-free test suite that pins the stable contract every
+  Driver implementation must satisfy: Channel, ClassifiedQuestion (incl. safe-default fallback
+  and confidence clamp), the ABI envelope, all 8 method request/response shapes (incl.
+  submitAnswers keyed on question_id, not id), Status legal-transition table + stall invariant,
+  the closed error enum, and the cleanup-ledger record shape. Most of this behavior already
+  exists from epic agent-drivable-core but was only ever exercised indirectly through live-API
+  integration tests -- this story adds the direct, fast layer underneath those.
+
+acceptance_criteria:
+  - "Given the Channel type, when every valid value (agent, human) and a sample of invalid values are checked, then only the two valid values are accepted -- exhaustive, not sampled"
+  - "Given extractClassifiedQuestion with malformed/non-JSON input, when called, then it returns {suggested_channel: human, confidence: 0} and never throws or guesses a channel"
+  - "Given extractClassifiedQuestion with a confidence value outside 0.0-1.0, when called, then it clamps/defaults to 0 rather than propagating the invalid number"
+  - "Given the ABI envelope contract, when dispatch() is called with a valid method, an unknown method, and a malformed envelope, then each produces exactly the documented result/error shape (one-in, one-out)"
+  - "Given submitAnswers' Answer type, when a request payload is built, then the key is literally `question_id`, not `id` -- an explicit regression test, not just incidental coverage"
+  - "Given the Status enum (in_progress | waiting_on_human | complete | aborted), when the legal-transition table is checked, then only documented transitions are exercised and waiting_on_human correctly blocks until answered (stall invariant, tested independent of any live claude call)"
+  - "Given the closed error enum (VALIDATION_FAILED | WRONG_CHANNEL | NOT_READY | NOT_FOUND), when each is checked against MinervaError's type, then the set is exactly these four plus UNKNOWN_METHOD (dispatch.ts's catch-all) -- no custom codes possible"
+  - "Given a CleanupLedgerRecord, when constructed, then it has exactly the AD-4 fields (run_id, workspace_path, state_path, status, closed_at) and is recorded, never acted on (no deletion logic reachable from this type)"
+
+scope_boundaries:
+  do:
+    - "Add fast unit tests (no live claude calls) that pin already-existing behavior as a stable, regression-proof contract"
+    - "Fix any GENUINE bug this audit surfaces in the underlying type/logic (e.g. if confidence clamping doesn't actually exist yet, add it)"
+  do_not:
+    - "Do not change the ABI's wire shape or add new methods -- this story locks the EXISTING contract, it doesn't extend it"
+    - "Do not touch kickoff-engine.ts's driver/spawn logic -- that's driver-interface-spawn's scope"
+
+steps:
+  - id: research
+    description: Read src/errors.ts, src/run-manager.ts, src/escalation-classification.ts, src/dispatch.ts, src/cleanup-ledger.ts to confirm current exact type shapes before writing tests against them.
+    agent: researcher
+  - id: test-spec
+    description: Write the fast, driver-independent unit tests per the acceptance criteria above. Do NOT read implementation beyond what research already surfaced.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Fix any genuine gaps the tests reveal (e.g. missing confidence clamp) -- expect this to be minimal since most behavior already exists from epic agent-drivable-core.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review for genuine driver-independence (no test in this story should require a live claude call) and real regression value (not just re-testing what integration tests already cover the same way).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: src/escalation-classification.ts
+      purpose: "extractClassifiedQuestion's safe-default fallback is the core contract this story pins"
+    - path: src/run-manager.ts
+      purpose: "RunStatus, Channel, Question types live here"
+
+files_to_modify:
+  - file: src/types.test.ts
+    change: "Create -- driver-independent contract tests per the acceptance criteria"
+
+design_decisions:
+  - decision: "One new test file (types.test.ts) rather than scattering into each existing *.test.ts"
+    rationale: "This is deliberately the FIXED-POINT contract referenced by name in the epic's own principle (docs/minerva-next-tests-and-driver-paths.md) -- keeping it as one file makes it easy to point a future driver's proof run at exactly this suite."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Most of this behavior already exists and is indirectly tested -- risk is mostly about writing REDUNDANT tests rather than missing coverage"
+    mitigation: "Review step explicitly checks for genuine driver-independent regression value, not restated integration coverage"
+
+references:
+  - path: docs/minerva-next-tests-and-driver-paths.md
+    relevant_excerpt: |
+      These are the contract every driver path must satisfy. Test each in isolation... These
+      tests are the fixed point: they must pass identically no matter which driver produces
+      the questions.

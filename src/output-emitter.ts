@@ -21,8 +21,8 @@ export interface CompletedEpic {
   stories: Array<{ id: string; content: string }>;
 }
 
-export function findCompletedEpic(workspacePath: string): CompletedEpic | null {
-  const epicsDir = join(workspacePath, ".pHive", "epics");
+function findCompletedEpicUnder(root: string): CompletedEpic | null {
+  const epicsDir = join(root, ".pHive", "epics");
   if (!existsSync(epicsDir)) return null;
 
   for (const epicId of readdirSync(epicsDir)) {
@@ -40,6 +40,26 @@ export function findCompletedEpic(workspacePath: string): CompletedEpic | null {
         content: readFileSync(join(storiesDir, f), "utf8"),
       })),
     };
+  }
+  return null;
+}
+
+// Real finding (wire-driver-selection story): `claude --bg` auto-creates its own git worktree
+// under <workspacePath>/.claude/worktrees/<random-name>/ whenever workspacePath is inside a git
+// repo -- which every Minerva workspace always is (AD-3). SubagentDriver-driven turns therefore
+// write their epic.yaml there, not directly under workspacePath, unlike SpawnDriver's `-p`
+// calls. Search both locations so completion detection is driver-agnostic: try workspacePath
+// directly first (SpawnDriver's case, and the common case), then any auto-created worktrees.
+export function findCompletedEpic(workspacePath: string): CompletedEpic | null {
+  const direct = findCompletedEpicUnder(workspacePath);
+  if (direct) return direct;
+
+  const worktreesDir = join(workspacePath, ".claude", "worktrees");
+  if (!existsSync(worktreesDir)) return null;
+
+  for (const worktreeName of readdirSync(worktreesDir)) {
+    const found = findCompletedEpicUnder(join(worktreesDir, worktreeName));
+    if (found) return found;
   }
   return null;
 }

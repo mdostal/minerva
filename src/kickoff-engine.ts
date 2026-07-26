@@ -3,22 +3,27 @@
 // escalation-classification.ts) in one combined --json-schema call. See docs/architecture.md
 // "No Autonomous Progress" and AD-2.
 
-import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
-import { classificationSchemaArgs, extractClassifiedQuestion } from "./escalation-classification.ts";
+import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
+import { SpawnDriver, SubagentDriver, type Driver } from "./driver.ts";
 
-const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
-const CLAUDE_TIMEOUT_MS = 120_000;
-
-interface ClaudePResult {
-  is_error: boolean;
-  stop_reason: string;
-  session_id: string;
-  result: string;
+// MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
+// existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
+// already proven in production. Operators opt into "subagent" where orphaning is the active
+// pain; an unrecognized value fails loudly at startup rather than silently falling back.
+function selectDriver(): Driver {
+  const value = process.env.MINERVA_DRIVER ?? "spawn";
+  if (value === "spawn") return new SpawnDriver();
+  if (value === "subagent") return new SubagentDriver();
+  throw new MinervaError(
+    "VALIDATION_FAILED",
+    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn" or "subagent"`,
+  );
 }
+
+const driver: Driver = selectDriver();
 
 // Test seam: swap the real `/plugin-hive:kickoff {idea}` prompt for a cheap synthetic one so
 // the automated suite doesn't drive a full real kickoff (slow, costly, many gates) on every
@@ -29,15 +34,6 @@ function buildDrivePrompt(idea: string): string {
   const override = process.env.MINERVA_TEST_DRIVE_PROMPT;
   if (override) return override.replace(/\{idea\}/g, idea);
   return `/plugin-hive:kickoff ${idea}`;
-}
-
-function spawnClaude(cwd: string, args: string[]): ClaudePResult {
-  const out = execFileSync(
-    "claude",
-    ["-p", "--model", MODEL, "--output-format", "json", "--permission-mode", "bypassPermissions", ...args],
-    { encoding: "utf8", timeout: CLAUDE_TIMEOUT_MS, cwd },
-  );
-  return JSON.parse(out) as ClaudePResult;
 }
 
 // Called after every drive/resume call. Checks completion (a filesystem fact -- see
@@ -69,7 +65,7 @@ function recordTurn(runId: string, rawResult: string): void {
   });
 }
 
-export function startRun(params: Record<string, unknown>): Record<string, unknown> {
+export async function startRun(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const idea = params.idea;
   if (typeof idea !== "string" || idea.length === 0) {
     throw new MinervaError("VALIDATION_FAILED", "startRun requires a non-empty string `idea`");
@@ -79,17 +75,16 @@ export function startRun(params: Record<string, unknown>): Record<string, unknow
   const { run_id: runId } = allocateRun(idea, targetRepo);
   const record = readRunRecord(runId);
 
-  const sessionId = randomUUID();
   const drivePrompt = buildDrivePrompt(idea);
-  const claudeResult = spawnClaude(record.workspace_path, [
-    "--session-id",
-    sessionId,
-    ...classificationSchemaArgs(),
-    drivePrompt,
-  ]);
+  const { session_id: sessionId, raw_result: rawResult } = await driver.runTurn({
+    cwd: record.workspace_path,
+    sessionId: null,
+    prompt: drivePrompt,
+  });
 
+  // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
-  recordTurn(runId, claudeResult.result);
+  recordTurn(runId, rawResult);
 
   return { run_id: runId };
 }
@@ -122,7 +117,7 @@ function isAnswerArray(value: unknown): value is Answer[] {
   );
 }
 
-export function submitAnswers(params: Record<string, unknown>): Record<string, unknown> {
+export async function submitAnswers(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const runId = params.run_id;
   const channel = params.channel as Channel | undefined;
   const answers = params.answers;
@@ -161,13 +156,15 @@ export function submitAnswers(params: Record<string, unknown>): Record<string, u
   const updatedQuestions = record.questions.map((q) => (q.id === questionId ? { ...q, status: "answered" as const } : q));
   updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
-  const claudeResult = spawnClaude(record.workspace_path, [
-    "--resume",
-    record.session_id,
-    ...classificationSchemaArgs(),
-    answer,
-  ]);
-  recordTurn(runId, claudeResult.result);
+  const { session_id: newSessionId, raw_result: rawResult } = await driver.runTurn({
+    cwd: record.workspace_path,
+    sessionId: record.session_id,
+    prompt: answer,
+  });
+  // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
+  // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
+  updateRunRecord(runId, { session_id: newSessionId });
+  recordTurn(runId, rawResult);
 
   return { result: {} };
 }

@@ -8,10 +8,11 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call } from "./test-cli.ts";
+import { findCompletedEpic } from "./output-emitter.ts";
 
 let minervaHome: string;
 
@@ -84,6 +85,27 @@ test("a run that writes epic.yaml + story files is detected as complete and serv
   assert.equal(output.result.epic.stories.length, 1);
   assert.equal(output.result.epic.stories[0].id, "story-1");
   assert.match(output.result.epic.stories[0].content, /Build the recipe list view/);
+});
+
+test("findCompletedEpic also finds an epic written inside a claude --bg auto-created worktree, not just directly under workspace_path", () => {
+  // Real finding (wire-driver-selection story): `claude --bg` auto-creates its own git
+  // worktree under <cwd>/.claude/worktrees/<random-name>/ whenever cwd is inside a git repo --
+  // which Minerva's workspaces always are (AD-3). SubagentDriver-driven runs write their
+  // epic.yaml there, not directly under workspace_path, unlike SpawnDriver's `-p` calls.
+  const workspacePath = mkdtempSync(join(tmpdir(), "minerva-worktree-completion-"));
+  const nestedEpicsDir = join(workspacePath, ".claude", "worktrees", "some-worktree-name", ".pHive", "epics", "nested-epic");
+  mkdirSync(join(nestedEpicsDir, "stories"), { recursive: true });
+  writeFileSync(join(nestedEpicsDir, "epic.yaml"), "name: nested-epic\ntitle: Nested Epic\n");
+  writeFileSync(join(nestedEpicsDir, "stories", "story-1.yaml"), "id: story-1\ntitle: A nested story\n");
+
+  const found = findCompletedEpic(workspacePath);
+  assert.ok(found, "expected findCompletedEpic to find the epic nested under .claude/worktrees/*");
+  assert.equal(found?.epic_id, "nested-epic");
+  assert.match(found?.epic_yaml ?? "", /name: nested-epic/);
+  assert.equal(found?.stories.length, 1);
+  assert.equal(found?.stories[0]?.id, "story-1");
+
+  rmSync(workspacePath, { recursive: true, force: true });
 });
 
 test("getOutput validation: missing run_id returns VALIDATION_FAILED; unknown run_id returns NOT_FOUND", () => {

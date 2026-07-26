@@ -1,0 +1,5 @@
+step_id: research
+status: completed
+timestamp: "2026-07-24T01:30:00Z"
+artifacts:
+  - .pHive/epics/agent-drivable-core/docs/extraction-corpus.md

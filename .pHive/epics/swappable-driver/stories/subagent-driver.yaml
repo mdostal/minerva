@@ -1,0 +1,102 @@
+id: subagent-driver
+epic: swappable-driver
+title: SubagentDriver -- claude --bg + poll + stop + resume-extract
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [driver-interface-spawn]
+
+description: |
+  New Driver implementation that does not tie the long-running plugin-hive turn to Minerva's
+  own process lifecycle. Confirmed empirically (this epic's own research, not assumed): claude
+  --bg starts a genuinely independent background service, tracked via `claude agents`/`claude
+  stop`, that survives its launching process being SIGKILL'd. Since --bg is incompatible with
+  -p/--output-format json/--json-schema, the turn is dispatched via --bg (natural conversation,
+  no schema), polled via `claude agents --json` until state is done OR blocked (both are
+  terminal-for-our-purposes), released via `claude stop`, then a quick `claude -p --resume
+  <session_id> --json-schema <schema>` call extracts the same {question, suggested_channel,
+  confidence, reason} shape escalation-classification.ts already produces -- reusing that
+  module's existing combined schema and extractClassifiedQuestion() unchanged.
+
+  Real property to preserve: --bg --resume <old_id> returns a DIFFERENT session_id than the one
+  resumed, even though context is correctly retained. This story's runTurn() must always return
+  the CURRENT session_id (per driver-interface-spawn's contract), and the caller must persist it
+  after every turn.
+
+acceptance_criteria:
+  - "Given SubagentDriver.runTurn with sessionId: null, when called, then it dispatches via `claude --bg` (no --session-id passed -- bg assigns its own), polls claude agents --json until the matching entry's state is done or blocked, stops it, and extracts a structured result via claude -p --resume --json-schema"
+  - "Given SubagentDriver.runTurn with a non-null sessionId, when called, then it dispatches via `claude --bg --resume <sessionId>` with the new prompt, and the SAME poll/stop/extract sequence applies"
+  - "Given a completed SubagentDriver turn, when its returned session_id is compared to the input sessionId, then they may legitimately differ -- the caller must persist the NEW value, not assume it stays constant (real property confirmed in research, not assumed)"
+  - "Given a --bg session reaches state: blocked (waiting for input) rather than done, when SubagentDriver polls, then it treats blocked as terminal-for-extraction the same as done -- both represent 'the turn produced a response and stopped'"
+  - "Given the launching Minerva process is killed (SIGKILL) immediately after a --bg dispatch succeeds, when the background session is checked independently afterward (via claude agents --json), then it is still running/trackable -- not orphaned, not silently lost (mirrors the exact empirical test this epic's research already ran)"
+  - "Given the SAME §1 type-level tests (lock-core-types) run against SubagentDriver instead of SpawnDriver, then they pass identically -- proving the driver swap doesn't change the observable contract"
+
+scope_boundaries:
+  do:
+    - "Implement the --bg dispatch, poll, stop, extract sequence as SubagentDriver"
+    - "Reuse escalation-classification.ts's existing schema/parser unchanged for the extraction step"
+  do_not:
+    - "Do not solve the narrow crash-recovery gap named in the design discussion (Minerva dying between --bg dispatch and persisting the new session_id) -- named follow-on, out of scope here"
+    - "Do not make SubagentDriver the default -- that's wire-driver-selection's call, and the design discussion's open question defaults to spawn for now"
+    - "Do not modify escalation-classification.ts's schema or parser -- reuse as-is"
+
+steps:
+  - id: research
+    description: Re-confirm the exact --bg / claude agents --json / claude stop / -p --resume --json-schema sequence against a fresh throwaway scratch repo before writing tests (this epic's own design-discussion research already validated the mechanism once; confirm it's still stable on contact for implementation).
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the dispatch/poll/stop/extract sequence, the session_id-changes-per-turn property, the blocked-vs-done handling, and the SIGKILL-survival property (spawn in a subshell, kill the subshell, confirm the background agent is still trackable). Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement SubagentDriver per the Driver interface. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review specifically for the session_id-persistence property (the real bug this epic's research found) and that extraction correctly reuses escalation-classification.ts rather than reimplementing parsing.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, claude --bg / claude agents --json / claude stop"
+  key_files:
+    - path: src/escalation-classification.ts
+      purpose: "classificationSchemaArgs() and extractClassifiedQuestion() are reused unchanged for the extraction step"
+    - path: src/driver.ts
+      purpose: "the Driver interface SubagentDriver implements (from driver-interface-spawn)"
+
+files_to_modify:
+  - file: src/driver.ts
+    change: "Add SubagentDriver implementation alongside the existing Driver interface + SpawnDriver"
+
+design_decisions:
+  - decision: "Poll interval 2s, ceiling matching CLAUDE_TIMEOUT_MS (120s)"
+    rationale: "Consistent with SpawnDriver's existing budget; per design-discussion Open Question 1, adjustable later without an ABI change."
+  - decision: "blocked and done are both treated as terminal-for-extraction"
+    rationale: "Empirically confirmed: a --bg session that asks a question and waits for input shows state: blocked, not done. Both represent 'produced a response, stopped' from Minerva's perspective."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Unprototyped as PRODUCTION code (the mechanism itself was validated via manual research this epic, but not yet implemented/tested as real TypeScript) -- two real API calls per turn instead of one, higher latency and cost"
+    mitigation: "Manual dry-run against a real target repo (per this epic's own verification strategy) before considering the story done, mirroring run-workspace-allocation's precedent"
+  - severity: medium
+    description: "Narrow crash-recovery gap: Minerva dying between --bg dispatch and persisting the new session_id loses the ability to reconnect, though the underlying session itself does not orphan/burn CPU"
+    mitigation: "Named explicitly as an accepted, out-of-scope limitation in the design discussion rather than silently left undocumented"
+
+references:
+  - path: .pHive/epics/swappable-driver/docs/design-discussion.md
+    relevant_excerpt: |
+      claude --bg starts a session as a genuinely independent background service... confirmed
+      this survives the launching process being SIGKILL'd within 1 second of dispatch... a
+      --bg --resume <old_id> call returns a DIFFERENT session_id than the one you resumed --
+      confirmed empirically (context was correctly retained across the resume, but the tracked
+      id changed).

@@ -40,6 +40,9 @@ an approved, planned spec via plugin-hive's kickoff+plan flow.
 
 ## Conventions
 
+- **Branching (Pantheon-wide):** `main`/`master` = pristine merges only. `dev` = the default
+  working branch — plan and build off `dev`, merge back into `dev` as you go. Never branch off
+  `main` directly.
 - TS by default. Full TDD discipline: named → interfaced → full TDD → locked.
 - Local CI only — no GitHub Actions.
 - v1/v2 split: every god-integration (Delphi, Auriga, Vulcan, Multica, votem) is v2, each

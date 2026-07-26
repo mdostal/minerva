@@ -1,0 +1,48 @@
+version: 1
+items:
+  - id: t-001
+    state: plan-ready
+    kind: bug
+    title: "Minerva driver orphans detached claude subprocesses on interrupt -- lock types, make driver swappable"
+    description: |
+      Minerva v1's ABI is live and agent-callable -- the tool itself is fine. What keeps dying
+      is the long RUN: Minerva drives plugin-hive by spawning `claude -p` / `claude --resume`
+      via child_process (src/run-manager.ts execFileSync, src/question-extraction.ts). Those
+      detached procs ORPHAN and hang on interrupt -- two were just reaped at 38/27 min CPU, no
+      resume path.
+
+      Full brief: docs/minerva-next-tests-and-driver-paths.md (commit 8b9a6cf).
+
+      Fix strategy (three parts, in order):
+      1. Lock the core TYPES with small unit tests as the stable contract: Channel
+         (agent|human, exhaustive), ClassifiedQuestion {text, suggested_channel, confidence,
+         reason} incl. safe-default fallback (bad JSON -> human/0, never guess/throw) and
+         confidence clamp, ABI envelope {method,params}->{result|error}, each method incl.
+         submitAnswers keyed on question_id (not id), Status transitions (in_progress |
+         waiting_on_human | complete | aborted, stall invariant holds), closed error enum
+         (VALIDATION_FAILED | WRONG_CHANNEL | NOT_READY | NOT_FOUND), cleanup-ledger (AD-4).
+      2. Define a Driver interface (one constrained turn -> structured result). Impls:
+         SpawnDriver (today's execFileSync approach, kept for standalone) and a new
+         SubagentDriver (drives each plugin-hive turn via the harness sub-agent/Task mechanism
+         -- harness-managed, tracked, no orphaned PIDs). Prove SubagentDriver against the
+         type tests from step 1.
+      3. Leave the Driver seam clean so a future ForkedHiveDriver (consumes plugin-hive-fork's
+         structured headless questions, no spawn-and-parse) drops in later with zero ABI change.
+
+      Principle: tests are the fixed contract; the driver is a swappable adapter
+      (SpawnDriver -> SubagentDriver now -> ForkedHiveDriver later), each validated against the
+      same type tests.
+    reporter: "mdostal"
+    reported_at: "2026-07-25T19:00:00Z"
+    priority: p1
+    severity: high
+    assignee: null
+    linked_epic: swappable-driver
+    linked_story: lock-core-types
+    closed_reason: null
+    closed_at: null
+    state_history:
+      - { state: inbox, at: "2026-07-25T19:00:00Z" }
+      - { state: clarified, at: "2026-07-25T19:00:00Z" }
+      - { state: prioritized, at: "2026-07-25T19:00:00Z" }
+      - { state: plan-ready, at: "2026-07-25T20:00:00Z" }

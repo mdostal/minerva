@@ -1,0 +1,50 @@
+name: swappable-driver
+title: Lock the types, make the driver swappable
+target_codebase: /Users/dostal/Documents/work/dostal/code/minerva
+methodology: tdd
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev   # actual project practice branches off/merges into dev, not main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [reliability-fix, driver-abstraction, headless-agent-driven, no-ui]
+  roster: [researcher, tester, developer, reviewer]
+  per_tag_reasoning:
+    reliability-fix: "Triage t-001 (p1/high) -- production orphaning of detached claude subprocesses on interrupt, no resume path"
+    driver-abstraction: "Core change is introducing a Driver seam (SpawnDriver/SubagentDriver/ForkedHiveDriver) behind the existing ABI, not new product surface"
+    headless-agent-driven: "SubagentDriver's mechanism (claude --bg + poll + stop + resume-extract) was validated empirically this epic via direct CLI research before any story was written"
+    no-ui: "has_ui: false, unchanged from epic agent-drivable-core -- no ui-designer needed"
+  confidence: high
+  gate_decisions:
+    scale_assessment: "skip H/V ceremony, proceed straight to stories -- design discussion + story decomposition judged sufficient for a medium-scope reliability fix with an already-validated mechanism"
+    collaborative_review: "orchestrator-narrated (no Agent-tool spawn) -- consistent with agent-drivable-core's fallback pattern"
+    plan_gate: "user-confirmed via AskUserQuestion: 'Yes, build it (Recommended)' for design+decomposition, 'patch (Recommended)' for version_bump"
+
+source:
+  triage_id: t-001
+  brief: docs/minerva-next-tests-and-driver-paths.md
+
+stories:
+  - id: lock-core-types
+    title: Lock the core types with fast, driver-independent unit tests
+    complexity: low
+    depends_on: []
+  - id: driver-interface-spawn
+    title: Driver interface + SpawnDriver (extract + harden today's mechanism)
+    complexity: medium
+    depends_on: [lock-core-types]
+  - id: subagent-driver
+    title: SubagentDriver -- claude --bg + poll + stop + resume-extract
+    complexity: high
+    depends_on: [driver-interface-spawn]
+  - id: wire-driver-selection
+    title: Wire driver selection into kickoff-engine.ts; prove SubagentDriver against type tests
+    complexity: low
+    depends_on: [subagent-driver]
+  - id: forked-hive-driver-stub
+    title: Prep the ForkedHiveDriver seam (stub only)
+    complexity: low
+    depends_on: [wire-driver-selection]

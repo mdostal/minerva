@@ -1,0 +1,119 @@
+id: wire-protocol-skeleton
+epic: agent-drivable-core
+title: Minerva wire-protocol skeleton (scaffold + capabilities)
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Stand up Minerva's project scaffold and the `bin/minerva` CLI entrypoint that speaks the
+  Pantheon subprocess ABI: read one {method, params} JSON envelope from stdin per invocation,
+  dispatch, write {result} or {error} to stdout, exit 0/1. Implement the `capabilities` method
+  (returns {abi_version}) — the one method that needs no run context, so it's the cheapest
+  possible end-to-end proof the wire protocol works. This is vertical-plan.md's Slice 1: the
+  foundation every later story in this epic dispatches through.
+
+acceptance_criteria:
+  - "Given a valid {\"method\":\"capabilities\",\"params\":{}} envelope on stdin, when bin/minerva runs, then it writes {\"result\":{\"abi_version\":\"1.0.0\"}} to stdout and exits 0"
+  - "Given a malformed or non-JSON envelope on stdin, when bin/minerva runs, then it writes a VALIDATION_FAILED error envelope to stdout and exits 1, without crashing"
+  - "Given an envelope with an unrecognized method name, when bin/minerva runs, then it writes an UNKNOWN_METHOD error envelope to stdout and exits 1"
+  - "Given the closed error enum (NOT_FOUND, VALIDATION_FAILED, WRONG_CHANNEL, NOT_READY, UNKNOWN_METHOD), when any error path in this story fires, then the emitted code is one of exactly these five — never a custom code"
+
+scope_boundaries:
+  do:
+    - "Implement ONLY the capabilities method's handler logic — other methods dispatch to UNKNOWN_METHOD stubs for now"
+    - "Match sibling-repo conventions (tsx, node:test, no build step) confirmed by this story's own research step"
+  do_not:
+    - "Do not implement startRun/getQuestions/submitAnswers/getRunStatus/listRuns/abortRun handler logic — those are later stories' scope, even though their dispatch cases may be stubbed here"
+    - "Do not add a build/compile step (webpack, tsc emit, etc.) — ship .ts run directly via tsx, per the no-build-step constraint"
+
+steps:
+  - id: research
+    description: >
+      Confirm the sibling-repo scaffold conventions this story targets: read
+      hive/adapters/github/index.ts and hive/adapters/multica/index.ts in the plugin-hive
+      plugin cache for the exact stdin chunk-concat + JSON.parse + stdout.write pattern, and
+      confirm pantheon-orchestrator's actual package.json/tsconfig.json settings match what
+      the research brief reported (this was flagged as "not yet independently re-verified" —
+      confirm on contact here).
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing node:test tests (via `tsx --test`) that spawn a real bin/minerva subprocess
+      (per AD-1, no mocking the CLI boundary) and assert on the three acceptance criteria above.
+      Do NOT read the implementation — tests define expected behavior independently.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Implement package.json, tsconfig.json, and bin/minerva to make the failing tests pass.
+      Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests for correctness and convention compliance with the sibling-repo patterns confirmed in research.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, tsx, no build step"
+  key_files:
+    - path: docs/architecture.md
+      purpose: "API Contract table defines capabilities' exact response shape and the closed error enum this story implements"
+    - path: docs/spike-plugin-hive-drivability-spike.test.ts
+      purpose: "Reference for this project's own node:test + tsx --test conventions, already proven in this repo"
+
+files_to_modify:
+  - file: package.json
+    change: "Create — type: module, tsx + node:test devDependency, bin field pointing at bin/minerva"
+  - file: tsconfig.json
+    change: "Create — ES2022, NodeNext, strict, noUncheckedIndexedAccess, noEmit (matching pantheon-orchestrator, pending research confirm-on-contact)"
+  - file: bin/minerva
+    change: "Create — shebang entrypoint, stdin read, method dispatch, capabilities handler, error enum"
+
+code_examples:
+  - title: "Subprocess ABI stdin/stdout pattern to copy"
+    file: hive/adapters/github/index.ts
+    snippet: |
+      process.stdin.setEncoding("utf8");
+      let data = "";
+      process.stdin.on("data", (chunk) => { data += chunk; });
+      process.stdin.on("end", () => {
+        const request = JSON.parse(data);
+        // dispatch on request.method ...
+      });
+
+design_decisions:
+  - decision: "capabilities ships in this story, not deferred to the end of the epic"
+    rationale: "docs/architecture.md frames it as the ABI's bootstrapping call, listed first in the API Contract table (AD-1's posture). Nearly free to implement (static version string) — no reason to defer. Flagged in the design-discussion's grill pass (posture mismatch P1) and fixed there."
+
+cross_cutting:
+  - concern: documentation
+    action: "This story establishes the project's entire directory layout for the first time — note the scaffold decisions (no build step, tsx-direct, node:test) in a short project README/CONTRIBUTING note so later stories don't have to re-derive them from this story's diff."
+
+risks:
+  - severity: low
+    description: "Sibling-repo research (package.json/tsconfig specifics) was flagged in the design discussion as not yet independently re-verified"
+    mitigation: "This story's own research step re-confirms the exact settings on contact before implementing, rather than trusting the design-discussion's characterization blindly"
+
+references:
+  - path: docs/architecture.md
+    relevant_excerpt: |
+      CLI/subprocess entrypoint (`bin/minerva`) — the single executable. Reads one `{method,
+      params}` envelope from stdin per invocation, dispatches, writes one `{result}`/`{error}`
+      envelope to stdout, exits. Fresh process per call (see AD-1) — this is the entire external
+      surface; there is no daemon.
+  - path: .pHive/epics/agent-drivable-core/docs/vertical-plan.md
+    relevant_excerpt: |
+      ## Slice 1: Wire protocol skeleton
+      WHAT WORKS AFTER THIS SLICE: A caller can spawn `bin/minerva`, send
+      {"method":"capabilities","params":{}} on stdin, and get back
+      {"result":{"abi_version":"1.0.0"}} on stdout with exit 0.

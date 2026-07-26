@@ -1,0 +1,79 @@
+id: wire-driver-selection
+epic: swappable-driver
+title: Wire driver selection into kickoff-engine.ts; prove SubagentDriver against type tests
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [subagent-driver]
+
+description: |
+  Add MINERVA_DRIVER env var (default "spawn") that selects between SpawnDriver and
+  SubagentDriver in kickoff-engine.ts. Then run the full lock-core-types §1 test suite plus the
+  existing kickoff-engine.test.ts/run-manager.test.ts/output-emitter.test.ts/
+  cleanup-ledger.test.ts/completeness.test.ts suite with MINERVA_DRIVER=subagent, proving
+  SubagentDriver satisfies the exact same contract SpawnDriver does -- this is the epic's own
+  stated principle made concrete: "validate every driver against the same §1 type tests."
+
+acceptance_criteria:
+  - "Given MINERVA_DRIVER is unset, when kickoff-engine.ts selects a driver, then it uses SpawnDriver (documented default, matching design-discussion Open Question 2's decision)"
+  - "Given MINERVA_DRIVER=subagent, when kickoff-engine.ts selects a driver, then it uses SubagentDriver"
+  - "Given MINERVA_DRIVER set to an unrecognized value, when kickoff-engine.ts selects a driver, then it raises a clear VALIDATION_FAILED-style startup error rather than silently falling back or guessing"
+  - "Given the full existing story test suite (kickoff-engine, run-manager, output-emitter, cleanup-ledger, completeness) run once with MINERVA_DRIVER=spawn and once with MINERVA_DRIVER=subagent, then both runs pass -- proving driver-swap equivalence end-to-end, not just at the type level"
+
+scope_boundaries:
+  do:
+    - "Add MINERVA_DRIVER env var selection logic"
+    - "Run (not just claim) the full test suite against both drivers and record the result"
+  do_not:
+    - "Do not change the default away from spawn -- that's an explicit, considered decision in the design discussion, not a leftover"
+    - "Do not add per-request driver override (e.g. a startRun param) -- env var only, per the brief's scope"
+
+steps:
+  - id: research
+    description: Confirm how kickoff-engine.ts's module-level constants (MODEL, CLAUDE_TIMEOUT_MS) currently read env vars, to match that pattern for MINERVA_DRIVER.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the driver-selection logic (default, explicit spawn, explicit subagent, invalid value error). Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement driver selection in kickoff-engine.ts. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review the dual test-suite run (spawn + subagent) results directly -- this is the acceptance bar, not a claim to take on faith.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: src/kickoff-engine.ts
+      purpose: "MODEL/CLAUDE_TIMEOUT_MS's existing env-var-read pattern to match for MINERVA_DRIVER"
+
+files_to_modify:
+  - file: src/kickoff-engine.ts
+    change: "Add MINERVA_DRIVER-based driver selection"
+
+design_decisions:
+  - decision: "Default remains spawn, not subagent"
+    rationale: "Per design-discussion Open Question 2: cheaper, faster, already proven in production from epic agent-drivable-core. Operators opt into subagent where orphaning is the active pain; flipping the default later is a one-line change once subagent has real production mileage."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Running the full suite twice (once per driver) roughly doubles this story's own live-API cost/time"
+    mitigation: "Accepted -- this IS the proof the epic's principle requires, not optional overhead"
+
+references:
+  - path: docs/minerva-next-tests-and-driver-paths.md
+    relevant_excerpt: |
+      Principle: tests are the fixed contract; driver swaps SpawnDriver -> SubagentDriver
+      (now) -> ForkedHiveDriver (later), each validated against the same type tests.

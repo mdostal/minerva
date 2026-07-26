@@ -1,0 +1,110 @@
+id: question-extraction
+epic: agent-drivable-core
+title: Question extraction from headless prose turns (TIMEBOXED spike-with-checkpoint)
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [kickoff-engine-plumbing]
+
+description: |
+  Replace kickoff-engine-plumbing's raw-prose passthrough with real question extraction:
+  getQuestions should return a cleanly parsed question string, not an unparsed blob. Attempt
+  `claude -p --json-schema <schema>` first to constrain the driven session's output shape
+  directly; fall back to prose-parsing if schema-constrained extraction isn't viable. This is
+  vertical-plan.md's Slice 4 — explicitly TIMEBOXED as a spike-with-checkpoint, not a
+  normal-confidence point estimate, because `docs/spike-plugin-hive-drivability-findings.md`
+  proved kickoff *asks* cleanly headlessly but never proved Minerva can reliably *parse* an
+  arbitrary question out of arbitrary Markdown prose beyond the two phrasings the spike tested.
+
+  TIMEBOX AND CONVERGENCE BAR (per vertical-plan.md Slice 4 — do not silently loosen these):
+    - Timebox: 2 implementation days.
+    - Convergence bar: correctly parse a clean question from >=90% of a >=15-entry curated
+      corpus of real kickoff/plan question phrasings, with ZERO failures on the two
+      spike-verified phrasings (metrics-tracking, project_type) as a hard floor — a regression
+      on either of those is a stop condition regardless of the aggregate percentage.
+    - IF THE BAR ISN'T MET: do not block the epic. Ship kickoff-engine-plumbing's raw-prose
+      passthrough as v1's actual behavior, update docs/architecture.md to document this as a
+      known limitation (per this story's own cross-cutting documentation action below), and
+      hand off a follow-up epic scoped to extraction specifically. Report the checkpoint
+      outcome (met / not met, with the actual pass rate) in this story's completion notes
+      either way — a documented "not met" is a valid, complete outcome of this story.
+
+acceptance_criteria:
+  - "Given the curated corpus of >=15 real kickoff/plan question phrasings, when extraction runs against each, then it correctly parses a clean question for >=90% of them"
+  - "Given the two spike-verified phrasings (metrics-tracking, project_type) specifically, when extraction runs against them, then both parse correctly — zero tolerance, this is the hard floor regardless of aggregate pass rate"
+  - "Given extraction genuinely cannot find a question in a prose turn, when this happens, then the run is treated as waiting_on_human with the raw text surfaced as a fallback question (design-discussion Open Question 2's resolution) — not a hard error, not a guess"
+  - "Given the 2-day timebox and 90%/zero-tolerance bar are NOT met, when the story is closed out, then docs/architecture.md is updated to document raw-prose passthrough as v1's actual shipped behavior, and a follow-up epic is identified rather than the story being silently marked done without this update"
+
+scope_boundaries:
+  do:
+    - "Implement question extraction ONLY — parse a clean question out of the engine's raw prose turn"
+    - "Honor the 2-day timebox literally — stop and document at the box's edge, converged or not"
+  do_not:
+    - "Do not implement escalation classification (suggested_channel/confidence/reason) — that's escalation-classification's scope, even though it's extracted in the same pass architecturally, it is NOT built in this story"
+    - "Do not silently extend past the 2-day timebox to force convergence — a documented 'not met' is this story's valid alternate completion, not a failure state to hide"
+    - "Do not lower the zero-tolerance floor on the two spike-verified phrasings to hit the 90% aggregate bar — both are a hard floor independent of the aggregate"
+
+steps:
+  - id: research
+    description: Build the curated corpus (>=15 phrasings) by running real headless kickoff/plan sessions (per the spike's own claude -p pattern) across a range of gate questions beyond the two the spike already covered — project_type, has_ui, ship_target, north-star discovery questions, plan's own H/V gate presentations, etc.
+    agent: researcher
+  - id: test-spec
+    description: Write failing node:test tests asserting the >=90%/zero-tolerance bar against the curated corpus, and the extraction-failure fallback behavior. Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Implement extraction, attempting claude -p --json-schema first. TIMEBOXED: if the 2-day
+      box elapses without meeting the convergence bar, stop implementation, do not keep
+      iterating past the box, and produce the checkpoint-not-met documentation instead (per
+      the design_decisions checkpoint-honesty note below).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests. If the checkpoint was not met, review the documentation update to docs/architecture.md for accuracy instead of the (absent) extraction logic.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch, including whichever outcome (converged implementation, or checkpoint-not-met documentation) actually resulted.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, claude -p --json-schema"
+  key_files:
+    - path: docs/spike-plugin-hive-drivability-findings.md
+      purpose: "Only two real phrasings tested so far (metrics, project_type) — both must be in the corpus and must never regress"
+
+files_to_modify:
+  - file: src/question-extraction.ts
+    change: "Create — schema-constrained extraction primary path, prose-parsing fallback"
+  - file: .pHive/epics/agent-drivable-core/docs/extraction-corpus.md
+    change: "Create — the >=15-entry curated corpus this story's tests run against, kept as a durable artifact for future regression testing"
+
+design_decisions:
+  - decision: "Honor the timebox honestly — a documented 'checkpoint not met' is a valid, complete story outcome, not a failure to hide or quietly extend"
+    rationale: "The whole point of the TPM review's timebox-with-checkpoint request was to prevent this exact risk from being point-estimated on faith. Silently extending past 2 days to force convergence defeats that purpose as surely as skipping the checkpoint would."
+
+cross_cutting:
+  - concern: documentation
+    action: "Update docs/architecture.md's Kickoff+Plan Engine / Escalation Classifier component description with the actual as-built extraction behavior (schema-constrained, prose-fallback, or raw-passthrough-if-checkpoint-not-met) — architecture.md currently describes the intended mechanism, not yet the as-built one."
+
+risks:
+  - severity: high
+    description: "Unprototyped — the spike explicitly did not attempt --json-schema or a broad phrasing corpus"
+    mitigation: "Explicit timebox + quantitative convergence bar + a safe, working fallback (kickoff-engine-plumbing's raw passthrough) if the bar isn't met — this story cannot block the epic even in its worst case"
+
+references:
+  - path: .pHive/epics/agent-drivable-core/docs/vertical-plan.md
+    relevant_excerpt: |
+      CHECKPOINT: Timebox: 2 implementation days. Convergence bar: the extraction
+      implementation must correctly parse a clean question from >=90% of a >=15-entry curated
+      corpus... with zero failures on the two spike-verified phrasings... as a hard floor.
+  - path: docs/architecture.md
+    relevant_excerpt: |
+      `claude -p --json-schema` (structured-output validation, confirmed available via
+      `claude --help` on this box) is a promising way to make extraction reliable — worth its
+      own story rather than hand-rolled prose parsing.

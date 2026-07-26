@@ -1,0 +1,5 @@
+step_id: test-spec
+status: completed
+timestamp: "2026-07-25T02:10:00Z"
+artifacts:
+  - src/escalation-classification.test.ts

@@ -1,0 +1,15 @@
+run_id: 2026-07-25-agent-drivable-core-execute
+skill: execute
+timestamp: "2026-07-25T04:45:00Z"
+gate_lift_fired: false
+methodology: tdd
+methodology_source: epic-yaml
+story_specs_produced: 8
+backend_sources:
+  sessions_enabled: default
+  parallel_teams: default
+  terminal_mux: default
+  executor: default
+nonsensical_defaults:
+  - all-backend-defaults
+warnings_emitted: 1

@@ -1,0 +1,7 @@
+step_id: implement
+status: completed
+timestamp: "2026-07-25T03:50:00Z"
+artifacts:
+  - src/cleanup-ledger.ts
+  - src/output-emitter.ts
+  - src/dispatch.ts

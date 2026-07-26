@@ -10,7 +10,7 @@
     "node": ">=20.19"
   },
   "scripts": {
-    "test": "tsx --test \"src/**/*.test.ts\" \"bin/**/*.test.ts\"",
+    "test": "tsx --test --test-force-exit --test-concurrency=1 \"src/**/*.test.ts\" \"bin/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "ci": "npm test && npm run typecheck"
   },

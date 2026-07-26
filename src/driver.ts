@@ -12,10 +12,26 @@
 // SIGINT/SIGTERM hardening is achievable; it keeps the same claude -p arguments and mechanism
 // otherwise (still a standalone child_process spawn, not --bg).
 //
-// SubagentDriver (claude --bg + poll + stop + resume-extract) and ForkedHiveDriver land in this
-// same file in later stories of this epic.
+// SubagentDriver (claude --bg + poll + stop + resume-extract) drives each turn as a genuinely
+// independent background service (`claude --bg`), tracked via `claude agents`/`claude stop`,
+// that survives its launching process being SIGKILL'd -- confirmed empirically, twice, in this
+// epic's own research (a --bg session dispatched, then the launching process itself killed,
+// left the background session running and independently trackable). Since --bg is incompatible
+// with -p/--output-format json/--json-schema, the turn is dispatched via --bg (natural
+// conversation, no schema), polled via `claude agents --json` until state is done or blocked
+// (both terminal-for-extraction: "produced a response, stopped"), released via `claude stop`,
+// then a `claude -p --resume <session_id> --json-schema` call extracts the same
+// {question, suggested_channel, confidence, reason} shape via escalation-classification.ts's
+// existing schema/parser, reusing SpawnDriver's own async spawnClaude() for that final call.
+//
+// Real property, confirmed twice: `--bg --resume <old_id>` returns a DIFFERENT session_id than
+// the one resumed, even though conversation context is correctly retained -- this is exactly
+// why the Driver contract (above) requires every runTurn() call to return a fresh session_id
+// that the caller re-persists every time, not just at start.
+//
+// ForkedHiveDriver lands in this same file in a later story of this epic.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { classificationSchemaArgs } from "./escalation-classification.ts";
 
@@ -130,6 +146,97 @@ export class SpawnDriver implements Driver {
       ...sessionArgs,
       ...classificationSchemaArgs(),
       input.prompt,
+    ];
+    const result = await spawnClaude(input.cwd, args);
+    return { session_id: result.session_id, raw_result: result.result };
+  }
+}
+
+const POLL_INTERVAL_MS = 2_000;
+const POLL_CEILING_MS = CLAUDE_TIMEOUT_MS; // same budget as SpawnDriver's own turn timeout
+const UTILITY_CMD_TIMEOUT_MS = 15_000; // --bg dispatch / agents --json / stop are fast, bounded ops
+const EXTRACTION_INSTRUCTION = "Structure your prior question into the required schema.";
+
+interface BackgroundAgentEntry {
+  id?: string;
+  sessionId?: string;
+  kind?: string;
+  state?: string;
+}
+
+function runClaudeUtility(args: string[], cwd?: string): string {
+  return execFileSync("claude", args, { encoding: "utf8", timeout: UTILITY_CMD_TIMEOUT_MS, cwd });
+}
+
+function dispatchBackground(cwd: string, sessionId: string | null, prompt: string): string {
+  const args = [
+    "--bg",
+    "--model",
+    MODEL,
+    "--permission-mode",
+    "bypassPermissions",
+    ...(sessionId ? ["--resume", sessionId] : []),
+    prompt,
+  ];
+  const out = runClaudeUtility(args, cwd);
+  const match = out.match(/backgrounded\s*[·:]\s*(\S+)/);
+  if (!match || !match[1]) {
+    throw new Error(`could not parse a background session id from claude --bg output: ${out}`);
+  }
+  return match[1];
+}
+
+function listBackgroundAgents(): BackgroundAgentEntry[] {
+  const out = runClaudeUtility(["agents", "--json"]);
+  const parsed = JSON.parse(out) as BackgroundAgentEntry[];
+  return parsed.filter((a) => a.kind === "background");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Polls until the dispatched session's state is done OR blocked -- both represent "the turn
+// produced a response and stopped" from Minerva's perspective (confirmed empirically: a --bg
+// session that asks a question and waits for input shows state: blocked, not done).
+async function pollUntilTerminal(shortId: string): Promise<BackgroundAgentEntry> {
+  const deadline = Date.now() + POLL_CEILING_MS;
+  while (Date.now() < deadline) {
+    const entry = listBackgroundAgents().find((a) => a.id === shortId);
+    if (entry && (entry.state === "done" || entry.state === "blocked")) {
+      return entry;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new Error(`background session ${shortId} did not reach done/blocked within ${POLL_CEILING_MS}ms`);
+}
+
+function stopBackground(shortId: string): void {
+  runClaudeUtility(["stop", shortId]);
+}
+
+export class SubagentDriver implements Driver {
+  async runTurn(input: DriverInput): Promise<DriverResult> {
+    const shortId = dispatchBackground(input.cwd, input.sessionId, input.prompt);
+    const entry = await pollUntilTerminal(shortId);
+    const fullSessionId = entry.sessionId;
+    if (!fullSessionId) {
+      throw new Error(`background session ${shortId} reached a terminal state with no sessionId`);
+    }
+    stopBackground(shortId);
+
+    const args = [
+      "-p",
+      "--model",
+      MODEL,
+      "--output-format",
+      "json",
+      "--permission-mode",
+      "bypassPermissions",
+      "--resume",
+      fullSessionId,
+      ...classificationSchemaArgs(),
+      EXTRACTION_INSTRUCTION,
     ];
     const result = await spawnClaude(input.cwd, args);
     return { session_id: result.session_id, raw_result: result.result };

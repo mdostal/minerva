@@ -1,7 +1,9 @@
 id: cleanup-ledger-events
 epic: agent-drivable-core
 title: Cleanup Ledger / Event Sink + abortRun (AD-4)
-status: complete
+status: shipped
+shipped_at: "2026-07-26T06:35:00Z"
+release_id: "minerva-v0.1.1"
 complexity: low
 methodology: tdd
 depends_on: [output-emitter]

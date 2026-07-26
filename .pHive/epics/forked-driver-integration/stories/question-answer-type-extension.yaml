@@ -81,8 +81,12 @@ files_to_modify:
     change: "Extend (or document why not extending) Question/Answer types"
 
 design_decisions:
-  - decision: "TBD at implementation time -- this story's own acceptance criteria require the decision to be written up explicitly, not left implicit"
-    rationale: "Deferred deliberately -- see description; this is a real architecture call the implementing agent must make and document, not a pre-decided default in this story YAML."
+  - decision: "Chose option (a): extend end-to-end. Question gains optional kind/options/qid; Answer's answer field becomes string | string[]."
+    rationale: "More faithful to the upstream envelope and lets a human channel render real choices instead of open text -- directly serves the epic's own stated motivation. All new fields are additive/optional, so SpawnDriver/SubagentDriver's existing free-text-only Question construction is completely unaffected; confirmed via full typecheck + the existing types.test.ts suite passing unchanged."
+  - decision: "kind normalization lives in run-manager.ts as normalizeQuestionKind(), not inline in the envelope parser"
+    rationale: "Keeps the defensive boundary (never throw, default to free-text) co-located with the QuestionKind type it protects, reusable by both the next story (envelope-detection-parsing) and any future caller, rather than duplicated logic."
+  - decision: "A multi-select (string[]) answer is joined into readable prose before being passed as Driver.runTurn's prompt"
+    rationale: "Driver.runTurn's prompt contract is a plain string across all three implementations (SpawnDriver, SubagentDriver, ForkedHiveDriver) -- joining with ', ' matches how a human would phrase multiple selections in a chat message, avoiding a driver-specific prompt-shape special case."
 
 cross_cutting: []
 

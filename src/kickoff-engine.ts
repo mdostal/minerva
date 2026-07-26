@@ -105,14 +105,20 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
 
 interface Answer {
   question_id: string;
-  answer: string;
+  // string for single-select/free-text; string[] for multi-select (question-envelope-schema.md
+  // §"Question object fields" -- "Array for multi-select, string otherwise").
+  answer: string | string[];
+}
+
+function isValidAnswerValue(value: unknown): value is string | string[] {
+  return typeof value === "string" || (Array.isArray(value) && value.every((v) => typeof v === "string"));
 }
 
 function isAnswerArray(value: unknown): value is Answer[] {
   return (
     Array.isArray(value) &&
     value.every(
-      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && typeof (a as any).answer === "string",
+      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && isValidAnswerValue((a as any).answer),
     )
   );
 }
@@ -156,10 +162,14 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   const updatedQuestions = record.questions.map((q) => (q.id === questionId ? { ...q, status: "answered" as const } : q));
   updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
+  // Driver.runTurn's prompt is always a plain string -- a multi-select answer (string[]) is
+  // joined into readable prose for the driven turn, matching how a human would phrase multiple
+  // selections in a chat message.
+  const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
   const { session_id: newSessionId, raw_result: rawResult } = await driver.runTurn({
     cwd: record.workspace_path,
     sessionId: record.session_id,
-    prompt: answer,
+    prompt: answerPrompt,
   });
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).

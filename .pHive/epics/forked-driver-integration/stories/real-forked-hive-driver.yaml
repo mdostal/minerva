@@ -38,7 +38,17 @@ description: |
   against the local fork checkout -- not the marketplace-installed plugin-hive, and not waiting
   on PR #341 to merge upstream.
 
+  LOAD-BEARING, confirmed by story spike-stateless-model-tier: the bare drive prompt
+  (`/plugin-hive:kickoff <idea>` alone) is NOT sufficient -- without an explicit, forceful
+  stop-after-writing-envelope instruction, the model fills the ambiguity with its own initiative
+  (self-answering inline, or building/running a self-authored wrapper script that simulates the
+  entire protocol end-to-end in one turn), regardless of model tier. Every prompt this driver
+  sends MUST append an explicit stop instruction (see the spike's findings doc for the exact,
+  verified wording) -- this is required implementation behavior, not optional hardening. Model
+  tier stays at the existing MINERVA_DRIVE_MODEL default (no tier change needed, per the spike).
+
 acceptance_criteria:
+  - "Given any prompt ForkedHiveDriver sends to claude -p/--bg, when inspected, then it always includes an explicit, forceful stop-after-writing-envelope instruction -- never the bare skill-invocation prompt alone"
   - "Given ForkedHiveDriver.runTurn(), when called against a fresh headless kickoff via --plugin-dir, then it correctly dispatches, detects the resulting envelope(s), classifies each question, and returns a result shaped like every other Driver's DriverResult"
   - "Given a multi-question envelope, when answered, then EVERY required question in it receives an answer before the write-back+consume step fires -- a partial batch answer must not prematurely trigger consumption (the closure invariant: an envelope is only consumable once every required question has a non-null answer)"
   - "Given a consumed envelope, when the driver's own code is inspected, then there is no code path that attempts to read that envelope again -- confirmed by a real live test where re-invocation correctly reports the skill's NEXT phase/output, not a stale reference to the answered one"

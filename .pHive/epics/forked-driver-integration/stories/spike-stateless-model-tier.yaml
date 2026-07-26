@@ -84,6 +84,8 @@ files_to_modify:
 design_decisions:
   - decision: "Test against a local plugin-hive-fork checkout via --plugin-dir, not the marketplace install"
     rationale: "PR #341 is converged but unmerged; --plugin-dir loads the fork's real branch code for one session, confirmed working, with zero reason to wait on an unrelated upstream review/merge timeline."
+  - decision: "RESULT (supersedes the epic's own pre-spike design discussion): stateless turns are feasible, and model tier is NOT the limiting factor -- both haiku-4-5 and sonnet-4-5 reliably comply once the drive prompt includes an explicit, forceful stop-after-writing-envelope instruction. ForkedHiveDriver uses the same MINERVA_DRIVE_MODEL default as SpawnDriver/SubagentDriver."
+    rationale: "Root-caused via transcript inspection, not assumption: the bare drive prompt gives no explicit turn-ending signal after a file write (unlike asking a question in prose, which naturally ends a turn) -- both tiers filled that ambiguity with their own reasonable-seeming initiative (haiku answered inline; sonnet/opus built and ran self-authored wrapper scripts that simulated the whole protocol end-to-end in one turn) rather than genuinely failing on capability grounds. Full writeup: .pHive/epics/forked-driver-integration/docs/spike-stateless-model-tier-findings.md."
 
 cross_cutting: []
 

@@ -15,14 +15,19 @@ description: |
   (b) Flatten single-select/multi-select to free-text for v1 (simpler, smaller surface area,
   loses the option list).
 
-  CONFIRMED (this epic's own research): `kind` is NOT a validated closed enum in practice,
-  despite being documented as `single-select | multi-select | free-text` -- the gateway does
-  nothing to constrain it; it passes through whatever value the calling skill (i.e. the model)
-  decided to use. A real Sonnet-driven kickoff run produced `kind: yes-no`, outside the
-  documented set. Whichever option is chosen, the parser MUST handle unrecognized `kind` values
-  defensively (e.g. treat any unrecognized value as free-text, or specifically normalize
-  `yes-no` to `single-select` with implied `[yes, no]` options) rather than throwing or silently
-  misparsing on a value outside the three documented ones.
+  The gateway's own code does NOT enforce the documented `kind: single-select | multi-select |
+  free-text` enum -- it passes through whatever value the calling skill wrote. UPDATE (per story
+  spike-stateless-model-tier's findings): the originally-cited `kind: yes-no` example was
+  observed in a pre-fix, self-simulating model run (a wrapper script the model improvised
+  because the drive prompt lacked an explicit stop instruction), NOT confirmed genuine
+  real-gateway output -- every envelope observed after that fix correctly used
+  `kind: single-select`. The underlying claim (the gateway doesn't validate kind in code) is
+  still true, so defensive parsing is still required, but do not cite `yes-no` specifically as
+  proven real-gateway behavior -- treat it as "a plausible failure shape if something ever goes
+  wrong upstream of this parser" rather than "observed normal behavior." Whichever option is
+  chosen, the parser MUST handle unrecognized `kind` values defensively (e.g. treat any
+  unrecognized value as free-text) rather than throwing or silently misparsing on a value
+  outside the three documented ones.
 
   This is a real architecture decision, not a default -- write it up as a short design note
   (decision + rationale) before implementing.

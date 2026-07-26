@@ -7,9 +7,23 @@ import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, type Driver } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, type Driver } from "./driver.ts";
 
-const driver: Driver = new SpawnDriver();
+// MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
+// existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
+// already proven in production. Operators opt into "subagent" where orphaning is the active
+// pain; an unrecognized value fails loudly at startup rather than silently falling back.
+function selectDriver(): Driver {
+  const value = process.env.MINERVA_DRIVER ?? "spawn";
+  if (value === "spawn") return new SpawnDriver();
+  if (value === "subagent") return new SubagentDriver();
+  throw new MinervaError(
+    "VALIDATION_FAILED",
+    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn" or "subagent"`,
+  );
+}
+
+const driver: Driver = selectDriver();
 
 // Test seam: swap the real `/plugin-hive:kickoff {idea}` prompt for a cheap synthetic one so
 // the automated suite doesn't drive a full real kickoff (slow, costly, many gates) on every

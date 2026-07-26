@@ -1,7 +1,7 @@
 id: forked-hive-driver-stub
 epic: swappable-driver
 title: Prep the ForkedHiveDriver seam (stub only)
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [wire-driver-selection]

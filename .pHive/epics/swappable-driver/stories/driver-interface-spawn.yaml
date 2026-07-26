@@ -1,7 +1,7 @@
 id: driver-interface-spawn
 epic: swappable-driver
 title: Driver interface + SpawnDriver (extract + harden today's mechanism)
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [lock-core-types]

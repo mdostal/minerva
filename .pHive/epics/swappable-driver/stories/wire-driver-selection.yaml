@@ -1,7 +1,7 @@
 id: wire-driver-selection
 epic: swappable-driver
 title: Wire driver selection into kickoff-engine.ts; prove SubagentDriver against type tests
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [subagent-driver]

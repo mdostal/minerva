@@ -1,7 +1,7 @@
 id: escalation-classification
 epic: agent-drivable-core
 title: Escalation Classifier — self-classification + channel enforcement (AD-2, TIMEBOXED spike-with-checkpoint)
-status: pending
+status: complete
 complexity: high
 methodology: tdd
 depends_on: [question-extraction]

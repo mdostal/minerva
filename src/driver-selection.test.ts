@@ -54,11 +54,23 @@ test("MINERVA_DRIVER=subagent selects SubagentDriver -- process starts and respo
   assert.match(result.stdout, /abi_version/);
 });
 
+// wire-forked-driver-selection story (forked-driver-integration epic): forked is opt-in only,
+// same "fail loudly on unrecognized value, default stays spawn" pattern as subagent's own
+// precedent. The actual claim that ForkedHiveDriver satisfies the driver contract end-to-end is
+// proven separately by real-forked-hive-driver.test.ts and deadline-renewal-ownership.test.ts
+// (live, --plugin-dir) -- this is just the selection wiring, live-API-free.
+test("MINERVA_DRIVER=forked selects ForkedHiveDriver -- process starts and responds normally", () => {
+  const result = runCliRaw({ MINERVA_DRIVER: "forked" });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /abi_version/);
+});
+
 test("MINERVA_DRIVER set to an unrecognized value fails loudly at startup -- never silently falls back or guesses", () => {
   const result = runCliRaw({ MINERVA_DRIVER: "bogus" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /MINERVA_DRIVER/);
   assert.match(result.stderr, /bogus/);
+  assert.match(result.stderr, /forked/);
 });
 
 test("MINERVA_TURN_TIMEOUT_MS unset uses the default -- the process starts and responds normally", () => {

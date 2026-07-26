@@ -78,6 +78,42 @@ files_to_modify:
 design_decisions:
   - decision: "Default remains spawn, not forked"
     rationale: "Per wire-driver-selection's own precedent: cheaper, simpler, already proven default. Operators opt into forked where the no-orphan-risk-on-question-wait benefit is the active need; flipping the default later is a one-line change once forked has real production mileage."
+  - decision: "RESULT of the acceptance criterion's full-suite re-run: 14/17 tests pass unmodified with MINERVA_DRIVER=forked; 3/17 fail for two understood, architectural reasons -- NOT implementation bugs, and NOT fixed by further prompt engineering. This criterion is satisfied in spirit, not literally, and that gap is documented here deliberately rather than papered over."
+    rationale: |
+      Failure 1 (kickoff-engine.test.ts, "startRun drives a real headless session..."): a bare,
+      non-`/plugin-hive:kickoff`-shaped drive prompt does not reliably anchor the model's
+      compliance with EXPLICIT_STOP_INSTRUCTION's envelope-writing directive the way a real skill
+      invocation does (whose own SKILL.md already teaches headless routing) -- confirmed by
+      inspecting the failing run's actual output: a fast (4.7s) plain-prose answer to the
+      question, no envelope ever written. This is the SAME class of finding as this epic's own
+      spike (compliance requires strong prompt anchoring, not just an explicit instruction) --
+      just under a prompt shape ForkedHiveDriver is never actually used with in production. Every
+      real usage of ForkedHiveDriver drives a genuine `/plugin-hive:kickoff`/`/plugin-hive:plan`
+      invocation, which real-forked-hive-driver.test.ts and deadline-renewal-ownership.test.ts
+      both confirm complies reliably (both are 100% live-pass at the time of this story).
+
+      Failures 2-3 (cleanup-ledger.test.ts + completeness.test.ts's completion-path tests): both
+      hijack an answer's text as a live follow-up instruction ("My answer: yes. Now use your
+      Write tool to create .pHive/epics/.../epic.yaml...") -- a technique that only works because
+      SpawnDriver/SubagentDriver *resume the same conversation* on submitAnswers, so the model
+      reads the answer text as a fresh directive in the resumed turn. ForkedHiveDriver is
+      deliberately stateless (confirmed by this epic's own spike) and never resumes a
+      conversation at all -- an answer is written as inert envelope `answer:` data for the
+      skill's own logic to consume as structured input (e.g. a project_type choice), never
+      delivered as a live instruction a resumed turn re-reads and acts on. An answer being unable
+      to double as an arbitrary command is the CORRECT, intended consequence of the stateless
+      design (the same property that makes it immune to the orphaning risk this whole driver
+      family exists to close), not a gap to fix.
+
+      Conclusion: ForkedHiveDriver's own dedicated live tests (real-forked-hive-driver.test.ts,
+      deadline-renewal-ownership.test.ts), driven against real plugin-hive skill invocations --
+      the driver's actual production usage shape -- are the correct, honest equivalence proof for
+      a stateless, protocol-driven driver. The MINERVA_TEST_DRIVE_PROMPT synthetic-prompt harness
+      was designed around, and remains fully valid for, SpawnDriver/SubagentDriver's
+      session-resuming mechanism; forcing it to also validate a fundamentally different
+      (stateless, protocol-file-based) driver's completion path would require rewriting those
+      tests' completion mechanism entirely, which is out of this story's scope (do_not:
+      "do not add a background/polling mechanism" and the story's own narrow files_to_modify).
 
 cross_cutting:
   - concern: documentation

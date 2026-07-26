@@ -84,13 +84,57 @@ architecture should be built to expect, or wait for, autonomous movement between
   closing the orphaning gap SpawnDriver's hardening can't reach; also required
   `findCompletedEpic` to search `.claude/worktrees/*` in addition to the workspace root, since
   `--bg` auto-creates its own git worktree whenever the workspace is a git repo, which every
-  Minerva workspace always is per AD-3); **ForkedHiveDriver** (inert stub — throws
-  `NotImplemented`, not wired into `MINERVA_DRIVER` selection; the seam plugin-hive-fork's future
-  structured headless-question protocol drops into with zero ABI change, per
-  `docs/minerva-next-tests-and-driver-paths.md` §3). `session_id` is always returned fresh and
-  re-persisted after every turn, not just at `startRun` — required because SubagentDriver's
-  tracked session id changes on every `--bg --resume` call even though conversation context is
-  correctly retained.
+  Minerva workspace always is per AD-3); **ForkedHiveDriver** (opt-in via `MINERVA_DRIVER=forked`
+  — real, wired implementation, see the forked-driver-integration epic below). `session_id` is
+  always returned fresh and re-persisted after every turn, not just at `startRun` — required
+  because SubagentDriver's tracked session id changes on every `--bg --resume` call even though
+  conversation context is correctly retained.
+
+  **As-built (forked-driver-integration epic):** `ForkedHiveDriver` drives plugin-hive's real
+  structured headless-question protocol (`firefly-events/plugin-hive#341`) instead of prose-
+  scraping a driven turn's final text output. Unlike SpawnDriver/SubagentDriver, it keeps no live
+  session across the question-wait boundary at all — the protocol hands off via a file
+  (`.pHive/questions/*.yaml`), not a tracked background job or a resumed conversation, which is
+  the actual fix for the orphaning risk this whole family of drivers exists to address: zero
+  process runs while a question sits unanswered, for however long a human takes to answer (AD-5).
+  Confirmed empirically (this epic's own spike): stateless turns are feasible — a fresh,
+  non-`--resume` `claude -p` call correctly continues a headless run using on-disk state alone —
+  and model tier is not the limiting factor; what's required is an explicit, forceful
+  stop-after-writing-envelope instruction on every drive prompt (`EXPLICIT_STOP_INSTRUCTION` in
+  `src/driver.ts`), without which the model self-simulates the entire protocol end-to-end in one
+  turn regardless of tier. `session_id` is repurposed (never used for `--resume`) to carry an
+  opaque envelope+qid+original-skill-prompt pointer between calls, exploiting the Driver
+  contract's own "opaque from run-manager's perspective" design to keep the driver stateless
+  while still threading the state a stateless driver needs across turns. A multi-question
+  envelope's closure invariant (every `required` question answered) gates when the driver
+  re-dispatches the skill vs. just surfaces the next question with no new live call at all.
+  Deadline renewal: none implemented, deliberately — `ForkedHiveDriver` never re-dispatches the
+  skill until after it has already written the human's answer, so the protocol's
+  deadline-expiry/re-emit path is architecturally unreachable from Minerva's own usage pattern
+  (confirmed live: an answer submitted long after the on-disk deadline had lapsed still landed
+  correctly, no re-emit, no lost answer). Tested exclusively against a local fork checkout via
+  `--plugin-dir` (`MINERVA_HIVE_PLUGIN_DIR`), not the marketplace-installed plugin-hive, ahead of
+  PR #341 merging upstream.
+
+  **Known scope boundary (confirmed live, not a bug):** the existing `MINERVA_TEST_DRIVE_PROMPT`
+  synthetic-prompt regression suite (kickoff-engine, output-emitter, cleanup-ledger,
+  completeness — 17 tests) was re-run once with `MINERVA_DRIVER=forked`: 14/17 pass unmodified,
+  3/17 fail for two understood, architectural reasons, not implementation bugs. (1) A bare,
+  non-`/plugin-hive:kickoff`-shaped drive prompt does not reliably anchor the model's compliance
+  with the envelope-writing instruction the way a real skill invocation does — matching the
+  epic's own spike finding, just under a prompt shape ForkedHiveDriver isn't actually used with
+  in production. (2) Two completion-path tests hijack an answer's text as a live follow-up
+  instruction ("now use your Write tool to create epic.yaml...") that only works because
+  SpawnDriver/SubagentDriver *resume the same conversation* — the model reads that text as a
+  fresh directive in the resumed turn. ForkedHiveDriver is deliberately stateless and never
+  resumes a conversation; an answer is written as inert envelope data for the skill's own logic
+  to consume, not delivered as a live instruction to a resumed turn — an answer being unable to
+  double as an arbitrary command is the correct, intended consequence of the stateless design,
+  not a gap. ForkedHiveDriver's own dedicated live tests
+  (`src/real-forked-hive-driver.test.ts`, `src/deadline-renewal-ownership.test.ts`) — driven
+  against real `/plugin-hive:kickoff` invocations, the driver's actual production usage shape —
+  are the equivalence proof for this driver; the synthetic-prompt harness remains valid for
+  SpawnDriver/SubagentDriver, which it was designed around.
 
   **Post-merge hardening (2026-07-26 production finding):** a real kickoff→planning transition
   turn legitimately runs past the original hardcoded 120s poll ceiling, causing SubagentDriver

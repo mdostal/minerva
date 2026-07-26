@@ -7,19 +7,23 @@ import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, type Driver } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
 // already proven in production. Operators opt into "subagent" where orphaning is the active
-// pain; an unrecognized value fails loudly at startup rather than silently falling back.
+// pain, or "forked" (forked-driver-integration epic) where even the question-wait step should
+// carry zero orphan risk (no live process at all while waiting on a human -- state lives on
+// disk as a question envelope); an unrecognized value fails loudly at startup rather than
+// silently falling back.
 function selectDriver(): Driver {
   const value = process.env.MINERVA_DRIVER ?? "spawn";
   if (value === "spawn") return new SpawnDriver();
   if (value === "subagent") return new SubagentDriver();
+  if (value === "forked") return new ForkedHiveDriver();
   throw new MinervaError(
     "VALIDATION_FAILED",
-    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn" or "subagent"`,
+    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn", "subagent", or "forked"`,
   );
 }
 

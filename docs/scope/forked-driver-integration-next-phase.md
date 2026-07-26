@@ -66,6 +66,54 @@ tests, 19/19 js + 19/19 py gateway tests, all pass locally.
   question isn't wired yet (newer release feature, not on the `develop` branch this PR
   targets).
 
+## Testing against the fork before it merges upstream
+
+`firefly-events/plugin-hive#341` is open but not yet merged. **This does not block implementation
+or testing** — `claude`'s `--plugin-dir <path>` flag loads a plugin from a local directory for
+one session, bypassing the installed marketplace/cache copy entirely. Confirmed directly (this
+repo, 2026-07-26): `claude -p --plugin-dir /path/to/plugin-hive-fork ...` against the fork's
+actual `feat/headless-question-protocol` checkout correctly loads the fork's skills/hooks —
+Stop-hook artifacts and headless-mode envelope files were both produced from the fork's own
+code, not the marketplace install. `ForkedHiveDriver`'s implementation and every story's test
+suite should point at a local checkout of the fork via this flag until #341 ships in a real
+plugin-hive release — there is no reason to wait on the merge, and doing so would just stall
+this epic behind an unrelated review-and-merge timeline.
+
+## Two new findings from direct empirical testing (this repo, 2026-07-26) — not in the PR description
+
+**1. Headless-routing compliance is model-capability-dependent, not just code-dependent.** The
+whole "check `detect_interactive_mode()`, route through `ask_or_emit()`" mechanism is
+*prose-instructed* in each skill's `SKILL.md` — there is no code that intercepts or enforces it;
+the model has to actually read and follow that instruction. Tested identically against the same
+fork checkout, same `HIVE_HEADLESS=1`, same fresh-kickoff prompt:
+
+- `claude-haiku-4-5-20251001` (Minerva's current default drive model) **did not** follow the
+  headless-routing instruction — it asked the metrics question inline as prose, exactly as if
+  headless mode were off, and wrote no envelope file at all.
+- `claude-sonnet-4-5` **did** follow it correctly and reliably across two independent
+  invocations (fresh kickoff writing 3 envelopes across phases `1a`/`1b`/`project-classification`;
+  resume after answering `1a`, which correctly deleted that envelope, reported the answer,
+  and listed the two still-pending envelopes untouched).
+
+**Consequence:** ForkedHiveDriver almost certainly cannot inherit SpawnDriver/SubagentDriver's
+cost-optimized Haiku default (`MINERVA_DRIVE_MODEL`) — that default would make the whole
+protocol silently degrade back to prose-asking, defeating the point of building this driver.
+Needs its own model-tier decision, and the stateless-turn spike (story 1) should establish the
+*minimum* reliable tier empirically (only Haiku vs. Sonnet has been tested so far — Haiku 4.5
+vs. Opus, or a cheaper Sonnet variant, is unexplored), not just re-use "sonnet worked once."
+
+**2. `kind` is not a strictly-enforced closed enum in practice, despite being documented as
+one.** The schema doc states `kind: single-select | multi-select | free-text`, and the gateway
+code (`question_gateway.py`'s `ask_or_emit`) does nothing to validate or constrain it —
+`q.get("kind", "single-select")` just passes through whatever value the calling skill (i.e. the
+model, writing the envelope via its own tool calls per `SKILL.md`'s prose instructions) decided
+to use. A real Sonnet-driven kickoff run wrote `kind: yes-no` for the metrics opt-in question —
+a value that appears nowhere in the documented enum. **Consequence:** Minerva's envelope-question
+parsing (open question 3 below) cannot assume `kind` is closed to the three documented values —
+it must handle/normalize unexpected values defensively (e.g. treat any unrecognized `kind` as
+free-text, or specifically recognize `yes-no` as a `single-select` with implied `[yes, no]`
+options) rather than throwing or silently misparsing.
+
 ## Why this is a bigger win than SubagentDriver's mechanism
 
 SubagentDriver's `--bg`/poll/stop/resume-extract dance exists entirely to work around
@@ -93,7 +141,9 @@ risk on the question-wait step, because nothing is running while the question is
 3. **`Question`/`Answer` type extension.** Minerva's current types are free-text only. Decide:
    extend to carry `kind`/`options`/`qid` end-to-end (more faithful, more surface area), or
    flatten `single-select`/`multi-select` to free-text for v1 (simpler, loses the option list a
-   human channel could otherwise render as real choices).
+   human channel could otherwise render as real choices). Either way, `kind` parsing must be
+   defensive — confirmed empirically that real (Sonnet-driven) envelopes can carry a `kind`
+   value (`yes-no`) outside the three documented enum values; the gateway does not validate it.
 4. **Multi-question envelopes vs. Minerva's one-question-per-turn model.** A phase can batch
    multiple questions into one envelope (kickoff's 6 phases carry 7 questions total). Minerva's
    `getQuestions`/`submitAnswers` flow is currently shaped around answering one pending question
@@ -107,11 +157,20 @@ risk on the question-wait step, because nothing is running while the question is
    accept the upstream default (`re-emit` on expiry) as an acceptable degraded behavior? Since
    renewal only applies pre-consumption (see "Deletion on consume" above), this is purely about
    the waiting-on-human window, not anything post-answer.
+6. **Minimum reliable model tier.** Confirmed empirically that `claude-haiku-4-5-20251001`
+   (Minerva's current cost-optimized default) does not reliably follow the headless-routing
+   instruction (see "Two new findings" above) while `claude-sonnet-4-5` does. The stateless-turn
+   spike (story 1) should establish the actual minimum viable tier — untested territory beyond
+   these two data points — since a wrong choice either silently breaks headless compliance
+   (too cheap) or needlessly inflates cost (too conservative).
 
 ## Proposed story shape (draft — for the planning kickoff to confirm/revise, not to build from directly)
 
-1. Spike: stateless-turn feasibility (resolves open question 1)
-2. Envelope detection + parsing (`.pHive/questions/*.yaml` -> typed shape)
+1. Spike: stateless-turn feasibility + minimum reliable model tier (resolves open questions 1
+   and 6) — must test against a local checkout of `plugin-hive-fork` via `--plugin-dir`, not
+   wait for #341 to merge/ship
+2. Envelope detection + parsing (`.pHive/questions/*.yaml` -> typed shape), defensive to
+   unexpected `kind` values
 3. `Question`/`Answer` type extension decision + implementation (resolves open question 3)
 4. Escalation classification for envelope questions (resolves open question 2)
 5. Real `ForkedHiveDriver.runTurn()` implementation (dispatch, detect, parse via the read-only
@@ -124,13 +183,21 @@ risk on the question-wait step, because nothing is running while the question is
 
 ## Independent verification (this repo, 2026-07-26)
 
-Re-ran the upstream test suites directly against the merged `feat/headless-question-protocol`
-branch (17 commits, post all 4 CodeRabbit review rounds) from a checkout of `plugin-hive-fork`:
+Re-ran the upstream test suites directly against the `feat/headless-question-protocol` branch
+(17 commits, post all 4 CodeRabbit review rounds) from a checkout of `plugin-hive-fork`:
 `hooks/test/metrics-stop-dispatch.test.sh` (12/12), `hive/lib/test/question_gateway.test.mjs`
 + `runtime_mode.test.mjs` via vitest (19/19), and the Python equivalents via pytest (19/19).
 All pass cleanly. This is in addition to the Stop-hook fix (#341's `hqp-6`) already verified
 end-to-end against a real Minerva `SubagentDriver` run in the swappable-driver epic — see
 `.pHive/epics/swappable-driver/` commit history and PR #2's description in this repo.
+
+Also ran two real, separate `claude -p --plugin-dir <fork-checkout>` sessions against the fork
+(not the marketplace install, not a simulation): a fresh headless kickoff with
+`claude-sonnet-4-5` correctly wrote 3 envelopes across phases `1a`/`1b`/`project-classification`;
+answering `1a` and re-invoking correctly deleted that envelope, reported the answer, and left
+the other two envelopes' `status: pending` untouched — direct, first-hand confirmation of
+delete-on-consume and phase-batching, not just review of the PR's own claims. See "Two new
+findings" above for the model-tier and `kind`-enum discoveries this testing surfaced.
 
 ## References
 

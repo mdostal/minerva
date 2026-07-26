@@ -1,7 +1,9 @@
 id: run-workspace-allocation
 epic: agent-drivable-core
 title: Run Manager — two-case isolated workspace allocation (AD-3)
-status: complete
+status: shipped
+shipped_at: "2026-07-26T06:35:00Z"
+release_id: "minerva-v0.1.1"
 complexity: medium
 methodology: tdd
 depends_on: [wire-protocol-skeleton]

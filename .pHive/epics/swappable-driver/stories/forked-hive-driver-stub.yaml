@@ -1,7 +1,9 @@
 id: forked-hive-driver-stub
 epic: swappable-driver
 title: Prep the ForkedHiveDriver seam (stub only)
-status: complete
+status: shipped
+shipped_at: "2026-07-26T06:35:00Z"
+release_id: "minerva-v0.1.1"
 complexity: low
 methodology: tdd
 depends_on: [wire-driver-selection]

@@ -1,7 +1,9 @@
 id: driver-interface-spawn
 epic: swappable-driver
 title: Driver interface + SpawnDriver (extract + harden today's mechanism)
-status: complete
+status: shipped
+shipped_at: "2026-07-26T06:35:00Z"
+release_id: "minerva-v0.1.1"
 complexity: medium
 methodology: tdd
 depends_on: [lock-core-types]

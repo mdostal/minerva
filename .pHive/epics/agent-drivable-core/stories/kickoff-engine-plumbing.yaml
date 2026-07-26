@@ -1,7 +1,7 @@
 id: kickoff-engine-plumbing
 epic: agent-drivable-core
 title: Kickoff+Plan Engine plumbing — headless drive/resume + raw-prose passthrough
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [run-workspace-allocation]

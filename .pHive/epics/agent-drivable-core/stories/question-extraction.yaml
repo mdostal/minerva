@@ -1,7 +1,7 @@
 id: question-extraction
 epic: agent-drivable-core
 title: Question extraction from headless prose turns (TIMEBOXED spike-with-checkpoint)
-status: pending
+status: complete
 complexity: high
 methodology: tdd
 depends_on: [kickoff-engine-plumbing]

@@ -1,7 +1,7 @@
 id: lock-core-types
 epic: swappable-driver
 title: Lock the core types with fast, driver-independent unit tests
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: []

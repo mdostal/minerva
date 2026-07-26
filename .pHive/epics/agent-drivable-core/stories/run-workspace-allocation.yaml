@@ -1,7 +1,7 @@
 id: run-workspace-allocation
 epic: agent-drivable-core
 title: Run Manager — two-case isolated workspace allocation (AD-3)
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [wire-protocol-skeleton]

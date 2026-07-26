@@ -1,7 +1,7 @@
 id: completeness-pass
 epic: agent-drivable-core
 title: Completeness pass — error-enum coverage, concurrency proof, REQ-07 traceability marker
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [cleanup-ledger-events]

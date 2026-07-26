@@ -1,7 +1,7 @@
 id: cleanup-ledger-events
 epic: agent-drivable-core
 title: Cleanup Ledger / Event Sink + abortRun (AD-4)
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [output-emitter]

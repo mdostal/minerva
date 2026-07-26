@@ -1,7 +1,7 @@
 id: subagent-driver
 epic: swappable-driver
 title: SubagentDriver -- claude --bg + poll + stop + resume-extract
-status: pending
+status: complete
 complexity: high
 methodology: tdd
 depends_on: [driver-interface-spawn]

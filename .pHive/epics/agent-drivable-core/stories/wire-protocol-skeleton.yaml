@@ -1,7 +1,7 @@
 id: wire-protocol-skeleton
 epic: agent-drivable-core
 title: Minerva wire-protocol skeleton (scaffold + capabilities)
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: []

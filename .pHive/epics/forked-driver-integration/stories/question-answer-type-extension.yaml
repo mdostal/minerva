@@ -1,0 +1,93 @@
+id: question-answer-type-extension
+epic: forked-driver-integration
+title: Question/Answer type extension decision + implementation
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [spike-stateless-model-tier]
+
+description: |
+  Minerva's current `Question`/`Answer` types (src/run-manager.ts, src/kickoff-engine.ts) are
+  free-text only. Decide and implement one of:
+
+  (a) Extend end-to-end to carry `kind`/`options`/`qid` (more faithful to the upstream envelope,
+  lets a human channel render real choices instead of open text).
+  (b) Flatten single-select/multi-select to free-text for v1 (simpler, smaller surface area,
+  loses the option list).
+
+  CONFIRMED (this epic's own research): `kind` is NOT a validated closed enum in practice,
+  despite being documented as `single-select | multi-select | free-text` -- the gateway does
+  nothing to constrain it; it passes through whatever value the calling skill (i.e. the model)
+  decided to use. A real Sonnet-driven kickoff run produced `kind: yes-no`, outside the
+  documented set. Whichever option is chosen, the parser MUST handle unrecognized `kind` values
+  defensively (e.g. treat any unrecognized value as free-text, or specifically normalize
+  `yes-no` to `single-select` with implied `[yes, no]` options) rather than throwing or silently
+  misparsing on a value outside the three documented ones.
+
+  This is a real architecture decision, not a default -- write it up as a short design note
+  (decision + rationale) before implementing.
+
+acceptance_criteria:
+  - "Given the chosen extension approach, when implemented, then it is documented as an explicit design_decision with rationale, not silently defaulted"
+  - "Given a `kind: yes-no` value (the empirically observed non-enum case), when a question carrying it is processed, then it is handled without throwing -- normalized to a known shape or defensively treated as free-text"
+  - "Given the extended (or intentionally-flattened) type, when checked against src/types.test.ts's existing driver-independent contract tests, then no existing test breaks -- this extension is additive, not a breaking change to the current free-text-only shape's callers"
+  - "Given `qid`, when carried through the type (if option (a) is chosen), then it round-trips correctly through the answer-submission path so the real driver implementation can address the correct question when writing an answer back"
+
+scope_boundaries:
+  do:
+    - "Decide and implement the Question/Answer type shape for this driver path"
+    - "Handle kind defensively regardless of which option is chosen"
+  do_not:
+    - "Do not change SpawnDriver's or SubagentDriver's existing Question/Answer usage -- this extension must be additive, not a breaking change to the other two drivers' existing free-text contract"
+
+steps:
+  - id: research
+    description: Read src/run-manager.ts's current Question/Answer interfaces and src/types.test.ts's existing coverage to confirm what must stay backward-compatible before extending.
+    agent: researcher
+  - id: test-spec
+    description: "Write failing tests for the chosen extension shape, including the kind=yes-no defensive-handling case. Do NOT read the implementation."
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the type extension (or documented flattening decision). Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the decision is documented with rationale, existing SpawnDriver/SubagentDriver usage is unaffected, and the full existing src/types.test.ts suite still passes unchanged.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: src/run-manager.ts
+      purpose: "Current Question/Answer type definitions this story extends"
+    - path: src/types.test.ts
+      purpose: "The driver-independent contract this extension must not break"
+
+files_to_modify:
+  - file: src/run-manager.ts
+    change: "Extend (or document why not extending) Question/Answer types"
+
+design_decisions:
+  - decision: "TBD at implementation time -- this story's own acceptance criteria require the decision to be written up explicitly, not left implicit"
+    rationale: "Deferred deliberately -- see description; this is a real architecture call the implementing agent must make and document, not a pre-decided default in this story YAML."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "Extending the type shape touches code shared by SpawnDriver and SubagentDriver -- a careless change could regress the other two drivers"
+    mitigation: "Full existing test suite (src/types.test.ts, driver.test.ts, subagent-driver.test.ts) must pass unchanged, per review step"
+
+references:
+  - path: docs/scope/forked-driver-integration-next-phase.md
+    relevant_excerpt: |
+      kind is NOT a validated closed enum in practice, despite being documented as one -- a real
+      Sonnet-driven run produced kind: yes-no.

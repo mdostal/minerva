@@ -1,0 +1,68 @@
+name: forked-driver-integration
+title: Wire ForkedHiveDriver to the real headless-question-protocol
+target_codebase: /Users/dostal/Documents/work/dostal/code/minerva
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev   # actual project practice branches off/merges into dev, not main -- matches
+                      # agent-drivable-core and swappable-driver's own corrected convention
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [driver-abstraction, headless-agent-driven, protocol-integration, no-ui]
+  roster: [researcher, tester, developer, reviewer]
+  per_tag_reasoning:
+    driver-abstraction: "Fills in the ForkedHiveDriver seam left inert by the swappable-driver epic -- same Driver interface, third implementation"
+    headless-agent-driven: "The whole epic is driving a real headless protocol shipped in a fork of plugin-hive, verified empirically via direct claude --plugin-dir testing before any story was finalized"
+    protocol-integration: "Consuming an external system's (plugin-hive-fork's) file-based protocol, not just internal refactoring -- requires careful attention to that system's actual (not assumed) semantics, per the two empirical findings this epic's own research surfaced"
+    no-ui: "has_ui: false, unchanged from prior epics -- no ui-designer needed"
+  confidence: high
+  gate_decisions:
+    scale_assessment: "Medium -- skip H/V ceremony, proceed straight to stories, mirroring swappable-driver's own precedent (the scope doc already did the decomposition-informing research)"
+    collaborative_review: "orchestrator-narrated (no Agent-tool spawn) -- consistent with both prior epics' fallback pattern"
+    plan_gate: "user-confirmed via AskUserQuestion: 'Yes, build it (Recommended)' for design+decomposition, 'minor (Recommended)' for version_bump, 'committed (Recommended)' for sidecar_retention"
+
+source:
+  upstream_pr: firefly-events/plugin-hive#341
+  upstream_branch: feat/headless-question-protocol
+  local_fork_checkout: /Users/dostal/Documents/work/dostal/code/plugin-hive-fork
+  scope_doc: docs/scope/forked-driver-integration-next-phase.md
+  multica_epic: PAN-3988
+
+notes: >
+  PR #341 is converged (17 commits, 4 CodeRabbit review rounds, 63/63 tests, no known open
+  findings) but not yet merged upstream. This is not a blocker for this epic -- every story
+  tests against the local fork checkout via `claude --plugin-dir <path>`, confirmed working,
+  rather than waiting on an unrelated upstream review/merge timeline.
+
+stories:
+  - id: spike-stateless-model-tier
+    title: "Spike: stateless-turn feasibility + minimum reliable model tier"
+    complexity: medium
+    depends_on: []
+  - id: question-answer-type-extension
+    title: Question/Answer type extension decision + implementation
+    complexity: medium
+    depends_on: [spike-stateless-model-tier]
+  - id: envelope-detection-parsing
+    title: Envelope detection + parsing (.pHive/questions/*.yaml -> typed shape)
+    complexity: medium
+    depends_on: [spike-stateless-model-tier, question-answer-type-extension]
+  - id: escalation-classification-envelope
+    title: Escalation classification for envelope questions
+    complexity: medium
+    depends_on: [question-answer-type-extension]
+  - id: real-forked-hive-driver
+    title: Real ForkedHiveDriver.runTurn() implementation
+    complexity: high
+    depends_on: [envelope-detection-parsing, escalation-classification-envelope]
+  - id: deadline-renewal-ownership
+    title: Deadline renewal ownership
+    complexity: low
+    depends_on: [real-forked-hive-driver]
+  - id: wire-forked-driver-selection
+    title: MINERVA_DRIVER=forked wiring + full regression
+    complexity: medium
+    depends_on: [deadline-renewal-ownership]

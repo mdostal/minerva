@@ -1,0 +1,100 @@
+id: spike-stateless-model-tier
+epic: forked-driver-integration
+title: "Spike: stateless-turn feasibility + minimum reliable model tier"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Two empirical sub-questions, both required before the real implementation (story
+  real-forked-hive-driver) can proceed with confidence instead of assumption:
+
+  (a) Can each phase invocation against the real headless-question-protocol be stateless (a
+  fresh `claude -p`/`--bg` call, no `--resume`/session tracking at all)? The skill's own on-disk
+  state (`.pHive/epics/`, `.pHive/questions/`) may be sufficient continuity between phases,
+  unlike SpawnDriver/SubagentDriver, which both depend on conversation continuity via
+  session_id. If true, this is a meaningful reliability win: no session_id juggling for this
+  driver path at all.
+
+  (b) What is the MINIMUM model tier that reliably follows the headless-routing instruction?
+  CONFIRMED already (2026-07-26, ad-hoc testing that seeded this epic): claude-haiku-4-5-20251001
+  (Minerva's current cost-optimized MINERVA_DRIVE_MODEL default) does NOT reliably follow the
+  "check detect_interactive_mode(), route through ask_or_emit()" instruction -- it's
+  prose-instructed per-skill in each SKILL.md, not code-enforced, and Haiku asked a question
+  inline instead of writing an envelope. claude-sonnet-4-5 DOES follow it reliably (verified
+  across a fresh kickoff writing 3 envelopes, and a resume correctly deleting the answered one).
+  Untested: whether anything cheaper than full Sonnet works, and whether design/plan's more
+  complex multi-round flows need a stronger tier than kickoff's simpler linear flow needed.
+
+  TESTING MECHANISM (both sub-questions): use `claude --plugin-dir
+  /Users/dostal/Documents/work/dostal/code/plugin-hive-fork ...` to test against the fork's
+  feat/headless-question-protocol branch directly -- confirmed working (loads the fork's real
+  skills/hooks, bypasses the marketplace install). Do NOT wait for PR #341 to merge upstream --
+  there is no reason this spike needs to block on an unrelated review/merge timeline.
+
+acceptance_criteria:
+  - "Given a fresh headless kickoff invocation with no prior session_id, when a second phase's envelope needs answering, then a fresh (non---resume) invocation is tested against the fork and the result (continues correctly from on-disk state, or fails/degrades) is documented as fact, not assumed"
+  - "Given the same headless kickoff prompt run against claude-haiku-4-5-20251001, claude-sonnet-4-5, and at least one additional untested tier (e.g. a cheaper Sonnet variant or Opus), then each run's actual headless-routing compliance (envelope written vs. inline prose) is recorded"
+  - "Given the spike's findings, when written up, then they state a concrete MINERVA_DRIVE_MODEL-equivalent recommendation for ForkedHiveDriver, not just raw data points"
+  - "Given every claude invocation this spike makes, when inspected, then each one passes --plugin-dir pointed at the actual local plugin-hive-fork checkout, never the installed marketplace plugin"
+
+scope_boundaries:
+  do:
+    - "Run real, live claude -p / claude --bg invocations against the fork checkout to answer both sub-questions"
+    - "Document findings as a design-decision note other stories can build on"
+  do_not:
+    - "Do not implement any part of ForkedHiveDriver itself here -- this is a spike, not the implementation"
+    - "Do not wait for or depend on PR #341 merging upstream"
+
+steps:
+  - id: research
+    description: Re-read docs/scope/forked-driver-integration-next-phase.md's existing findings (haiku fails, sonnet succeeds) and the fork's hive/references/question-envelope-schema.md and kickoff-protocol.md to confirm current understanding before extending the test matrix.
+    agent: researcher
+  - id: test-spec
+    description: Write a test harness script (not a node:test file -- this is empirical spike work) that drives the fork via --plugin-dir across the model-tier matrix and the stateless-turn question, and asserts on the observable outcome (envelope written vs not; continuation succeeded vs not).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Run the spike, capture real output, and write up findings as a design-decision note (model tier recommendation + stateless-turn verdict) for the epic's remaining stories to consume.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the findings are backed by actual captured output (not assumed), and that the recommended model tier and stateless-turn verdict are unambiguous enough for story real-forked-hive-driver to build against without re-deriving them.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit findings (as a doc, not code) and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, claude --plugin-dir, claude --bg"
+  key_files:
+    - path: docs/scope/forked-driver-integration-next-phase.md
+      purpose: "Existing findings this spike extends rather than re-derives from scratch"
+
+files_to_modify:
+  - file: docs/scope/forked-driver-integration-next-phase.md
+    change: "Append the spike's findings (model-tier matrix results, stateless-turn verdict)"
+
+design_decisions:
+  - decision: "Test against a local plugin-hive-fork checkout via --plugin-dir, not the marketplace install"
+    rationale: "PR #341 is converged but unmerged; --plugin-dir loads the fork's real branch code for one session, confirmed working, with zero reason to wait on an unrelated upstream review/merge timeline."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "Model-tier testing has live-API cost; a wide matrix (multiple tiers x multiple skill flows) could get expensive"
+    mitigation: "Bound the matrix to what's needed to establish a floor (haiku confirmed-fail, sonnet confirmed-pass, one or two intermediate/cheaper points), not exhaustive coverage of every model"
+
+references:
+  - path: docs/scope/forked-driver-integration-next-phase.md
+    relevant_excerpt: |
+      claude-haiku-4-5-20251001 (Minerva's current cost-optimized default) did not follow the
+      headless-routing instruction -- it asked the metrics question inline as prose...
+      claude-sonnet-4-5 did follow it correctly and reliably across two independent invocations.

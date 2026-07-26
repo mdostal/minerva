@@ -1,0 +1,95 @@
+id: wire-forked-driver-selection
+epic: forked-driver-integration
+title: MINERVA_DRIVER=forked wiring + full regression
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [deadline-renewal-ownership]
+
+description: |
+  Wire `MINERVA_DRIVER=forked` into `kickoff-engine.ts`'s `selectDriver()`, alongside the
+  existing `spawn`/`subagent` options -- same "fail loudly on an unrecognized value" pattern
+  already established.
+
+  Mirrors `wire-driver-selection`'s own precedent from the `swappable-driver` epic: prove
+  ForkedHiveDriver satisfies the exact same `src/types.test.ts` contract SpawnDriver and
+  SubagentDriver do, and re-run the full driver-touching integration suite (kickoff-engine,
+  output-emitter, cleanup-ledger, completeness) once against this driver to confirm end-to-end
+  equivalence, not just type-level compatibility.
+
+  Default remains `spawn` -- this is opt-in, same reasoning as `subagent`'s own default decision
+  (cheaper/simpler default, operators opt in where the new mechanism's benefit -- no orphan risk
+  on the question-wait step at all -- is the active need).
+
+  ALL regression testing uses `claude --plugin-dir /Users/dostal/Documents/work/dostal/code/plugin-hive-fork`
+  against the local fork checkout.
+
+acceptance_criteria:
+  - "Given MINERVA_DRIVER=forked, when kickoff-engine.ts selects a driver, then it uses ForkedHiveDriver"
+  - "Given MINERVA_DRIVER unset or =spawn, when kickoff-engine.ts selects a driver, then it still defaults to SpawnDriver -- forked is opt-in only, not a default change"
+  - "Given MINERVA_DRIVER set to an unrecognized value, when kickoff-engine.ts selects a driver, then it still raises the same clear VALIDATION_FAILED-style startup error as before, now correctly listing forked among the valid options"
+  - "Given the full existing story test suite (kickoff-engine, output-emitter, cleanup-ledger, completeness) run once with MINERVA_DRIVER=forked against the fork via --plugin-dir, then it passes -- proving driver-swap equivalence end-to-end for the third driver, not just at the type level"
+  - "Given docs/architecture.md's Kickoff+Plan Engine component note, when checked, then it lists ForkedHiveDriver as a live, wired option rather than the prior epic's inert stub"
+
+scope_boundaries:
+  do:
+    - "Add MINERVA_DRIVER=forked selection logic"
+    - "Run (not just claim) the full test suite against this driver and record the result"
+    - "Update docs/architecture.md to reflect ForkedHiveDriver's real, wired status"
+  do_not:
+    - "Do not change the default away from spawn"
+    - "Do not add per-request driver override -- env var only, per the prior epic's established scope"
+
+steps:
+  - id: research
+    description: Confirm kickoff-engine.ts's existing selectDriver() pattern (spawn/subagent) to match it exactly for the forked option.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the driver-selection logic covering the new forked option, mirroring wire-driver-selection's existing test shape.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement forked driver selection in kickoff-engine.ts. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review the full-suite-against-forked test run results directly -- this is the acceptance bar, not a claim to take on faith. Confirm docs/architecture.md was updated.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes epic forked-driver-integration.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: src/kickoff-engine.ts
+      purpose: "selectDriver()'s existing spawn/subagent pattern this story extends with forked"
+
+files_to_modify:
+  - file: src/kickoff-engine.ts
+    change: "Add MINERVA_DRIVER=forked to driver selection"
+  - file: docs/architecture.md
+    change: "Update the Kickoff+Plan Engine component note to describe ForkedHiveDriver as real and wired"
+
+design_decisions:
+  - decision: "Default remains spawn, not forked"
+    rationale: "Per wire-driver-selection's own precedent: cheaper, simpler, already proven default. Operators opt into forked where the no-orphan-risk-on-question-wait benefit is the active need; flipping the default later is a one-line change once forked has real production mileage."
+
+cross_cutting:
+  - concern: documentation
+    action: "Update docs/architecture.md's Kickoff+Plan Engine component note to reflect ForkedHiveDriver's real, wired status."
+
+risks:
+  - severity: low
+    description: "Running the full suite against a third driver adds to this epic's total live-API cost/time"
+    mitigation: "Accepted -- this IS the proof the epic's principle requires, matching wire-driver-selection's own accepted risk"
+
+references:
+  - path: .pHive/epics/swappable-driver/stories/wire-driver-selection.yaml
+    relevant_excerpt: |
+      Default remains spawn -- that's an explicit, considered decision, not a leftover... prove
+      SubagentDriver satisfies the same contract SpawnDriver does.

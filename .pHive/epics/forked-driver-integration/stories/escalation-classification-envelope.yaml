@@ -1,0 +1,89 @@
+id: escalation-classification-envelope
+epic: forked-driver-integration
+title: Escalation classification for envelope questions
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [question-answer-type-extension]
+
+description: |
+  The protocol's envelope question object carries no `suggested_channel`/`confidence`/`reason`
+  -- AD-2's escalation classification (the escalate/absorb principle: strategic/ambiguous/
+  irreversible/low-confidence -> human, routine/mechanical/pre-decided -> agent) has no upstream
+  equivalent yet.
+
+  ForkedHiveDriver needs its own classification pass over each envelope question. Reuse/adapt
+  `src/escalation-classification.ts`'s existing schema and logic -- currently it classifies a
+  question *extracted from free prose* in the same combined --json-schema call as extraction;
+  here it needs to classify a question that's already structured (arrives with `text`/`kind`/
+  `options` from the envelope, no extraction step needed). Likely a smaller, separate `-p
+  --json-schema` call per envelope (or per batch) that takes the question text and returns just
+  the classification fields.
+
+  Preserve the safe-default fallback (bad/missing classification -> human, confidence 0, never
+  guess) that's already load-bearing in the existing implementation.
+
+acceptance_criteria:
+  - "Given a structured envelope question (text + kind + options, no extraction needed), when classified, then the same suggested_channel/confidence/reason shape escalation-classification.ts already produces for extracted-from-prose questions is returned"
+  - "Given a malformed or missing classification response, when handled, then it falls back to human/confidence-0/a safe-default reason -- never throws, never guesses a channel, matching the existing safe-default precedent exactly"
+  - "Given this classification call, when made, then it does NOT reuse the extraction schema's combined question+classification shape unmodified -- the question text is already known from the envelope, so only the classification fields need to be requested"
+  - "Given a batch of multiple questions from one envelope, when classified, then each gets its own independent classification result -- classification never bundles multiple questions' judgments into one ambiguous response"
+
+scope_boundaries:
+  do:
+    - "Add a classification pass for structured (already-extracted) envelope questions"
+    - "Reuse escalation-classification.ts's safe-default fallback logic and schema shape for the classification fields"
+  do_not:
+    - "Do not modify escalation-classification.ts's existing extraction-time schema/parser -- SpawnDriver/SubagentDriver still use it unchanged"
+    - "Do not skip the safe-default fallback -- AD-2/AD-5's never-guess discipline applies here identically"
+
+steps:
+  - id: research
+    description: Re-read src/escalation-classification.ts's existing schema and extractClassifiedQuestion() to confirm exactly what's reusable vs what needs adapting for a structured (not extracted) question.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for classifying a structured envelope question, including the safe-default fallback case and the per-question (not per-batch) independence case. Reuse fixture patterns from escalation-classification.test.ts where applicable.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the classification pass for envelope questions. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the safe-default fallback is genuinely preserved (test it fails closed, not open) and that escalation-classification.ts's existing extraction-time behavior is unchanged.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: src/escalation-classification.ts
+      purpose: "Existing schema/safe-default logic this story adapts for structured (not extracted) questions"
+
+files_to_modify:
+  - file: src/escalation-classification.ts
+    change: "Add a classification-only path for structured envelope questions, alongside the existing combined extraction+classification path"
+
+design_decisions:
+  - decision: "Separate -p --json-schema call for classification, not reused inline with envelope parsing"
+    rationale: "The envelope already has the question text -- no extraction step is needed, so folding classification into the same combined schema as extraction (as escalation-classification.ts does today for SpawnDriver/SubagentDriver) doesn't apply; a smaller classification-only call is the correct shape here."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "A second live-API call per question (beyond the skill's own turn) adds cost/latency, similar to SubagentDriver's extraction-call overhead"
+    mitigation: "Accepted -- matches the cost profile already established for SubagentDriver; classification correctness matters more than minimizing this call"
+
+references:
+  - path: src/escalation-classification.ts
+    relevant_excerpt: |
+      When genuinely uncertain, always escalate -- never guess. Any failure to parse, or any
+      missing/invalid classification field, falls back to the safe default (channel: human,
+      confidence: 0) rather than guessing a channel or throwing.

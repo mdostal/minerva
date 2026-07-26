@@ -242,3 +242,20 @@ export class SubagentDriver implements Driver {
     return { session_id: result.session_id, raw_result: result.result };
   }
 }
+
+// Inert stub for the future plugin-hive-fork driver -- the fork doesn't exist yet. Not wired
+// into MINERVA_DRIVER's selection logic (see kickoff-engine.ts's selectDriver()); exists as a
+// class, not a live option, so there is no way to accidentally select it in production.
+// Throws rather than silently no-op-ing or returning fabricated data, consistent with this
+// epic's "never guess" discipline (AD-5) -- a Driver that silently no-ops would be worse than
+// one that fails loudly, since a caller might not notice the swap happened. When the fork is
+// ready, this becomes a real implementation consuming its structured headless-question protocol
+// directly (no spawn-and-parse) -- see docs/minerva-next-tests-and-driver-paths.md §3.
+export class ForkedHiveDriver implements Driver {
+  async runTurn(_input: DriverInput): Promise<DriverResult> {
+    throw new Error(
+      "ForkedHiveDriver is not implemented yet -- plugin-hive-fork does not exist. " +
+        "See docs/minerva-next-tests-and-driver-paths.md §3 for the intended design.",
+    );
+  }
+}

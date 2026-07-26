@@ -7,8 +7,14 @@ project_type: service
 has_ui: false
 
 ship_target:
-  kind: npm
-  notes: "Publishes as a TS package other Pantheon components (Auriga, Vulcan) depend on."
+  kind: custom
+  command: "git tag -a v{version} -m 'Minerva v{version}' && git push origin v{version}"
+  notes: >
+    Git-dependency model, decided 2026-07-26: Auriga/Vulcan reference Minerva via a git
+    URL (pinned to a tag) in their own package.json, not an npm registry -- no internal
+    registry exists yet, and this keeps everything local. Public-registry npm publish is
+    deferred to a future explicit decision (Mathew), not automatic. The ship action is
+    just cutting and pushing the release tag other repos pin against.
 
 tech_stack:
   languages:

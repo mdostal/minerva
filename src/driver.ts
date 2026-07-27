@@ -80,12 +80,14 @@ export interface Driver {
   runTurn(input: DriverInput): Promise<DriverResult>;
 }
 
-interface ClaudePResult {
+export interface ClaudePResult {
   is_error: boolean;
   stop_reason: string;
   session_id: string;
   result: string;
 }
+
+export type ClaudeTurnRunner = (cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv) => Promise<ClaudePResult>;
 
 // Tracks the single in-flight child so a SIGINT/SIGTERM handler can kill it before the process
 // exits. SpawnDriver drives turns one at a time per process (no concurrent children), so a
@@ -446,6 +448,8 @@ export function writeAnswerOntoEnvelope(envelopePath: string, qid: string, answe
 }
 
 export class ForkedHiveDriver implements Driver {
+  constructor(private readonly runClaude: ClaudeTurnRunner = spawnClaude) {}
+
   async runTurn(input: DriverInput): Promise<DriverResult> {
     if (input.sessionId === null) {
       return this.dispatchFresh(input.cwd, input.prompt);
@@ -474,7 +478,7 @@ export class ForkedHiveDriver implements Driver {
       randomUUID(),
       skillPrompt + EXPLICIT_STOP_INSTRUCTION,
     ];
-    await spawnClaude(cwd, args, { HIVE_HEADLESS: "1" });
+    await this.runClaude(cwd, args, { HIVE_HEADLESS: "1" });
     return this.surfaceNextQuestion(cwd, skillPrompt);
   }
 
@@ -555,7 +559,7 @@ export class ForkedHiveDriver implements Driver {
       ...classificationOnlySchemaArgs(),
       `Classify this question, which will be asked on Minerva's behalf: ${questionText}`,
     ];
-    const result = await spawnClaude(cwd, args);
+    const result = await this.runClaude(cwd, args);
     return extractClassification(result.result);
   }
 }

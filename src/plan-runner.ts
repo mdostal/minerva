@@ -33,7 +33,8 @@ export interface PlanRequest {
 export interface PlanResult {
   run_id: string;
   status: string; // "complete" | "waiting_on_human" | ...
-  epic: CompletedEpic | null; // present iff status === "complete"
+  epic: CompletedEpic | null; // first epic (backward compat); present iff status === "complete"
+  epics: CompletedEpic[]; // ALL of the run's own epics -- a single /plan run routinely produces many
   pending_questions: Question[]; // present (non-empty) iff the plan parked on a genuine gate
   workspace_path: string;
 }
@@ -55,12 +56,15 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
   const record = readRunRecord(run_id);
 
   let epic: CompletedEpic | null = null;
+  let epics: CompletedEpic[] = [];
   if (status === "complete") {
-    epic = (getOutput({ run_id }) as { epic: CompletedEpic }).epic;
+    const out = getOutput({ run_id }) as { epic: CompletedEpic | null; epics: CompletedEpic[] };
+    epic = out.epic;
+    epics = out.epics ?? (out.epic ? [out.epic] : []);
   }
   const pending = record.questions.filter((q) => q.status === "pending");
 
-  return { run_id, status, epic, pending_questions: pending, workspace_path: record.workspace_path };
+  return { run_id, status, epic, epics, pending_questions: pending, workspace_path: record.workspace_path };
 }
 
 // --- Multica integration (shell-out to the `multica` CLI) ------------------------------------
@@ -144,6 +148,27 @@ export function fileStoriesToMultica(
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+  return { filed, errors };
+}
+
+// File the decomposed stories of EVERY epic a plan produced back to Multica as sub-issues of the
+// origin ticket. A single headless /plan run routinely produces many epics (the real Votum seed
+// produced 7 epics / 34 stories) -- the one-epic-per-run assumption that filed only the first epic
+// silently dropped the rest. Each story carries an `epic_id` field so the aggregate result stays
+// traceable to its source epic. Best-effort per story (a single failed create never aborts the
+// rest); errors from every epic are aggregated into one report.
+export function fileAllStoriesToMultica(
+  ticketId: string,
+  epics: CompletedEpic[],
+  opts: { project?: string } = {},
+): { filed: Array<FiledStory & { epic_id: string }>; errors: Array<{ story_id: string; epic_id: string; error: string }> } {
+  const filed: Array<FiledStory & { epic_id: string }> = [];
+  const errors: Array<{ story_id: string; epic_id: string; error: string }> = [];
+  for (const epic of epics) {
+    const r = fileStoriesToMultica(ticketId, epic, opts);
+    for (const f of r.filed) filed.push({ ...f, epic_id: epic.epic_id });
+    for (const e of r.errors) errors.push({ ...e, epic_id: epic.epic_id });
   }
   return { filed, errors };
 }

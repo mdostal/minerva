@@ -13,7 +13,8 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call } from "./test-cli.ts";
-import { findCompletedEpic, ensureEpicNotGitIgnored } from "./output-emitter.ts";
+import { findCompletedEpic, findCompletedEpics, ensureEpicNotGitIgnored } from "./output-emitter.ts";
+import { parse as parseYaml } from "yaml";
 
 let minervaHome: string;
 
@@ -257,6 +258,151 @@ test("startRun against a target_repo with a pre-existing epic on dev correctly r
   );
 
   rmSync(targetRepo, { recursive: true, force: true });
+});
+
+// Real regression (2026-07-27): plugin-hive's real headless /plan run for the Votum seed wrote its
+// epics in the FLAT layout -- `.pHive/epics/NN-name.yaml`, one file per epic with an embedded
+// `stories:` list -- not the NESTED `<id>/epic.yaml` + `stories/*.yaml` the detector understood.
+// findCompletedEpic returned null, the run was never marked complete, and its 34 stories were never
+// auto-filed to Multica. These tests pin the FLAT layout (matching the exact on-disk shape of
+// ~/.minerva/runs/8f88cba8.../workspace/.pHive/epics/0N-*.yaml).
+const FLAT_EPIC_1 =
+  "id: domain-model-store\n" +
+  "title: Domain Model & Append-Only Store\n" +
+  "status: planned\n" +
+  "stories:\n" +
+  "  - title: \"Define domain model types\"\n" +
+  "    id: domain-types\n" +
+  "    points: 3\n" +
+  "  - title: \"Implement append-only decision store\"\n" +
+  "    id: append-only-store\n" +
+  "    points: 5\n";
+const FLAT_EPIC_2 =
+  "id: quorum-engine-rules\n" +
+  "title: Quorum & Rule Engine\n" +
+  "stories:\n" +
+  "  - title: \"Majority rule\"\n" +
+  "    id: majority-rule\n" +
+  "  - title: \"Supermajority rule\"\n" +
+  "    id: supermajority-rule\n" +
+  "  - title: \"Quorum floor\"\n" +
+  "    id: quorum-floor\n";
+
+test("findCompletedEpics detects a FLAT epic file (.pHive/epics/NN-name.yaml) with embedded stories", () => {
+  const workspacePath = mkdtempSync(join(tmpdir(), "minerva-flat-single-"));
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  mkdirSync(epicsDir, { recursive: true });
+  writeFileSync(join(epicsDir, "01-domain-model-store.yaml"), FLAT_EPIC_1);
+
+  const epics = findCompletedEpics(workspacePath);
+  assert.equal(epics.length, 1, "expected the single flat epic to be detected");
+  const e = epics[0]!;
+  // epic_id is the file's own `id:` field, not the NN-prefixed file name.
+  assert.equal(e.epic_id, "domain-model-store");
+  assert.equal(e.entry_name, "01-domain-model-store.yaml");
+  assert.equal(e.layout, "flat");
+  assert.equal(e.stories.length, 2, "both embedded stories must be extracted");
+  assert.equal(e.stories[0]!.id, "domain-types");
+  // Each embedded story is re-serialized to standalone YAML so its title is parseable downstream.
+  const parsed0 = parseYaml(e.stories[0]!.content) as { title?: string };
+  assert.equal(parsed0.title, "Define domain model types");
+
+  // Backward-compat singular accessor returns the same first epic.
+  assert.equal(findCompletedEpic(workspacePath)?.epic_id, "domain-model-store");
+
+  rmSync(workspacePath, { recursive: true, force: true });
+});
+
+test("findCompletedEpics returns ALL epics of a MULTI-epic flat plan (the 7-epic/34-story reality)", () => {
+  const workspacePath = mkdtempSync(join(tmpdir(), "minerva-flat-multi-"));
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  mkdirSync(epicsDir, { recursive: true });
+  writeFileSync(join(epicsDir, "01-domain-model-store.yaml"), FLAT_EPIC_1);
+  writeFileSync(join(epicsDir, "02-quorum-engine-rules.yaml"), FLAT_EPIC_2);
+
+  const epics = findCompletedEpics(workspacePath);
+  assert.equal(epics.length, 2, "a multi-epic plan must yield every epic, not just the first");
+  // Numeric-prefixed files sort deterministically: epic 01 first, epic 02 second.
+  assert.deepEqual(epics.map((e) => e.epic_id), ["domain-model-store", "quorum-engine-rules"]);
+  const totalStories = epics.reduce((n, e) => n + e.stories.length, 0);
+  assert.equal(totalStories, 5, "all 2 + 3 embedded stories across both epics must be present");
+
+  // findCompletedEpic (singular) still returns just the first, for legacy callers.
+  assert.equal(findCompletedEpic(workspacePath)?.epic_id, "domain-model-store");
+
+  rmSync(workspacePath, { recursive: true, force: true });
+});
+
+test("findCompletedEpics mixes FLAT and NESTED epics in one workspace and returns all of them", () => {
+  const workspacePath = mkdtempSync(join(tmpdir(), "minerva-flat-nested-mix-"));
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  mkdirSync(epicsDir, { recursive: true });
+  writeFileSync(join(epicsDir, "01-domain-model-store.yaml"), FLAT_EPIC_1); // flat
+  const nestedDir = join(epicsDir, "legacy-nested");
+  mkdirSync(join(nestedDir, "stories"), { recursive: true });
+  writeFileSync(join(nestedDir, "epic.yaml"), "name: legacy-nested\n");
+  writeFileSync(join(nestedDir, "stories", "s1.yaml"), "id: s1\ntitle: Legacy story\n");
+
+  const epics = findCompletedEpics(workspacePath);
+  assert.equal(epics.length, 2);
+  const byId = Object.fromEntries(epics.map((e) => [e.epic_id, e]));
+  assert.equal(byId["domain-model-store"]!.layout, "flat");
+  assert.equal(byId["legacy-nested"]!.layout, "nested");
+
+  rmSync(workspacePath, { recursive: true, force: true });
+});
+
+test("findCompletedEpics excludes a FLAT epic whose file name is in baselineIds (inherited, not this run's)", () => {
+  const workspacePath = mkdtempSync(join(tmpdir(), "minerva-flat-baseline-"));
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  mkdirSync(epicsDir, { recursive: true });
+  writeFileSync(join(epicsDir, "00-pre-existing.yaml"), "id: pre-existing\nstories:\n  - id: x\n    title: X\n");
+  writeFileSync(join(epicsDir, "01-domain-model-store.yaml"), FLAT_EPIC_1);
+
+  // baseline keys off the readdirSync entry name (the NN-name.yaml file), exactly as run-manager
+  // snapshots it -- so the pre-existing flat epic is skipped and only the new one is returned.
+  const epics = findCompletedEpics(workspacePath, new Set(["00-pre-existing.yaml"]));
+  assert.equal(epics.length, 1);
+  assert.equal(epics[0]!.epic_id, "domain-model-store");
+
+  rmSync(workspacePath, { recursive: true, force: true });
+});
+
+test("findCompletedEpics ignores a stray non-epic .yaml under .pHive/epics/ (never false-completes)", () => {
+  const workspacePath = mkdtempSync(join(tmpdir(), "minerva-flat-stray-"));
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  mkdirSync(epicsDir, { recursive: true });
+  writeFileSync(join(epicsDir, "README.yaml"), "just: some\nunrelated: data\n"); // no stories/id/title
+  assert.equal(findCompletedEpics(workspacePath).length, 0);
+  rmSync(workspacePath, { recursive: true, force: true });
+});
+
+test("ensureEpicNotGitIgnored patches .gitignore for a FLAT epic FILE (single-file allowlist, not a dir subtree)", () => {
+  const workspacePath = mkdtempSync(join(tmpdir(), "minerva-flat-gitignore-"));
+  execFileSync("git", ["init", "-q", workspacePath]);
+  writeFileSync(join(workspacePath, ".gitignore"), ".pHive/epics/*\n");
+  execFileSync("git", ["-C", workspacePath, "add", ".gitignore"]);
+  execFileSync("git", [
+    "-C", workspacePath,
+    "-c", "user.email=test@example.com",
+    "-c", "user.name=test",
+    "commit", "-q", "-m", "init",
+  ]);
+
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  mkdirSync(epicsDir, { recursive: true });
+  writeFileSync(join(epicsDir, "01-domain-model-store.yaml"), FLAT_EPIC_1);
+
+  assert.equal(isIgnored(workspacePath, ".pHive/epics/01-domain-model-store.yaml"), true, "sanity: flat epic file must start ignored");
+  ensureEpicNotGitIgnored(workspacePath, "01-domain-model-store.yaml", "flat");
+  assert.equal(isIgnored(workspacePath, ".pHive/epics/01-domain-model-store.yaml"), false, "flat epic file must no longer be ignored after repair");
+
+  const gitignoreContent = readFileSync(join(workspacePath, ".gitignore"), "utf8");
+  assert.match(gitignoreContent, /!\.pHive\/epics\/01-domain-model-store\.yaml/);
+  // Must NOT add a directory-subtree allowlist for a flat file.
+  assert.doesNotMatch(gitignoreContent, /01-domain-model-store\.yaml\/\*\*/);
+
+  rmSync(workspacePath, { recursive: true, force: true });
 });
 
 test("getOutput validation: missing run_id returns VALIDATION_FAILED; unknown run_id returns NOT_FOUND", () => {

@@ -20,7 +20,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { runHeadlessPlan, resolveIdeaFromTicket, fileStoriesToMultica } from "../src/plan-runner.ts";
+import { runHeadlessPlan, resolveIdeaFromTicket, fileAllStoriesToMultica } from "../src/plan-runner.ts";
 import type { PlanDefaultsMode } from "../src/plan-defaults.ts";
 
 interface Args {
@@ -134,16 +134,19 @@ async function main(): Promise<void> {
     ...(args.ticket ? { ticketId: args.ticket } : {}),
   });
 
+  const totalStories = result.epics.reduce((n, e) => n + e.stories.length, 0);
   const report: Record<string, unknown> = {
     run_id: result.run_id,
     status: result.status,
     workspace_path: result.workspace_path,
-    epic_id: result.epic?.epic_id ?? null,
-    story_count: result.epic?.stories.length ?? 0,
+    epic_id: result.epic?.epic_id ?? null, // first epic (backward compat)
+    epic_ids: result.epics.map((e) => e.epic_id), // ALL epics this plan produced
+    epic_count: result.epics.length,
+    story_count: totalStories, // total across all epics
   };
 
   // Parked on a genuine gate with no pre-baked default -> surface for escalation, exit 2.
-  if (result.status !== "complete" || !result.epic) {
+  if (result.status !== "complete" || result.epics.length === 0) {
     report.pending_questions = result.pending_questions.map((q) => ({ id: q.id, text: q.text, channel: q.channel }));
     emit(args, report, `Plan did NOT complete (status: ${result.status}). Parked on ${result.pending_questions.length} gate(s) needing escalation.`);
     process.exit(2);
@@ -156,10 +159,11 @@ async function main(): Promise<void> {
     if (args.push && c.committed) report.push = pushWorkspace(result.workspace_path, result.run_id);
   }
 
-  // File the decomposed stories back to Multica as sub-issues of the origin ticket.
+  // File the decomposed stories of EVERY produced epic back to Multica as sub-issues of the origin
+  // ticket. Multi-epic plans (the norm) file all of their stories, not just the first epic's.
   if (args.fileToMultica) {
     if (!args.ticket) throw new Error("--file-to-multica requires --ticket (the parent to link sub-issues under)");
-    const filed = fileStoriesToMultica(args.ticket, result.epic, args.project ? { project: args.project } : {});
+    const filed = fileAllStoriesToMultica(args.ticket, result.epics, args.project ? { project: args.project } : {});
     report.filed_stories = filed.filed;
     report.file_errors = filed.errors;
   }
@@ -167,7 +171,8 @@ async function main(): Promise<void> {
   emit(
     args,
     report,
-    `Planned '${ideaLabel}' -> epic ${result.epic.epic_id} with ${result.epic.stories.length} stories` +
+    `Planned '${ideaLabel}' -> ${result.epics.length} epic(s) [${result.epics.map((e) => e.epic_id).join(", ")}] ` +
+      `with ${totalStories} stories total` +
       (args.fileToMultica ? ` (filed ${(report.filed_stories as unknown[] | undefined)?.length ?? 0} to Multica)` : ""),
   );
 }

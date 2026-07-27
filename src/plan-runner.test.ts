@@ -84,6 +84,58 @@ test("runHeadlessPlan: parks (status waiting_on_human, epic null) when a gate ha
   assert.equal(result.pending_questions.length, 1);
 });
 
+// Real headless plugin-hive /plan runs write the FLAT layout: one `.pHive/epics/NN-name.yaml` per
+// epic with an embedded `stories:` list, and a single run produces MANY epics. This driver
+// reproduces that exact shape (2 flat epics, 2 + 3 stories) to prove runHeadlessPlan detects flat
+// completion and hands back EVERY epic, not just the first -- the two bugs that blocked automatic
+// filing of the 7-epic/34-story Votum plan.
+class FlatMultiEpicDriver implements Driver {
+  turns = 0;
+  constructor(private readonly gates: number) {}
+  async runTurn(input: DriverInput): Promise<DriverResult> {
+    this.turns++;
+    if (this.turns > this.gates) {
+      const epicsDir = join(input.cwd, ".pHive", "epics");
+      mkdirSync(epicsDir, { recursive: true });
+      writeFileSync(
+        join(epicsDir, "01-domain-model-store.yaml"),
+        "id: domain-model-store\ntitle: Domain Model\nstories:\n" +
+          "  - id: domain-types\n    title: Define domain types\n" +
+          "  - id: append-only-store\n    title: Append-only store\n",
+      );
+      writeFileSync(
+        join(epicsDir, "02-quorum-engine-rules.yaml"),
+        "id: quorum-engine-rules\ntitle: Quorum Rules\nstories:\n" +
+          "  - id: majority-rule\n    title: Majority rule\n" +
+          "  - id: supermajority-rule\n    title: Supermajority rule\n" +
+          "  - id: quorum-floor\n    title: Quorum floor\n",
+      );
+      return { session_id: "sess", raw_result: JSON.stringify({ question: "(none)", suggested_channel: "human", confidence: 0, reason: "done" }) };
+    }
+    return {
+      session_id: "sess",
+      raw_result: JSON.stringify({
+        question: `Pick for gate ${this.turns}`, suggested_channel: "agent", confidence: 0.9,
+        reason: "routine", kind: "single-select", options: ["Recommended: A", "B"], qid: `gate-${this.turns}`,
+      }),
+    };
+  }
+}
+
+test("runHeadlessPlan: FLAT multi-epic plan is detected complete and returns EVERY epic + all stories", async () => {
+  __setDriverForTest(new FlatMultiEpicDriver(1));
+  const result = await runHeadlessPlan({ idea: "a decision engine", mode: "auto" });
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.epics.length, 2, "both flat epics must be returned, not just the first");
+  assert.deepEqual(result.epics.map((e) => e.epic_id), ["domain-model-store", "quorum-engine-rules"]);
+  // Backward-compat singular field is the first epic.
+  assert.equal(result.epic!.epic_id, "domain-model-store");
+  const totalStories = result.epics.reduce((n, e) => n + e.stories.length, 0);
+  assert.equal(totalStories, 5, "every story across both epics is available to file (2 + 3)");
+  assert.equal(result.pending_questions.length, 0);
+});
+
 test("storyToIssueFields: derives title from story YAML, keeps full content as description", () => {
   const f = storyToIssueFields({ id: "s1", content: "id: s1\ntitle: Build the API\n" });
   assert.equal(f.title, "[s1] Build the API");

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
+import type { PlanDefaults } from "./plan-defaults.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
 export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
@@ -72,6 +73,17 @@ export interface RunRecord {
   // fresh_init workspaces (a brand-new scratch repo has no epics at all yet). See
   // output-emitter.ts's findCompletedEpic for how this is consumed.
   baseline_epic_ids: string[];
+  // The original idea brief that started the run. Persisted so the pre-baked-defaults
+  // auto-answer loop (kickoff-engine.ts) can interpolate `{idea}` into a free-text default
+  // answer on any turn, not just at startRun. Optional so run records written before this field
+  // existed still parse.
+  idea?: string;
+  // The effective pre-baked plan-defaults config for this run (prebaked-plan-defaults epic),
+  // resolved once at startRun from built-in + env + per-run layers and frozen for the run's
+  // life, so every subsequent auto-answer turn uses the same config the run started with.
+  // Optional/absent => the auto-answer loop falls back to loadPlanDefaults() (mode: off), i.e.
+  // fully backwards-compatible "park every question" behavior.
+  defaults?: PlanDefaults;
 }
 
 function minervaHome(): string {
@@ -154,7 +166,14 @@ function snapshotEpicIds(workspacePath: string): string[] {
 
 // Workspace + record allocation only -- does NOT drive kickoff+plan. kickoff-engine.ts's
 // startRun composes this with driveStart() to produce the full API-contract startRun method.
-export function allocateRun(idea: string, targetRepo: string | undefined): { run_id: string } {
+// `defaults` (prebaked-plan-defaults epic) is the resolved plan-defaults config to freeze onto
+// the record; optional so existing callers (and the test suite) that don't pass it are
+// unaffected -- an absent defaults means the auto-answer loop stays "off".
+export function allocateRun(
+  idea: string,
+  targetRepo: string | undefined,
+  defaults?: PlanDefaults,
+): { run_id: string } {
   const runId = randomUUID();
   const workspacePath = join(runDir(runId), "workspace");
   let workspaceKind: WorkspaceKind;
@@ -183,6 +202,8 @@ export function allocateRun(idea: string, targetRepo: string | undefined): { run
     questions: [],
     output: null,
     baseline_epic_ids: baselineEpicIds,
+    idea,
+    defaults,
   });
 
   return { run_id: runId };

@@ -1,0 +1,48 @@
+# Minerva pre-baked plan defaults (prebaked-plan-defaults epic) — example config.
+#
+# Point MINERVA_PLAN_DEFAULTS at a copy of this file (YAML or JSON), or pass the same shape as
+# startRun's `params.defaults`, to let a FRESH headless plan run auto-answer the standard
+# kickoff+plan gate questions and drive itself to a finished epic+stories WITHOUT a human sitting
+# on every gate. Every field is optional and overridable per-run; per-run overrides win.
+#
+# Quick switch without a file: set MINERVA_PLAN_DEFAULTS_MODE=agent (or auto) in the environment.
+
+# off   — never auto-answer; park every question (default; fully backwards-compatible).
+# agent — auto-answer questions the classifier routed to the `agent` channel (routine / mechanical
+#         / pre-decided) plus any explicit `answers` match; still park genuinely strategic
+#         `human`-channel gates for a human (AD-5 preserved). Recommended headless posture.
+# auto  — fully unattended: auto-answer EVERY question for which a default resolves, including
+#         human-channel ones. Only questions with no resolvable default at all still park.
+mode: agent
+
+# Answer sign-off / approval / "ready to proceed?" gates affirmatively.
+skip_sign_off: true
+
+# When set, answer tech-stack / language / framework questions with this string.
+tech_stack: TypeScript / Node.js
+
+# How to pick from a single/multi-select option list: "recommended" (prefer a recommended/
+# affirmative-looking option, else the first) or "first".
+select_strategy: recommended
+
+# Default answer for free-text questions (and prose questions with no structured kind). `{idea}`
+# is interpolated with the run's idea brief. Set to null to make free-text questions park instead.
+free_text_default: >-
+  Use your best judgment consistent with the idea brief and proceed with sensible, conventional
+  defaults. Do not block on this — pick the most reasonable option and continue.
+
+# Operator-pre-decided answers to specific gate questions. Matched by the envelope `qid` (exact)
+# or a case-insensitive substring of the question text; first match wins, and these override the
+# generic rules above regardless of channel/mode. This is the "I already decided this" override.
+answers:
+  - match: "metrics"
+    answer: "Yes, enable metrics."
+  - match: "database"
+    answer: "Postgres"
+
+# Hard ceiling on auto-answers per drive sequence before the run parks (a loop guardrail).
+max_auto_answers: 40
+
+# Optional text appended to the INITIAL kickoff drive prompt (e.g. an explicit skip-sign-off
+# instruction). null = unchanged prompt.
+drive_prompt_suffix: null

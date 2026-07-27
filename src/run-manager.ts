@@ -64,6 +64,14 @@ export interface RunRecord {
   // Opaque from run-manager's perspective -- output-emitter.ts owns the actual shape
   // (CompletedEpic: plugin-hive's own epic.yaml + story YAML content, passed through as-is).
   output: unknown | null;
+  // Bug fix (2026-07-26, real regression): epic ids that already existed under
+  // .pHive/epics/ at workspace-allocation time, BEFORE any kickoff turn ran. A worktree
+  // workspace forks off the target repo's `dev` branch, which can (and, on a mature repo, will)
+  // already have prior, already-shipped epics committed on it -- output-emitter.ts's completion
+  // detection must never mistake one of THOSE for this run's own output. Always [] for
+  // fresh_init workspaces (a brand-new scratch repo has no epics at all yet). See
+  // output-emitter.ts's findCompletedEpic for how this is consumed.
+  baseline_epic_ids: string[];
 }
 
 function minervaHome(): string {
@@ -132,6 +140,18 @@ function allocateFreshInitWorkspace(runId: string, workspacePath: string): void 
   );
 }
 
+// Bug fix (2026-07-26, real regression): reads whatever epic ids already exist under
+// .pHive/epics/ in a freshly-allocated workspace, BEFORE any kickoff turn has run. For a
+// worktree workspace this reflects exactly the target repo's `dev` branch state (git worktree
+// add checks out dev's tracked tree regardless of .gitignore, which only affects untracked
+// files) -- for a fresh_init workspace it's always []. See baseline_epic_ids's own doc comment
+// on RunRecord for why this snapshot exists.
+function snapshotEpicIds(workspacePath: string): string[] {
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  if (!existsSync(epicsDir)) return [];
+  return readdirSync(epicsDir);
+}
+
 // Workspace + record allocation only -- does NOT drive kickoff+plan. kickoff-engine.ts's
 // startRun composes this with driveStart() to produce the full API-contract startRun method.
 export function allocateRun(idea: string, targetRepo: string | undefined): { run_id: string } {
@@ -150,6 +170,8 @@ export function allocateRun(idea: string, targetRepo: string | undefined): { run
   const statePath = join(workspacePath, ".pHive");
   mkdirSync(statePath, { recursive: true });
 
+  const baselineEpicIds = snapshotEpicIds(workspacePath);
+
   writeRunRecord({
     run_id: runId,
     workspace_path: workspacePath,
@@ -160,6 +182,7 @@ export function allocateRun(idea: string, targetRepo: string | undefined): { run
     session_id: null,
     questions: [],
     output: null,
+    baseline_epic_ids: baselineEpicIds,
   });
 
   return { run_id: runId };

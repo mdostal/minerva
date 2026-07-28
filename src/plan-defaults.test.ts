@@ -142,6 +142,52 @@ test("resolve: agent mode parks a human-channel question with no explicit answer
   assert.equal(got, null);
 });
 
+test("resolve: auto mode answers kickoff metrics opt-in with the protocol default off", () => {
+  const got = resolveDefaultAnswer(
+    q({ channel: "human", qid: "metrics-opt-in", text: "Enable metrics tracking?", kind: "single-select", options: ["yes", "no"] }),
+    AUTO,
+    "idea",
+  );
+  assert.equal(got, "no");
+});
+
+test("resolve: auto mode derives kickoff project type from the idea before generic option picking", () => {
+  const got = resolveDefaultAnswer(
+    q({
+      channel: "human",
+      qid: "project_type",
+      text: "What type of project is this?",
+      kind: "single-select",
+      options: ["framework", "consumer-app", "service"],
+    }),
+    AUTO,
+    "Plan a tiny internal CLI service that prints task status from a local JSON file",
+  );
+  assert.equal(got, "service");
+});
+
+test("resolve: auto mode derives kickoff UI and ship target defaults from the idea", () => {
+  const hasUi = resolveDefaultAnswer(
+    q({ channel: "agent", qid: "has_ui", text: "Does this project have a UI?", kind: "single-select", options: ["yes", "no"] }),
+    AUTO,
+    "Plan a headless backend service",
+  );
+  assert.equal(hasUi, "no");
+
+  const shipKind = resolveDefaultAnswer(
+    q({
+      channel: "human",
+      qid: "ship_kind",
+      text: "What does shipping mean for this project?",
+      kind: "single-select",
+      options: ["app-store", "vercel", "github-release", "npm", "custom"],
+    }),
+    AUTO,
+    "Plan a tiny internal CLI service",
+  );
+  assert.equal(shipKind, "github-release");
+});
+
 test("resolve: auto mode answers a human-channel free-text question via the free-text default", () => {
   const got = resolveDefaultAnswer(q({ channel: "human", text: "What is the core strategy?" }), AUTO, "a todo app");
   assert.ok(typeof got === "string" && got.length > 0);

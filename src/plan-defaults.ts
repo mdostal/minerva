@@ -297,6 +297,42 @@ function pickOption(options: string[], strategy: SelectStrategy): string {
   return recommended ?? options[0]!;
 }
 
+function chooseProjectType(options: string[], idea: string): string | null {
+  const lower = idea.toLowerCase();
+  const has = (option: string) => options.includes(option);
+  if (has("consumer-app") && /\b(consumer|frontend|front-end|ui|web app|mobile app|dashboard|site)\b/.test(lower)) {
+    return "consumer-app";
+  }
+  if (has("framework") && /\b(framework|library|plugin|sdk|package)\b/.test(lower)) {
+    return "framework";
+  }
+  if (has("service") && /\b(service|api|backend|back-end|cli|daemon|worker|router|engine)\b/.test(lower)) {
+    return "service";
+  }
+  return null;
+}
+
+function chooseShipKind(options: string[], idea: string): string | null {
+  const lower = idea.toLowerCase();
+  if (options.includes("vercel") && /\b(vercel|web app|site|frontend|front-end|dashboard)\b/.test(lower)) {
+    return "vercel";
+  }
+  if (options.includes("npm") && /\b(npm|package|library|sdk)\b/.test(lower)) {
+    return "npm";
+  }
+  if (options.includes("github-release") && /\b(cli|service|daemon|tool|binary|release)\b/.test(lower)) {
+    return "github-release";
+  }
+  return null;
+}
+
+function chooseHasUi(idea: string): string {
+  const lower = idea.toLowerCase();
+  if (/\b(no ui|headless|cli|service|api|backend|back-end|daemon|worker)\b/.test(lower)) return "no";
+  if (/\b(ui|frontend|front-end|web app|mobile app|dashboard|site)\b/.test(lower)) return "yes";
+  return "no";
+}
+
 // The core decision. Returns the answer to auto-supply for this question, or `null` to mean
 // "no pre-baked default applies -- leave it parked for a human" (which, outside `auto` mode, is
 // the correct, AD-5-preserving outcome for a genuine strategic gate). Pure and deterministic:
@@ -323,18 +359,39 @@ export function resolveDefaultAnswer(
   //    gate -- park it (AD-5). "auto" mode intentionally continues past this to answer everything.
   if (d.mode === "agent" && q.channel === "human") return null;
 
-  // 3. Sign-off / approval gate -> affirm.
+  // 3. Standard kickoff envelope qids have protocol-defined safe defaults. Handle these before
+  //    generic option picking so "default to off" gates don't accidentally take an affirmative
+  //    option just because "yes" looks approving.
+  if (
+    q.qid === "metrics_enabled" ||
+    q.qid === "enable_metrics" ||
+    (q.qid !== undefined && /\bmetrics?\b/.test(q.qid.replace(/[_-]/g, " "))) ||
+    /enable metrics tracking/i.test(text)
+  ) {
+    return "no";
+  }
+  if (q.qid === "has_ui") return chooseHasUi(idea);
+  if (q.qid === "project_type" && q.options) {
+    const chosen = chooseProjectType(q.options, idea);
+    if (chosen) return chosen;
+  }
+  if (q.qid === "ship_kind" && q.options) {
+    const chosen = chooseShipKind(q.options, idea);
+    if (chosen) return chosen;
+  }
+
+  // 4. Sign-off / approval gate -> affirm.
   if (d.skip_sign_off && isSignOffQuestion(text)) {
     const opt = pickApprovingOption(q.options);
     return opt ?? "Approved — proceed.";
   }
 
-  // 4. Tech-stack / language / framework question -> the pre-decided stack, when configured.
+  // 5. Tech-stack / language / framework question -> the pre-decided stack, when configured.
   if (d.tech_stack && isTechStackQuestion(text)) {
     return d.tech_stack;
   }
 
-  // 5. Structured selects -> pick per strategy.
+  // 6. Structured selects -> pick per strategy.
   if (q.kind === "single-select" && q.options && q.options.length > 0) {
     return pickOption(q.options, d.select_strategy);
   }
@@ -344,12 +401,12 @@ export function resolveDefaultAnswer(
     return [pickOption(q.options, d.select_strategy)];
   }
 
-  // 6. Free-text (and prose questions with no `kind`) -> the configured generic default.
+  // 7. Free-text (and prose questions with no `kind`) -> the configured generic default.
   if (d.free_text_default) {
     return d.free_text_default.replace(/\{idea\}/g, idea);
   }
 
-  // 7. Nothing applies -> park for a human.
+  // 8. Nothing applies -> park for a human.
   return null;
 }
 

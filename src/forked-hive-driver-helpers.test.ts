@@ -11,7 +11,13 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
-import { encodeEnvelopePointer, decodeEnvelopePointer, writeAnswerOntoEnvelope, NO_PENDING_SENTINEL } from "./driver.ts";
+import {
+  encodeEnvelopePointer,
+  decodeEnvelopePointer,
+  writeAnswerOntoEnvelope,
+  classifyKnownEnvelopeQuestion,
+  NO_PENDING_SENTINEL,
+} from "./driver.ts";
 
 // --- Pointer encode/decode ------------------------------------------------------------------
 // ForkedHiveDriver is confirmed stateless (the epic's own spike) -- session_id is never used
@@ -36,6 +42,26 @@ test("decodeEnvelopePointer returns null for an unrecognized/malformed session_i
   assert.equal(decodeEnvelopePointer("some-random-uuid-4a5b6c"), null);
   assert.equal(decodeEnvelopePointer(""), null);
   assert.equal(decodeEnvelopePointer("forked-hive-driver:not valid json{{{"), null);
+});
+
+// --- Known envelope question classification -------------------------------------------------
+// Standard kickoff envelope qids do not need a live model classifier turn. Keeping these
+// deterministic avoids burning a second claude call just to route a protocol-known gate, and
+// removes a live stall observed on `project_type` during the MINERVA_DRIVER=forked service smoke.
+
+test("classifyKnownEnvelopeQuestion routes kickoff metrics variants to human", () => {
+  const classification = classifyKnownEnvelopeQuestion("metrics-opt-in", "Enable metrics tracking?");
+  assert.equal(classification?.suggested_channel, "human");
+  assert.ok((classification?.confidence ?? 0) >= 0.9);
+});
+
+test("classifyKnownEnvelopeQuestion routes kickoff project_type and has_ui deterministically", () => {
+  assert.equal(classifyKnownEnvelopeQuestion("project_type", "What type of project is this?")?.suggested_channel, "human");
+  assert.equal(classifyKnownEnvelopeQuestion("has_ui", "Does this project have a UI?")?.suggested_channel, "agent");
+});
+
+test("classifyKnownEnvelopeQuestion returns null for unknown qids so the live classifier remains the fallback", () => {
+  assert.equal(classifyKnownEnvelopeQuestion("unknown_gate", "What should happen next?"), null);
 });
 
 // --- writeAnswerOntoEnvelope ------------------------------------------------------------------

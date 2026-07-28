@@ -382,9 +382,14 @@ const EXPLICIT_STOP_INSTRUCTION =
   "resolves to the correct directory as long as your working directory is left unchanged; " +
   "passing base_dir yourself (e.g. base_dir=\".pHive\") is interpreted as the exact questions " +
   "directory itself, not a parent to search under, and will silently write the envelope to the " +
-  "wrong path. The MOMENT an envelope is written with status: pending, your response MUST end " +
-  "immediately. Do not answer the question yourself, do not continue to the next phase or " +
-  "round, do not simulate what an orchestrator would do. Print the envelope path and STOP.";
+  "wrong path. If ask_or_emit()/askOrEmit() returns resolved: true, you MUST immediately apply " +
+  "those returned answers to the exact durable state files named by this skill's protocol " +
+  "before asking or emitting any later phase; for kickoff this includes writing metrics.enabled " +
+  "to the root hive.config.yaml and project_type/has_ui/ship_target to .pHive/project-profile.yaml. " +
+  "Do not re-ask a phase whose resolved answer you just consumed. The MOMENT an envelope is " +
+  "written with status: pending, your response MUST end immediately. Do not answer the question " +
+  "yourself, do not continue to the next phase or round, do not simulate what an orchestrator " +
+  "would do. Print the envelope path and STOP.";
 
 interface EnvelopePointer {
   envelopePath: string;
@@ -417,6 +422,52 @@ export function decodeEnvelopePointer(sessionId: string): EnvelopePointer | null
   } catch {
     return null;
   }
+}
+
+interface QuestionClassification {
+  suggested_channel: "agent" | "human";
+  confidence: number;
+  reason: string;
+}
+
+export function classifyKnownEnvelopeQuestion(qid: string, text: string): QuestionClassification | null {
+  const normalizedQid = qid.replace(/[_-]/g, " ").toLowerCase();
+  if (/\bmetrics?\b/.test(normalizedQid) || /enable metrics tracking/i.test(text)) {
+    return {
+      suggested_channel: "human",
+      confidence: 0.95,
+      reason: "Metrics opt-in is a strategic configuration choice with downstream telemetry and optimization effects.",
+    };
+  }
+  if (normalizedQid === "project type") {
+    return {
+      suggested_channel: "human",
+      confidence: 0.95,
+      reason: "Project classification is a scope decision the operator should make or pre-decide explicitly.",
+    };
+  }
+  if (normalizedQid === "ship kind" || normalizedQid === "custom command") {
+    return {
+      suggested_channel: "human",
+      confidence: 0.95,
+      reason: "Shipping target choices affect release behavior and should come from operator intent.",
+    };
+  }
+  if (normalizedQid === "ship notes") {
+    return {
+      suggested_channel: "agent",
+      confidence: 0.9,
+      reason: "Optional shipping notes can be safely omitted or defaulted by the driving agent.",
+    };
+  }
+  if (normalizedQid === "has ui") {
+    return {
+      suggested_channel: "agent",
+      confidence: 0.95,
+      reason: "UI presence is a routine factual classification from the idea or repository shape.",
+    };
+  }
+  return null;
 }
 
 // The ONLY write path this driver has. Writes a single question's `answer`, and flips
@@ -529,7 +580,7 @@ export class ForkedHiveDriver implements Driver {
       };
     }
 
-    const classification = await this.classify(cwd, next.text);
+    const classification = classifyKnownEnvelopeQuestion(next.qid, next.text) ?? await this.classify(cwd, next.text);
     const pointer: EnvelopePointer = { envelopePath: pending.path, qid: next.qid, skillPrompt };
     const rawResult = JSON.stringify({
       question: next.text,

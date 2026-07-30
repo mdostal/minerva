@@ -84,6 +84,18 @@ export interface RunRecord {
   // Optional/absent => the auto-answer loop falls back to loadPlanDefaults() (mode: off), i.e.
   // fully backwards-compatible "park every question" behavior.
   defaults?: PlanDefaults;
+  // The resolved local target repo this run's worktree was cut from (PAN-6745). Present only for
+  // worktree workspaces (absent for fresh_init). Persisted for logging + so the completion
+  // commit+push step (output-emitter.commitAndPushPlan) has the repo on hand. Optional so records
+  // written before this field existed still parse.
+  target_repo?: string;
+  // How target_repo was resolved (repo-resolution.ts): "explicit" | "god" | "incubator". Absent
+  // for fresh_init (resolution returned "none"). Diagnostic only.
+  repo_source?: string;
+  // Result of the post-planning auto-commit+push of the plan into target_repo (PAN-6745), written
+  // once when the run transitions to complete. Absent until then, and for fresh_init runs where
+  // there is nothing to push. Opaque here; output-emitter owns the shape (PlanPushResult).
+  plan_push?: unknown;
 }
 
 function minervaHome(): string {
@@ -173,6 +185,7 @@ export function allocateRun(
   idea: string,
   targetRepo: string | undefined,
   defaults?: PlanDefaults,
+  repoSource?: string,
 ): { run_id: string } {
   const runId = randomUUID();
   const workspacePath = join(runDir(runId), "workspace");
@@ -204,6 +217,9 @@ export function allocateRun(
     baseline_epic_ids: baselineEpicIds,
     idea,
     defaults,
+    // Persist the resolved repo only for worktree workspaces -- a fresh_init scratch has no real
+    // repo to record, and its absence is what output-emitter's push step keys off (PAN-6745).
+    ...(workspaceKind === "worktree" && targetRepo ? { target_repo: targetRepo, repo_source: repoSource } : {}),
   });
 
   return { run_id: runId };

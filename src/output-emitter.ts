@@ -27,7 +27,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { MinervaError } from "./errors.ts";
-import { readRunRecord, updateRunRecord } from "./run-manager.ts";
+import { readRunRecord, updateRunRecord, type RunRecord } from "./run-manager.ts";
 import { recordCleanup } from "./cleanup-ledger.ts";
 
 export interface CompletedEpic {
@@ -223,6 +223,98 @@ interface CompletionOutput {
   epics: CompletedEpic[];
 }
 
+// Result of the post-planning auto-commit+push (PAN-6745). Persisted opaquely on the RunRecord
+// (`plan_push`) and returned so callers/tests can assert the plan actually landed in the repo.
+export interface PlanPushResult {
+  committed: boolean;
+  pushed: boolean;
+  branch: string | null;
+  reason: string;
+}
+
+// Run a git command in `cwd`, capturing exit code + streams instead of throwing. Used by the
+// commit+push path so a git failure can be reported (never blocks completion detection).
+function gitCapture(cwd: string, args: string[]): { code: number; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return { code: 0, stdout, stderr: "" };
+  } catch (e: unknown) {
+    const err = e as { status?: number; stdout?: unknown; stderr?: unknown; message?: string };
+    return {
+      code: typeof err?.status === "number" ? err.status : 1,
+      stdout: String(err?.stdout ?? ""),
+      stderr: String(err?.stderr ?? err?.message ?? ""),
+    };
+  }
+}
+
+function currentBranch(cwd: string): string | null {
+  const r = gitCapture(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const name = r.stdout.trim();
+  return r.code === 0 && name.length > 0 ? name : null;
+}
+
+// Auto-commit + push the finished plan into the run's target repo (PAN-6745 autonomy unlock).
+// This is the automation of the previously-MANUAL step ("commit the plan to a real repo by hand")
+// that was the single thing standing between a produced plan and a build agent being able to check
+// it out. Called exactly once per run, from checkAndMarkComplete, at the moment the run is marked
+// complete.
+//
+// Behavior + guardrails:
+//   - ONLY for worktree workspaces. A fresh_init scratch workspace is a throwaway local git-init
+//     with no `origin` remote -- there is nothing to push to, so this no-ops cleanly. (Post-PAN-6745
+//     resolution, greenfield seeds resolve to a real incubator repo and take the worktree path, so
+//     they DO get pushed; only fully-unconfigured deployments still hit fresh_init.)
+//   - Stages each completed epic's on-disk entry (a dir subtree for nested, a single file for flat)
+//     plus any .gitignore repair ensureEpicNotGitIgnored just wrote.
+//   - Idempotent: if nothing is staged (e.g. plugin-hive's own /plan already committed the plan, or
+//     this ran before), it no-ops without an empty commit.
+//   - Commits with a fixed inline identity so it never depends on the run host's global git config.
+//   - Pushes the run-scoped branch (run/<run_id>, the branch the worktree path already cut off
+//     `dev`) to `origin`. NEVER force-pushes.
+//   - Never throws: any git failure is captured and reported in the result, so a push problem can
+//     never wedge completion detection or the run's terminal transition.
+export function commitAndPushPlan(
+  record: Pick<RunRecord, "run_id" | "workspace_path" | "workspace_kind">,
+  epics: CompletedEpic[],
+): PlanPushResult {
+  if (record.workspace_kind !== "worktree") {
+    return { committed: false, pushed: false, branch: null, reason: "fresh_init workspace has no remote to push to -- skipped" };
+  }
+  const cwd = record.workspace_path;
+
+  for (const epic of epics) {
+    gitCapture(cwd, ["add", "--", join(".pHive", "epics", epic.entry_name)]);
+  }
+  gitCapture(cwd, ["add", "--", ".gitignore"]); // best-effort; harmless if unchanged/absent
+
+  // `git diff --cached --quiet` exits 0 when nothing is staged -> idempotent no-op (no empty commit).
+  if (gitCapture(cwd, ["diff", "--cached", "--quiet"]).code === 0) {
+    return { committed: false, pushed: false, branch: currentBranch(cwd), reason: "nothing to commit -- plan already committed" };
+  }
+
+  const msg = `plan(${record.run_id}): commit planned work so build agents can execute`;
+  const committed = gitCapture(cwd, [
+    "-c", "user.email=minerva@dostal.dev",
+    "-c", "user.name=minerva",
+    "commit", "-q", "-m", msg,
+  ]);
+  if (committed.code !== 0) {
+    return { committed: false, pushed: false, branch: currentBranch(cwd), reason: `commit failed: ${committed.stderr.trim()}` };
+  }
+
+  const branch = currentBranch(cwd);
+  if (!branch) {
+    return { committed: true, pushed: false, branch: null, reason: "committed, but could not resolve a branch to push" };
+  }
+  // Explicit refspec (HEAD:refs/heads/<branch>), plain push -- no --force, ever.
+  const pushed = gitCapture(cwd, ["push", "origin", `HEAD:refs/heads/${branch}`]);
+  if (pushed.code !== 0) {
+    return { committed: true, pushed: false, branch, reason: `committed, push failed: ${pushed.stderr.trim()}` };
+  }
+  return { committed: true, pushed: true, branch, reason: `plan committed + pushed to origin/${branch}` };
+}
+
 // Called by kickoff-engine.ts after every drive/resume call, before appending a new pending
 // question. Returns true (and marks the run complete) if plugin-hive's own skill has written epic
 // artifact(s) into the workspace since the run started. Files ALL of the run's own epics into the
@@ -236,8 +328,17 @@ export function checkAndMarkComplete(runId: string): boolean {
   for (const epic of epics) {
     ensureEpicNotGitIgnored(record.workspace_path, epic.entry_name, epic.layout);
   }
+  // Auto-commit + push the plan into the target repo so downstream build agents can check it out
+  // (PAN-6745). Never throws -- a git failure is captured on the result and must not block the
+  // run's transition to complete.
+  let planPush: PlanPushResult;
+  try {
+    planPush = commitAndPushPlan(record, epics);
+  } catch (e) {
+    planPush = { committed: false, pushed: false, branch: null, reason: `commit/push errored: ${e instanceof Error ? e.message : String(e)}` };
+  }
   const output: CompletionOutput = { epic: epics[0]!, epics }; // length checked non-empty above
-  updateRunRecord(runId, { status: "complete", output });
+  updateRunRecord(runId, { status: "complete", output, plan_push: planPush });
   // AD-4: exactly one ledger record + one cleanup_needed event per run, at the moment it
   // transitions to a terminal state. This branch only runs once per run (guarded by the
   // status === "complete" early return above), so this call is not repeated on re-checks.

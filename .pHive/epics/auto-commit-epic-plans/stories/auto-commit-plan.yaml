@@ -1,0 +1,123 @@
+id: auto-commit-plan
+epic: auto-commit-epic-plans
+title: Auto-commit epic plan after completion detection
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [seed-repo-resolution]
+
+description: |
+  Add commitPlan function to auto-commit .pHive/epics/<id>/ when checkAndMarkComplete
+  detects planning finished. This eliminates the manual commit step that currently
+  blocks build agents from reading the plan.
+
+acceptance_criteria:
+  - "Given epic planning completes, when checkAndMarkComplete runs, then .pHive/epics/<id>/ is committed"
+  - "Given epic dir is already committed, when checkAndMarkComplete re-runs, then no duplicate commit"
+  - "Given epic dir has uncommitted changes, when commitPlan runs, then commit message follows conventional format"
+  - "Given commit succeeds, when checkAndMarkComplete returns, then run status is 'complete'"
+  - "Given .gitignore blanket-ignores .pHive/epics/*, when commitPlan runs, then epic dir is allowlisted"
+
+steps:
+  - id: research
+    description: Review checkAndMarkComplete flow and git status checking patterns
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for commitPlan (idempotency, message format, gitignore update)
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add commitPlan function and integrate into checkAndMarkComplete
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review for idempotency and error handling
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/a56ec741-248f-4a90-b467-c3d43d1623ba/workspace
+  tech_stack:
+    language: typescript
+    runtime: node
+  key_files:
+    - path: src/output-emitter.ts
+      purpose: Contains checkAndMarkComplete where commitPlan will be called
+    - path: src/run-manager.ts
+      purpose: Provides RunRecord type and git automation patterns
+
+files_to_modify:
+  - file: src/output-emitter.ts
+    change: Add commitPlan function and call from checkAndMarkComplete
+  - file: .gitignore
+    change: Add per-epic allowlist pattern (written by commitPlan)
+
+code_examples:
+  - title: Current checkAndMarkComplete
+    file: src/output-emitter.ts
+    snippet: |
+      export function checkAndMarkComplete(runId: string): boolean {
+        const record = readRunRecord(runId);
+        if (record.status === "complete") return true;
+        const found = findCompletedEpic(record.workspace_path);
+        if (!found) return false;
+        updateRunRecord(runId, { status: "complete", output: found });
+        recordCleanup(runId, "complete");
+        return true;
+      }
+
+  - title: Git automation pattern from run-manager
+    file: src/run-manager.ts
+    snippet: |
+      execFileSync(
+        "git",
+        ["-C", targetRepo, "worktree", "add", "-b", `run/${runId}`, workspacePath, "dev"],
+        { stdio: "pipe" },
+      );
+
+design_decisions:
+  - decision: Call commitPlan between findCompletedEpic and updateRunRecord
+    rationale: Epic exists on disk but run not yet marked complete; safe failure point
+  - decision: Use conventional commits format with epic metadata
+    rationale: Matches project discipline; provides traceability
+  - decision: Update .gitignore to allowlist epic dir
+    rationale: Default .pHive/epics/* ignore would prevent commit from being tracked
+  - decision: Make commit non-throwing if already committed
+    rationale: Idempotency for re-runs; already-committed is success, not error
+
+risks:
+  - severity: medium
+    description: Git commit fails mid-checkAndMarkComplete
+    mitigation: Commit before updateRunRecord so failures don't leave inconsistent state
+  - severity: low
+    description: .gitignore update races with concurrent runs
+    mitigation: Use append-if-absent pattern; duplicate entries are benign
+
+references:
+  - path: src/output-emitter.ts
+    relevant_excerpt: |
+      // Real finding: `claude --bg` auto-creates worktrees under
+      // .claude/worktrees/ — search both locations for driver-agnostic detection
+  - path: src/run-manager.ts
+    relevant_excerpt: |
+      // Read-modify-write patch helper. Every mutation goes through here so state
+      // always round-trips through disk (statelessness principle).
+
+metric:
+  applies: true
+  name: plan.auto_commit_success_rate
+  direction: up
+  unit: ratio
+  baseline: 0.0
+  target: 1.0
+  window: next-10-runs
+  source:
+    kind: events
+    ref: .pHive/metrics/events/plan-commit-*.jsonl
+  verify_at: integrate
+  owner: developer
+  justification: Measures if commitPlan succeeds without manual intervention

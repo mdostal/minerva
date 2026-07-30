@@ -5,3 +5,8 @@ node_modules/
 .env
 *.env
 !*.example.env
+
+# Epic allowlist entries
+.pHive/epics/*
+!.pHive/epics/auto-commit-epic-plans/
+!.pHive/epics/auto-commit-epic-plans/**

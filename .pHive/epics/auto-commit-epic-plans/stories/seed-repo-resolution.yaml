@@ -1,0 +1,87 @@
+id: seed-repo-resolution
+epic: auto-commit-epic-plans
+title: Add target repo resolution for greenfield seeds
+status: pending
+complexity: low
+methodology: tdd
+
+description: |
+  Modify allocateRun to resolve a target repository for greenfield seeds (when target_repo
+  is absent) using a designated MINERVA_SEED_REPO environment variable. This ensures all
+  seed plans land in a real repo instead of throwaway fresh_init workspaces.
+
+acceptance_criteria:
+  - "Given target_repo is absent, when allocateRun is called, then it uses MINERVA_SEED_REPO"
+  - "Given MINERVA_SEED_REPO is unset, when allocateRun is called, then it defaults to ~/repos/consus-seeds"
+  - "Given the seed repo doesn't exist, when allocateRun is called, then it throws MinervaError with setup instructions"
+  - "Given MINERVA_SEED_REPO exists, when allocateRun is called, then it creates a worktree from it"
+
+steps:
+  - id: research
+    description: Review allocateRun's current worktree/fresh_init branching logic
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for seed repo resolution (absent target_repo → uses MINERVA_SEED_REPO)
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add seed repo resolution logic to allocateRun
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation for error handling and defaults
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/a56ec741-248f-4a90-b467-c3d43d1623ba/workspace
+  tech_stack:
+    language: typescript
+    runtime: node
+  key_files:
+    - path: src/run-manager.ts
+      purpose: Contains allocateRun function that needs modification
+
+files_to_modify:
+  - file: src/run-manager.ts
+    change: Add seed repo resolution before worktree/fresh_init branch
+
+code_examples:
+  - title: Current allocateRun pattern
+    file: src/run-manager.ts
+    snippet: |
+      export function allocateRun(idea: string, targetRepo: string | undefined): { run_id: string } {
+        const runId = randomUUID();
+        const workspacePath = join(runDir(runId), "workspace");
+        let workspaceKind: WorkspaceKind;
+
+        if (targetRepo) {
+          allocateWorktreeWorkspace(targetRepo, runId, workspacePath);
+          workspaceKind = "worktree";
+        } else {
+          allocateFreshInitWorkspace(runId, workspacePath);
+          workspaceKind = "fresh_init";
+        }
+
+design_decisions:
+  - decision: Use environment variable for seed repo path
+    rationale: Matches existing MINERVA_HOME, MINERVA_DRIVER pattern; operator-configurable
+  - decision: Default to ~/repos/consus-seeds
+    rationale: Conventional location for local repos; single designated seed collection
+  - decision: Fail-fast if seed repo doesn't exist
+    rationale: Simpler than auto-create (no GH API needed); one-time setup is acceptable
+
+risks:
+  - severity: low
+    description: Operator forgets to clone seed repo on first use
+    mitigation: Clear error message with exact git clone command to run
+
+references:
+  - path: docs/architecture.md
+    relevant_excerpt: |
+      AD-3: run-scoped branch cut from dev, not dev itself,
+      so concurrent runs against the same target_repo don't collide.

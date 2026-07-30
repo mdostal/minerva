@@ -1,0 +1,33 @@
+name: auto-commit-epic-plans
+title: Auto-commit epic plans to target repo
+target_codebase: /Users/dostal/.minerva/runs/a56ec741-248f-4a90-b467-c3d43d1623ba/workspace
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [automation, git-workflow]
+  roster: [orchestrator]
+  per_tag_reasoning:
+    automation: Core workflow automation to eliminate manual commit step
+    git-workflow: Modifies git commit and push behavior
+  confidence: 0.95
+  gate_decisions: {}
+
+stories:
+  - id: seed-repo-resolution
+    title: Add target repo resolution for greenfield seeds
+    complexity: low
+    depends_on: []
+  - id: auto-commit-plan
+    title: Auto-commit epic plan after completion detection
+    complexity: medium
+    depends_on: [seed-repo-resolution]
+  - id: auto-push-plan
+    title: Auto-push committed plan to remote
+    complexity: low
+    depends_on: [auto-commit-plan]

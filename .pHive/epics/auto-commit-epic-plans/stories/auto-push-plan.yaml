@@ -1,0 +1,112 @@
+id: auto-push-plan
+epic: auto-commit-epic-plans
+title: Auto-push committed plan to remote
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [auto-commit-plan]
+
+description: |
+  Add auto-push step to commitPlan that pushes the run/<runId> branch to remote
+  after committing the epic plan. This makes the plan immediately available to
+  downstream workers (Auriga, Vulcan) without manual push.
+
+acceptance_criteria:
+  - "Given workspace has a remote configured, when commitPlan finishes, then run/<runId> is pushed to origin"
+  - "Given workspace has no remote, when commitPlan runs, then push is skipped with warning logged"
+  - "Given push fails (auth/network), when commitPlan runs, then error is logged but run still completes"
+  - "Given push succeeds, when downstream worker queries remote, then epic.yaml is fetchable"
+
+steps:
+  - id: research
+    description: Review git remote detection and push patterns in codebase
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for push (remote exists, no remote, push failure cases)
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add push step to commitPlan with error handling
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review non-blocking failure handling for push errors
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/a56ec741-248f-4a90-b467-c3d43d1623ba/workspace
+  tech_stack:
+    language: typescript
+    runtime: node
+  key_files:
+    - path: src/output-emitter.ts
+      purpose: commitPlan function will be extended with push logic
+
+files_to_modify:
+  - file: src/output-emitter.ts
+    change: Add push step after git commit in commitPlan
+
+code_examples:
+  - title: Git remote check pattern
+    file: src/run-manager.ts
+    snippet: |
+      try {
+        execFileSync("git", ["-C", workspacePath, "remote", "get-url", "origin"], { stdio: "pipe" });
+        // Remote exists
+      } catch {
+        // No remote configured
+      }
+
+  - title: Non-blocking git operations
+    file: src/run-manager.ts
+    snippet: |
+      try {
+        execFileSync("git", [...], { stdio: "pipe" });
+      } catch (e) {
+        const stderr = e instanceof Error && "stderr" in e ? String((e as any).stderr) : String(e);
+        throw new MinervaError("VALIDATION_FAILED", `Failed: ${stderr.trim()}`);
+      }
+
+design_decisions:
+  - decision: Make push non-blocking on failure
+    rationale: Auth/network failures shouldn't prevent run completion; plan is already committed locally
+  - decision: Push to origin using run/<runId> branch name
+    rationale: Matches existing worktree branch naming; unique per run
+  - decision: Skip push (log warning) if no remote
+    rationale: Fresh_init seed repos might not have remote on first use; fail-soft
+  - decision: Use --set-upstream on first push
+    rationale: Creates tracking branch so subsequent pushes work
+
+risks:
+  - severity: medium
+    description: Push auth fails on CI/headless environments
+    mitigation: Non-blocking failure; log clear error for operator to fix auth
+  - severity: low
+    description: Concurrent runs push to same branch (shouldn't happen with UUIDs)
+    mitigation: run/<runId> uses UUID; collision impossible in practice
+
+references:
+  - path: docs/architecture.md
+    relevant_excerpt: |
+      AD-3: run-scoped branch cut from dev, not dev itself,
+      so concurrent runs against the same target_repo don't collide.
+
+metric:
+  applies: true
+  name: plan.auto_push_success_rate
+  direction: up
+  unit: ratio
+  baseline: 0.0
+  target: 0.95
+  window: next-10-runs
+  source:
+    kind: events
+    ref: .pHive/metrics/events/plan-push-*.jsonl
+  verify_at: integrate
+  owner: developer
+  justification: Measures push success; target is 0.95 not 1.0 because auth failures are expected in some environments

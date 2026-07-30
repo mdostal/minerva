@@ -9,6 +9,7 @@ import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
+import { resolveTargetRepo } from "./repo-resolution.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
@@ -169,14 +170,23 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   if (typeof idea !== "string" || idea.length === 0) {
     throw new MinervaError("VALIDATION_FAILED", "startRun requires a non-empty string `idea`");
   }
-  const targetRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
+  const explicitRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
+
+  // Resolve a REAL build-target repo for this seed (PAN-6745 autonomy unlock). An explicit
+  // target_repo wins; otherwise god-scoped work maps to that god's repo, and greenfield work
+  // falls back to a configured incubator repo. Only when nothing at all is configured does this
+  // return undefined, preserving the legacy fresh_init behavior. Resolving a real repo is what
+  // lets the finished plan be committed + pushed somewhere a build agent can check it out, instead
+  // of being stranded in a throwaway fresh_init scratch that is never pushed anywhere.
+  const resolved = resolveTargetRepo({ explicit: explicitRepo, idea });
+  const targetRepo = resolved.repo;
 
   // Resolve the effective pre-baked-defaults config once, here, from built-in + env + the
   // per-run `defaults` override, and freeze it onto the run record (prebaked-plan-defaults epic).
   // Every subsequent auto-answer turn uses this same frozen config.
   const defaults = loadPlanDefaults(params.defaults);
 
-  const { run_id: runId } = allocateRun(idea, targetRepo, defaults);
+  const { run_id: runId } = allocateRun(idea, targetRepo, defaults, resolved.source);
   const record = readRunRecord(runId);
 
   const drivePrompt = buildDrivePrompt(idea, defaults);

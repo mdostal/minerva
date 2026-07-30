@@ -13,7 +13,8 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call } from "./test-cli.ts";
-import { findCompletedEpic, findCompletedEpics, ensureEpicNotGitIgnored } from "./output-emitter.ts";
+import { findCompletedEpic, findCompletedEpics, ensureEpicNotGitIgnored, commitAndPushPlan, checkAndMarkComplete } from "./output-emitter.ts";
+import { allocateRun, readRunRecord } from "./run-manager.ts";
 import { parse as parseYaml } from "yaml";
 
 let minervaHome: string;
@@ -413,4 +414,151 @@ test("getOutput validation: missing run_id returns VALIDATION_FAILED; unknown ru
   const unknown = call("getOutput", { run_id: "00000000-0000-0000-0000-000000000000" }, env());
   assert.equal(unknown.status, 1);
   assert.equal(unknown.error.code, "NOT_FOUND");
+});
+
+// ---------------------------------------------------------------------------------------------
+// PAN-6745 (autonomy unlock): auto-commit + push of the finished plan into the target repo.
+// The previously-MANUAL "commit the plan to a real repo by hand" step -- the single seam where
+// headless autonomy broke -- is now automated. These tests drive the git code path DIRECTLY (no
+// real `claude -p` driver): they fabricate the exact on-disk workspace shape a completed /plan run
+// produces, and assert the plan actually lands in a real remote a build agent could check out.
+// ---------------------------------------------------------------------------------------------
+
+const FLAT_EPIC_FOR_PUSH =
+  "id: greenfield-epic\n" +
+  "title: Greenfield Epic\n" +
+  "stories:\n" +
+  "  - title: \"First greenfield story\"\n" +
+  "    id: gf-1\n";
+
+// Build a target repo with a `dev` branch and an `origin` pointing at a local bare repo (stands in
+// for GitHub -- push semantics are identical, no network). Returns both paths for cleanup.
+function makeRepoWithRemote(): { repo: string; bare: string } {
+  const bare = mkdtempSync(join(tmpdir(), "minerva-bare-remote-"));
+  execFileSync("git", ["init", "-q", "--bare", "-b", "dev", bare]);
+  const repo = mkdtempSync(join(tmpdir(), "minerva-target-remote-"));
+  execFileSync("git", ["init", "-q", "-b", "dev", repo]);
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@t.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+  execFileSync("git", ["-C", repo, "remote", "add", "origin", bare]);
+  execFileSync("git", ["-C", repo, "push", "-q", "origin", "dev"]);
+  return { repo, bare };
+}
+
+// True if the bare remote has `branch` and its tip commit message contains `needle`.
+function remoteHasCommit(bare: string, branch: string, needle: string): boolean {
+  try {
+    const msg = execFileSync("git", ["-C", bare, "log", "-1", "--format=%s", branch], { encoding: "utf8" });
+    return msg.includes(needle);
+  } catch {
+    return false;
+  }
+}
+
+test("commitAndPushPlan commits the plan and pushes the run-scoped branch to origin (the manual step, automated)", () => {
+  const { repo, bare } = makeRepoWithRemote();
+  const runId = "test-run-commit-push";
+  const workspace = mkdtempSync(join(tmpdir(), "minerva-ws-push-"));
+  rmSync(workspace, { recursive: true, force: true }); // worktree add needs the path absent
+  try {
+    // The real worktree the run path cuts: a run/<id> branch off dev, sharing the repo's origin.
+    execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", `run/${runId}`, workspace, "dev"]);
+
+    const epicsDir = join(workspace, ".pHive", "epics");
+    mkdirSync(epicsDir, { recursive: true });
+    writeFileSync(join(epicsDir, "01-greenfield-epic.yaml"), FLAT_EPIC_FOR_PUSH);
+
+    const epics = findCompletedEpics(workspace);
+    assert.equal(epics.length, 1, "sanity: the fabricated flat epic must be detected");
+
+    const res = commitAndPushPlan({ run_id: runId, workspace_path: workspace, workspace_kind: "worktree" }, epics);
+    assert.equal(res.committed, true, res.reason);
+    assert.equal(res.pushed, true, res.reason);
+    assert.equal(res.branch, `run/${runId}`);
+    assert.ok(remoteHasCommit(bare, `run/${runId}`, `plan(${runId})`), "the bare remote must have the plan commit on run/<id>");
+  } finally {
+    execFileSync("git", ["-C", repo, "worktree", "remove", "--force", workspace], { stdio: "pipe" });
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  }
+});
+
+test("commitAndPushPlan is a clean no-op the second time (idempotent, no empty commit)", () => {
+  const { repo, bare } = makeRepoWithRemote();
+  const runId = "test-run-idempotent";
+  const workspace = mkdtempSync(join(tmpdir(), "minerva-ws-idem-"));
+  rmSync(workspace, { recursive: true, force: true });
+  try {
+    execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", `run/${runId}`, workspace, "dev"]);
+    const epicsDir = join(workspace, ".pHive", "epics");
+    mkdirSync(epicsDir, { recursive: true });
+    writeFileSync(join(epicsDir, "01-greenfield-epic.yaml"), FLAT_EPIC_FOR_PUSH);
+    const epics = findCompletedEpics(workspace);
+
+    const first = commitAndPushPlan({ run_id: runId, workspace_path: workspace, workspace_kind: "worktree" }, epics);
+    assert.equal(first.committed, true, first.reason);
+
+    // Second call: nothing new staged -> must NOT create an empty commit, must report the no-op.
+    const second = commitAndPushPlan({ run_id: runId, workspace_path: workspace, workspace_kind: "worktree" }, epics);
+    assert.equal(second.committed, false);
+    assert.equal(second.pushed, false);
+    assert.match(second.reason, /nothing to commit/);
+  } finally {
+    execFileSync("git", ["-C", repo, "worktree", "remove", "--force", workspace], { stdio: "pipe" });
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  }
+});
+
+test("commitAndPushPlan skips a fresh_init workspace (no remote to push to)", () => {
+  const res = commitAndPushPlan(
+    { run_id: "x", workspace_path: "/nonexistent-should-not-be-touched", workspace_kind: "fresh_init" },
+    [],
+  );
+  assert.equal(res.committed, false);
+  assert.equal(res.pushed, false);
+  assert.match(res.reason, /fresh_init/);
+});
+
+// End-to-end through the REAL run path (allocateRun -> checkAndMarkComplete), minus only the LLM
+// driver: proves a run against a resolved real repo lands its plan committed+pushed on origin. This
+// is the greenfield-seed-resolves-to-a-real-repo scenario -- the worktree workspace is exactly what
+// resolveTargetRepo now produces for greenfield seeds (incubator repo) instead of fresh_init.
+test("checkAndMarkComplete auto-commits+pushes the plan for a worktree run (greenfield -> real repo, end to end)", () => {
+  const { repo, bare } = makeRepoWithRemote();
+  const home = mkdtempSync(join(tmpdir(), "minerva-home-e2e-push-"));
+  const savedHome = process.env.MINERVA_HOME;
+  process.env.MINERVA_HOME = home;
+  try {
+    // allocateRun with a real target repo takes the worktree path (workspace_kind: "worktree") --
+    // no driver, no claude call. This is the same allocation resolveTargetRepo now forces for
+    // greenfield seeds via the incubator fallback.
+    const { run_id: runId } = allocateRun("a greenfield idea", repo, undefined, "incubator");
+    const rec = readRunRecord(runId);
+    assert.equal(rec.workspace_kind, "worktree", "a resolved repo must take the worktree path, NOT fresh_init");
+    assert.equal(rec.target_repo, repo, "the resolved target repo must be persisted on the record");
+
+    // Simulate plugin-hive's /plan writing its flat epic artifact into the workspace.
+    const epicsDir = join(rec.workspace_path, ".pHive", "epics");
+    mkdirSync(epicsDir, { recursive: true });
+    writeFileSync(join(epicsDir, "01-greenfield-epic.yaml"), FLAT_EPIC_FOR_PUSH);
+
+    const complete = checkAndMarkComplete(runId);
+    assert.equal(complete, true, "the flat epic must be detected as completion");
+
+    const after = readRunRecord(runId);
+    assert.equal(after.status, "complete");
+    const push = after.plan_push as { committed: boolean; pushed: boolean; branch: string | null };
+    assert.equal(push.committed, true, "the plan must be committed on completion");
+    assert.equal(push.pushed, true, "the plan must be pushed to origin on completion");
+    assert.ok(
+      remoteHasCommit(bare, `run/${runId}`, `plan(${runId})`),
+      "the greenfield plan must land in the real remote a build agent checks out",
+    );
+  } finally {
+    if (savedHome === undefined) delete process.env.MINERVA_HOME;
+    else process.env.MINERVA_HOME = savedHome;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  }
 });

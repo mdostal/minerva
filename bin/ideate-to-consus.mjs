@@ -51,6 +51,7 @@ function parseArgs(argv) {
     else if (k === '--attach') a.attach.push(next());
     else if (k === '--item') a.item = next();
     else if (k === '--resume') a.resume = true;
+    else if (k === '--refile-existing') a.refileExisting = true;
     else if (k === '--decompose') a.decompose = true;
     else if (k === '--no-commit') a.noCommit = true;
     else if (k === '--dry-run') a.dryRun = true;
@@ -318,11 +319,8 @@ async function doFile(a) {
     log('git:', JSON.stringify(git));
   }
 
-  // 5. FILE into Consus as a decision item (rendered inline; awaits the human).
-  const options = (questions && Array.isArray(questions.interpretations) && questions.interpretations.length)
-    ? questions.interpretations.map((o) => ({ id: o.id, title: o.title, note: o.note || '' }))
-    : [{ id: 'proceed', title: 'Proceed as recommended', note: 'accept the recommended direction' }, { id: 'discuss', title: 'Discuss first', note: 'answer the open questions below' }];
-  const nq = questions && Array.isArray(questions.open_questions) ? questions.open_questions.length : 0;
+  // 5. FILE into Consus. A multi-question idea is filed as a SURVEY (N discrete answerable questions),
+  // not a single choose — so the human answers EACH question and the surface renders them cleanly.
   const attachments = [];
   if (wfPath) attachments.push({ id: 'wireframe', label: 'wireframe.html', kind: 'wireframe', path: wfPath });
   if (prdPath) attachments.push({ id: 'prd', label: 'PRD.md', kind: 'prd', path: prdPath });
@@ -330,36 +328,55 @@ async function doFile(a) {
   if (ddPath) attachments.push({ id: 'design', label: 'design-discussion.md', path: ddPath });
   if (existsSync(join(workdir, 'open-questions.md'))) attachments.push({ id: 'questions', label: 'open-questions.md', path: join(workdir, 'open-questions.md') });
 
-  const qlist = (questions && questions.open_questions || []).map((q, i) => `${i + 1}. ${q.question}`).join('  ·  ');
-  const summary = `${questions && questions.summary ? questions.summary + ' ' : ''}` +
-    `${nq} open question(s) await your answers before this idea is decomposed to build. ` +
-    `Review the wireframe + PRD + diagram, pick a direction or answer below${qlist ? ` — Questions: ${qlist}` : ''}.`;
+  const filed = await fileIdeationItem({ janus: a.janus, id: `ideation:${slug}`, ident, title, questions, attachments, ticket: a.ticket, gitSha: git.sha, slug, workdir });
+  log(`FILED to Consus: id=${filed.id} version=${filed.version} status=${filed.status} type=${filed.type}`);
+  console.log(JSON.stringify({ ok: true, mode: 'file', item: filed.id, type: filed.type, ticket: a.ticket || null, workdir, git, questions: (questions && questions.open_questions || []).length, attachments: attachments.map((x) => x.label) }, null, 2));
+}
 
-  const payload = {
-    id: `ideation:${slug}`,
-    source: 'agent',
-    type: 'choose',
-    kicker: 'IDEATION · NEEDS YOUR ANSWERS',
-    title: `${ident} — ${title}`.slice(0, 110),
-    summary,
-    options,
-    recommended: questions && questions.recommended,
-    composeHybrid: true,
-    attachments,
-    links: [
-      a.ticket ? { label: a.ticket, href: `http://100.75.161.82:3010/issues/${encodeURIComponent(a.ticket)}`, external: true, kind: 'origin' } : null,
-      git.sha ? { label: `artifacts @ ${git.sha}`, href: '#', kind: 'ref' } : null,
-    ].filter(Boolean),
-    decision_payload: {
-      kind: 'ideation', ticket: a.ticket || null, slug, workdir,
-      recommended: questions && questions.recommended, open_questions: questions && questions.open_questions || [],
-      interpretations: questions && questions.interpretations || [],
-    },
-  };
+// Build + file the ideation item. Shared by doFile and --refile-existing so the SAME shape is used.
+// >=2 open questions → a SURVEY of discrete questions (interpretations become Q1's options + a first
+// "direction" question); the summary is CLEAN PROSE (the design-discussion synopsis), never a crammed
+// run-on of questions. Fewer than 2 → a choose with interpretations.
+export async function fileIdeationItem({ janus, id, ident, title, questions, attachments, ticket, gitSha, slug, workdir }) {
+  const q = questions || {};
+  const openQ = Array.isArray(q.open_questions) ? q.open_questions : [];
+  const interps = Array.isArray(q.interpretations) ? q.interpretations : [];
+  const summary = (q.summary || 'A design discussion + real wireframe/PRD/diagram is attached; answer the questions below before this is decomposed to build.').trim();
+  const links = [
+    ticket ? { label: ticket, href: `http://100.75.161.82:3010/issues/${encodeURIComponent(ticket)}`, external: true, kind: 'origin' } : null,
+    gitSha ? { label: `artifacts @ ${gitSha}`, href: '#', kind: 'ref' } : null,
+  ].filter(Boolean);
+  const decision_payload = { kind: 'ideation', ticket: ticket || null, slug, workdir, recommended: q.recommended, open_questions: openQ, interpretations: interps };
 
-  const filed = await janusPost(a.janus, 'decision.file', payload);
-  log(`FILED to Consus: id=${filed.id} version=${filed.version} status=${filed.status}`);
-  console.log(JSON.stringify({ ok: true, mode: 'file', item: filed.id, ticket: a.ticket || null, workdir, git, openQuestions: nq, attachments: attachments.map((x) => x.label) }, null, 2));
+  let payload;
+  if (openQ.length >= 2) {
+    // survey: direction question (if interpretations exist) + one block per open question.
+    const qs = [];
+    if (interps.length) {
+      qs.push({ id: 'direction', prompt: 'Which overall direction should this take?', why: q.recommended ? `Agent's recommendation: ${q.recommended}.` : '', options: interps.map((o) => ({ id: o.id, title: o.title, note: o.note || '' })) });
+    }
+    for (let i = 0; i < openQ.length; i++) {
+      const oq = openQ[i];
+      qs.push({ id: oq.id || `q${i + 1}`, prompt: oq.question || oq.prompt || `Question ${i + 1}`, why: oq.why || '', options: Array.isArray(oq.options) ? oq.options : undefined });
+    }
+    payload = {
+      id, source: 'agent', type: 'survey',
+      kicker: 'IDEATION · NEEDS YOUR ANSWERS',
+      title: `${ident} — ${title}`.slice(0, 110),
+      summary, attachments, links, questions: qs, recommended: q.recommended, decision_payload,
+    };
+  } else {
+    payload = {
+      id, source: 'agent', type: 'choose',
+      kicker: 'IDEATION · NEEDS YOUR ANSWERS',
+      title: `${ident} — ${title}`.slice(0, 110),
+      summary, attachments, links, composeHybrid: true,
+      options: interps.length ? interps.map((o) => ({ id: o.id, title: o.title, note: o.note || '' }))
+        : [{ id: 'proceed', title: 'Proceed as recommended', note: 'accept the recommended direction' }, { id: 'discuss', title: 'Discuss first', note: 'ask in the thread' }],
+      recommended: q.recommended, decision_payload,
+    };
+  }
+  return janusPost(janus, 'decision.file', payload);
 }
 
 /* ============================== RESUME =================================== */
@@ -367,6 +384,16 @@ async function doFile(a) {
 // in the discussion thread, and any send-back composed text.
 function extractHumanInput(item) {
   const parts = [];
+  // PER-QUESTION survey answers — pulled back DISCRETELY (one line per question), not as a blob.
+  if (item.answers && typeof item.answers === 'object') {
+    const byId = {};
+    for (const q of (item.questions || [])) byId[String(q.id)] = q.prompt || q.question || q.id;
+    for (const [qid, a] of Object.entries(item.answers)) {
+      const val = a && typeof a === 'object' ? a.value : a;
+      if (val == null || String(val).trim() === '') continue;
+      parts.push(`Q[${byId[qid] || qid}] → ${String(val).trim()}`);
+    }
+  }
   if (item.decided && item.decided.actor && item.decided.actor !== 'minerva@ideation') {
     parts.push(`DECISION: chose "${item.decided.choice}"${item.decided.rationale ? ` — ${item.decided.rationale}` : ''}`);
   }
@@ -437,11 +464,42 @@ async function doResume(a) {
   console.log(JSON.stringify({ ok: true, mode: 'resume', iterated: true, item: a.item, openQuestionsRemaining: nq }, null, 2));
 }
 
+/* ========================= REFILE-EXISTING ============================== */
+// Re-file an ideation item from ALREADY-COMMITTED workdir artifacts, WITHOUT running the planner.
+// Deletes any prior store item for the id first (clean slate — no stale thread/version), then files
+// fresh (v1, open). Used to convert an item to the survey shape or to reset it honestly.
+async function doRefileExisting(a) {
+  if (!a.ticket) die('--refile-existing needs --ticket <id>');
+  const slug = String(a.ticket).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  const workdir = join(a.repo, 'docs', 'ideation', slug);
+  if (!existsSync(join(workdir, 'questions.json'))) die(`no committed questions.json at ${workdir}`);
+  const q = JSON.parse(readFileSync(join(workdir, 'questions.json'), 'utf8').replace(/^```json\s*|\s*```$/g, ''));
+  const mmd = existsSync(join(workdir, 'flow.mmd')) ? readFileSync(join(workdir, 'flow.mmd'), 'utf8').trim() : '';
+  const attachments = [];
+  if (existsSync(join(workdir, 'wireframe.html'))) attachments.push({ id: 'wireframe', label: 'wireframe.html', kind: 'wireframe', path: join(workdir, 'wireframe.html') });
+  if (existsSync(join(workdir, 'prd.md'))) attachments.push({ id: 'prd', label: 'PRD.md', kind: 'prd', path: join(workdir, 'prd.md') });
+  if (mmd) attachments.push({ id: 'diagram', label: 'flow.mermaid', kind: 'diagram', diagram: { kind: 'mermaid', code: mmd } });
+  if (existsSync(join(workdir, 'design-discussion.md'))) attachments.push({ id: 'design', label: 'design-discussion.md', path: join(workdir, 'design-discussion.md') });
+  if (existsSync(join(workdir, 'open-questions.md'))) attachments.push({ id: 'questions', label: 'open-questions.md', path: join(workdir, 'open-questions.md') });
+
+  const id = `ideation:${slug}`;
+  // delete prior store item so the re-file is a clean v1 (strips any prior thread/answers/version).
+  if (process.env.JANUS_CONSUS_STORE || existsSync('/Users/dostal/Documents/work/dostal/code/janus/var/consus-store.json')) {
+    const store = process.env.JANUS_CONSUS_STORE || '/Users/dostal/Documents/work/dostal/code/janus/var/consus-store.json';
+    try { const doc = JSON.parse(readFileSync(store, 'utf8')); if (doc.items[id]) { delete doc.items[id]; writeFileSync(store, JSON.stringify(doc, null, 2)); log(`deleted prior ${id} from store`); } } catch (e) { log('store delete skipped:', String(e.message || e).slice(0, 120)); }
+  }
+  const ident = a.ticket;
+  const filed = await fileIdeationItem({ janus: a.janus, id, ident, title: a.title || ident, questions: q, attachments, ticket: a.ticket, slug, workdir });
+  log(`RE-FILED (existing): id=${filed.id} version=${filed.version} status=${filed.status} type=${filed.type}`);
+  console.log(JSON.stringify({ ok: true, mode: 'refile-existing', item: filed.id, type: filed.type, questions: (q.open_questions || []).length, attachments: attachments.map((x) => x.label) }, null, 2));
+}
+
 /* -------------------------------- main ----------------------------------- */
 (async () => {
   const a = parseArgs(process.argv.slice(2));
   try {
-    if (a.resume) await doResume(a);
+    if (a.refileExisting) await doRefileExisting(a);
+    else if (a.resume) await doResume(a);
     else await doFile(a);
   } catch (e) {
     die(String(e && e.stack || e.message || e));

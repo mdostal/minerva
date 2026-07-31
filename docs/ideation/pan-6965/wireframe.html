@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Browser - Pantheon</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .header-meta {
+            display: flex;
+            gap: 2rem;
+            font-size: 0.875rem;
+            color: #888;
+        }
+
+        .header-meta span {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .brand-tag {
+            background: #2a4a7c;
+            color: #a0c4ff;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .tabs {
+            display: flex;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            padding: 0 2rem;
+        }
+
+        .tab {
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            color: #888;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            color: #e0e0e0;
+        }
+
+        .tab.active {
+            color: #fff;
+            border-bottom-color: #4a9eff;
+        }
+
+        .tab-badge {
+            background: #333;
+            color: #aaa;
+            padding: 0.125rem 0.5rem;
+            border-radius: 0.75rem;
+            font-size: 0.75rem;
+            margin-left: 0.5rem;
+        }
+
+        .main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 350px;
+            background: #0f0f0f;
+            border-right: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .search-bar {
+            padding: 1rem;
+            border-bottom: 1px solid #333;
+        }
+
+        .search-bar input {
+            width: 100%;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: #e0e0e0;
+            padding: 0.625rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+        }
+
+        .search-bar input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
+        .filters {
+            padding: 1rem;
+            border-bottom: 1px solid #333;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .filter-chip {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: #aaa;
+            padding: 0.375rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-chip:hover, .filter-chip.active {
+            background: #2a4a7c;
+            border-color: #4a9eff;
+            color: #a0c4ff;
+        }
+
+        .memory-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+
+        .memory-item {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .memory-item:hover {
+            border-color: #4a9eff;
+            background: #1f1f1f;
+        }
+
+        .memory-item.active {
+            border-color: #4a9eff;
+            background: #1f2a3a;
+        }
+
+        .memory-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 0.5rem;
+        }
+
+        .memory-item-title {
+            font-weight: 600;
+            color: #fff;
+            font-size: 0.875rem;
+        }
+
+        .memory-item-type {
+            background: #2a2a2a;
+            color: #aaa;
+            padding: 0.125rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.625rem;
+            text-transform: uppercase;
+        }
+
+        .memory-item-desc {
+            color: #888;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            margin-bottom: 0.5rem;
+        }
+
+        .memory-item-meta {
+            display: flex;
+            gap: 0.5rem;
+            font-size: 0.625rem;
+        }
+
+        .meta-tag {
+            background: #2a2a2a;
+            color: #888;
+            padding: 0.125rem 0.375rem;
+            border-radius: 0.25rem;
+        }
+
+        .viewer {
+            flex: 1;
+            background: #0a0a0a;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .viewer-header {
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .viewer-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .viewer-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn {
+            background: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #333;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #333;
+            border-color: #4a9eff;
+        }
+
+        .btn-primary {
+            background: #4a9eff;
+            border-color: #4a9eff;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #3a8eef;
+        }
+
+        .viewer-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+        }
+
+        .frontmatter {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .frontmatter-row {
+            display: flex;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #2a2a2a;
+        }
+
+        .frontmatter-row:last-child {
+            border-bottom: none;
+        }
+
+        .frontmatter-label {
+            width: 150px;
+            color: #888;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .frontmatter-value {
+            color: #e0e0e0;
+            font-size: 0.875rem;
+        }
+
+        .markdown-content {
+            color: #e0e0e0;
+            line-height: 1.7;
+        }
+
+        .markdown-content h2 {
+            color: #fff;
+            font-size: 1.25rem;
+            margin: 2rem 0 1rem;
+            font-weight: 600;
+        }
+
+        .markdown-content p {
+            margin-bottom: 1rem;
+        }
+
+        .markdown-content strong {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .empty-state-text {
+            font-size: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Memory Browser</h1>
+        <div class="header-meta">
+            <span>Project: <strong>minerva</strong></span>
+            <span>Brand: <span class="brand-tag">firefly-events</span></span>
+        </div>
+    </header>
+
+    <div class="tabs">
+        <div class="tab">
+            Session
+            <span class="tab-badge">8</span>
+        </div>
+        <div class="tab active">
+            Project
+            <span class="tab-badge">24</span>
+        </div>
+        <div class="tab">
+            User
+            <span class="tab-badge">157</span>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <aside class="sidebar">
+            <div class="search-bar">
+                <input type="text" placeholder="Search memories...">
+            </div>
+
+            <div class="filters">
+                <div class="filter-chip active">All</div>
+                <div class="filter-chip">user</div>
+                <div class="filter-chip">feedback</div>
+                <div class="filter-chip">project</div>
+                <div class="filter-chip">reference</div>
+            </div>
+
+            <div class="memory-list">
+                <div class="memory-item">
+                    <div class="memory-item-header">
+                        <div class="memory-item-title">pantheon-architecture</div>
+                        <div class="memory-item-type">project</div>
+                    </div>
+                    <div class="memory-item-desc">
+                        Core Pantheon agents (Minerva, Hermes, Athena) and their orchestration model
+                    </div>
+                    <div class="memory-item-meta">
+                        <span class="meta-tag">brand:pantheon</span>
+                    </div>
+                </div>
+
+                <div class="memory-item active">
+                    <div class="memory-item-header">
+                        <div class="memory-item-title">firefly-brand-guidelines</div>
+                        <div class="memory-item-type">reference</div>
+                    </div>
+                    <div class="memory-item-desc">
+                        Firefly Events brand voice, color palette, and tone guidelines
+                    </div>
+                    <div class="memory-item-meta">
+                        <span class="meta-tag">brand:firefly-events</span>
+                        <span class="meta-tag">persona:minerva</span>
+                    </div>
+                </div>
+
+                <div class="memory-item">
+                    <div class="memory-item-header">
+                        <div class="memory-item-title">user-prefers-terse-output</div>
+                        <div class="memory-item-type">feedback</div>
+                    </div>
+                    <div class="memory-item-desc">
+                        User wants concise responses without trailing summaries
+                    </div>
+                    <div class="memory-item-meta">
+                        <span class="meta-tag">updated: 2026-07-28</span>
+                    </div>
+                </div>
+
+                <div class="memory-item">
+                    <div class="memory-item-header">
+                        <div class="memory-item-title">hive-directory-structure</div>
+                        <div class="memory-item-type">reference</div>
+                    </div>
+                    <div class="memory-item-desc">
+                        .pHive directory layout: projects, triage, workflows, metrics
+                    </div>
+                    <div class="memory-item-meta">
+                        <span class="meta-tag">brand:pantheon</span>
+                    </div>
+                </div>
+
+                <div class="memory-item">
+                    <div class="memory-item-header">
+                        <div class="memory-item-title">ruvflow-historical-context</div>
+                        <div class="memory-item-type">project</div>
+                    </div>
+                    <div class="memory-item-desc">
+                        Legacy ruvflow orchestrator used hooks and memory for state continuity
+                    </div>
+                    <div class="memory-item-meta">
+                        <span class="meta-tag">brand:dostal-tech</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="viewer">
+            <div class="viewer-header">
+                <div class="viewer-title">firefly-brand-guidelines</div>
+                <div class="viewer-actions">
+                    <button class="btn">Delete</button>
+                    <button class="btn btn-primary">Edit</button>
+                </div>
+            </div>
+
+            <div class="viewer-content">
+                <div class="frontmatter">
+                    <div class="frontmatter-row">
+                        <div class="frontmatter-label">Name</div>
+                        <div class="frontmatter-value">firefly-brand-guidelines</div>
+                    </div>
+                    <div class="frontmatter-row">
+                        <div class="frontmatter-label">Description</div>
+                        <div class="frontmatter-value">Firefly Events brand voice, color palette, and tone guidelines</div>
+                    </div>
+                    <div class="frontmatter-row">
+                        <div class="frontmatter-label">Type</div>
+                        <div class="frontmatter-value">reference</div>
+                    </div>
+                    <div class="frontmatter-row">
+                        <div class="frontmatter-label">Brand</div>
+                        <div class="frontmatter-value">firefly-events</div>
+                    </div>
+                    <div class="frontmatter-row">
+                        <div class="frontmatter-label">Persona</div>
+                        <div class="frontmatter-value">minerva</div>
+                    </div>
+                    <div class="frontmatter-row">
+                        <div class="frontmatter-label">Last Updated</div>
+                        <div class="frontmatter-value">2026-07-28T14:32:00Z</div>
+                    </div>
+                </div>
+
+                <div class="markdown-content">
+                    <h2>Brand Voice</h2>
+                    <p>
+                        Firefly Events uses a warm, approachable, and celebratory tone. The brand embodies joy, connection, and unforgettable moments. When writing for Firefly, emphasize <strong>community</strong>, <strong>celebration</strong>, and <strong>attention to detail</strong>.
+                    </p>
+
+                    <h2>Visual Identity</h2>
+                    <p>
+                        Primary colors: Deep Purple (#6B46C1), Warm Gold (#F59E0B), Soft Cream (#FEF3C7).
+                        Typography: Use Montserrat for headings, Inter for body text.
+                    </p>
+
+                    <h2>Tone Guidelines</h2>
+                    <p>
+                        <strong>Do:</strong> Be warm, inclusive, and detail-oriented. Celebrate milestones. Use vivid, sensory language.<br>
+                        <strong>Don't:</strong> Be overly formal, corporate, or transactional. Avoid jargon.
+                    </p>
+
+                    <h2>How to Apply</h2>
+                    <p>
+                        When Minerva generates content for Firefly Events (emails, web copy, social posts), this memory should be loaded to ensure brand consistency. Related: [[firefly-event-templates]], [[firefly-client-preferences]]
+                    </p>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

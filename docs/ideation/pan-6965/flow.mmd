@@ -1,0 +1,43 @@
+graph TB
+    Start[Agent Spawn Request] --> Hook1[Before-Spawn Hook Triggered]
+    Hook1 --> LoadSession[Load Session Memory Index]
+    Hook1 --> LoadProject[Load Project Memory Index]
+    Hook1 --> LoadUser[Load User Memory Index]
+
+    LoadSession --> Filter[Filter by Brand/Persona]
+    LoadProject --> Filter
+    LoadUser --> Filter
+
+    Filter --> Cache[Cache Filtered Memories]
+    Cache --> Inject[Inject Memories into Agent Context]
+    Inject --> Execute[Agent Executes Task]
+
+    Execute --> Decision{New Memories Created?}
+    Decision -->|No| Cleanup[Agent Cleanup]
+    Decision -->|Yes| Hook2[After-Task Hook Triggered]
+
+    Hook2 --> Classify[Classify Memory Layer]
+    Classify --> SessionSave{Session-Only?}
+    Classify --> ProjectSave{Project-Scoped?}
+    Classify --> UserSave{User-Wide?}
+
+    SessionSave -->|Yes| WriteSession[Write to .pHive/sessions/ID/memory/]
+    ProjectSave -->|Yes| WriteProject[Write to .pHive/memory/]
+    UserSave -->|Yes| WriteUser[Write to ~/.claude/memory/]
+
+    WriteSession --> UpdateIndex1[Update MEMORY.md Index]
+    WriteProject --> UpdateIndex2[Update MEMORY.md Index]
+    WriteUser --> UpdateIndex3[Update MEMORY.md Index]
+
+    UpdateIndex1 --> Cleanup
+    UpdateIndex2 --> Cleanup
+    UpdateIndex3 --> Cleanup
+
+    Cleanup --> End[Agent Complete]
+
+    style Start fill:#2a4a7c,stroke:#4a9eff,color:#fff
+    style End fill:#2a4a7c,stroke:#4a9eff,color:#fff
+    style Hook1 fill:#1a3a2a,stroke:#4a9e7f,color:#fff
+    style Hook2 fill:#1a3a2a,stroke:#4a9e7f,color:#fff
+    style Filter fill:#3a2a1a,stroke:#f59e0b,color:#fff
+    style Execute fill:#2a1a3a,stroke:#a78bfa,color:#fff

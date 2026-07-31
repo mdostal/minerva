@@ -353,11 +353,13 @@ export async function fileIdeationItem({ janus, id, ident, title, questions, att
     // survey: direction question (if interpretations exist) + one block per open question.
     const qs = [];
     if (interps.length) {
-      qs.push({ id: 'direction', prompt: 'Which overall direction should this take?', why: q.recommended ? `Agent's recommendation: ${q.recommended}.` : '', options: interps.map((o) => ({ id: o.id, title: o.title, note: o.note || '' })) });
+      // The "direction" question presents the interpretations as REFERENCE cards to MIX freely — NOT a
+      // forced single pick. The answer is free-form (combine A+C, add your own).
+      qs.push({ id: 'direction', prompt: 'Which overall direction should this take? (mix/combine freely — this is not a single choice)', why: q.recommended ? `Agent's recommendation: ${q.recommended}.` : '', refs: interps.map((o) => ({ id: o.id, title: o.title, note: o.note || '' })) });
     }
     for (let i = 0; i < openQ.length; i++) {
       const oq = openQ[i];
-      qs.push({ id: oq.id || `q${i + 1}`, prompt: oq.question || oq.prompt || `Question ${i + 1}`, why: oq.why || '', options: Array.isArray(oq.options) ? oq.options : undefined });
+      qs.push({ id: oq.id || `q${i + 1}`, prompt: oq.question || oq.prompt || `Question ${i + 1}`, why: oq.why || '', refs: Array.isArray(oq.options) ? oq.options : undefined });
     }
     payload = {
       id, source: 'agent', type: 'survey',
@@ -483,15 +485,13 @@ async function doRefileExisting(a) {
   if (existsSync(join(workdir, 'open-questions.md'))) attachments.push({ id: 'questions', label: 'open-questions.md', path: join(workdir, 'open-questions.md') });
 
   const id = `ideation:${slug}`;
-  // delete prior store item so the re-file is a clean v1 (strips any prior thread/answers/version).
-  if (process.env.JANUS_CONSUS_STORE || existsSync('/Users/dostal/Documents/work/dostal/code/janus/var/consus-store.json')) {
-    const store = process.env.JANUS_CONSUS_STORE || '/Users/dostal/Documents/work/dostal/code/janus/var/consus-store.json';
-    try { const doc = JSON.parse(readFileSync(store, 'utf8')); if (doc.items[id]) { delete doc.items[id]; writeFileSync(store, JSON.stringify(doc, null, 2)); log(`deleted prior ${id} from store`); } } catch (e) { log('store delete skipped:', String(e.message || e).slice(0, 120)); }
-  }
+  // ⛔ NEVER delete/overwrite. A re-file MERGES through the store — existing HUMAN answers, per-question
+  // threads, discussion, and audit are preserved; only agent-authored presentation (questions/summary/
+  // attachments) is refreshed. (A prior version deleted-then-refiled and WIPED a human answer; removed.)
   const ident = a.ticket;
   const filed = await fileIdeationItem({ janus: a.janus, id, ident, title: a.title || ident, questions: q, attachments, ticket: a.ticket, slug, workdir });
-  log(`RE-FILED (existing): id=${filed.id} version=${filed.version} status=${filed.status} type=${filed.type}`);
-  console.log(JSON.stringify({ ok: true, mode: 'refile-existing', item: filed.id, type: filed.type, questions: (q.open_questions || []).length, attachments: attachments.map((x) => x.label) }, null, 2));
+  log(`RE-FILED (merge): id=${filed.id} version=${filed.version} status=${filed.status} type=${filed.type} — human content preserved`);
+  console.log(JSON.stringify({ ok: true, mode: 'refile-existing', merged: true, item: filed.id, type: filed.type, questions: (q.open_questions || []).length, attachments: attachments.map((x) => x.label) }, null, 2));
 }
 
 /* -------------------------------- main ----------------------------------- */

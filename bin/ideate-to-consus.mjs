@@ -386,10 +386,22 @@ export async function fileIdeationItem({ janus, id, ident, title, questions, att
 // in the discussion thread, and any send-back composed text.
 function extractHumanInput(item) {
   const parts = [];
-  // PER-QUESTION survey answers — pulled back DISCRETELY (one line per question), not as a blob.
-  if (item.answers && typeof item.answers === 'object') {
-    const byId = {};
-    for (const q of (item.questions || [])) byId[String(q.id)] = q.prompt || q.question || q.id;
+  const byId = {};
+  for (const q of (item.questions || [])) byId[String(q.id)] = q.prompt || q.question || q.id;
+  // PER-QUESTION conversation — pull back EVERY human entry per question (comment-style), plus any
+  // agent probe replies, so the iteration has the full back-and-forth (not just one blob).
+  if (item.threads && typeof item.threads === 'object') {
+    for (const [qid, thread] of Object.entries(item.threads)) {
+      const msgs = Array.isArray(thread) ? thread : [];
+      const human = msgs.filter((m) => m.role === 'human' && String(m.text || '').trim());
+      if (!human.length) continue;
+      const label = byId[qid] || qid;
+      for (const m of human) parts.push(`Q[${label}] → ${String(m.text).trim()}`);
+      const agent = msgs.filter((m) => m.role === 'agent' && String(m.text || '').trim());
+      for (const m of agent) parts.push(`  (agent on ${label}): ${String(m.text).trim()}`);
+    }
+  } else if (item.answers && typeof item.answers === 'object') {
+    // fallback for older items without per-question threads
     for (const [qid, a] of Object.entries(item.answers)) {
       const val = a && typeof a === 'object' ? a.value : a;
       if (val == null || String(val).trim() === '') continue;

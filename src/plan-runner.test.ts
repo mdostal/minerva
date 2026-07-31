@@ -9,7 +9,13 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { __setDriverForTest } from "./kickoff-engine.ts";
-import { runHeadlessPlan, storyToIssueFields } from "./plan-runner.ts";
+import {
+  runHeadlessPlan,
+  storyToIssueFields,
+  parseStoryDependsOn,
+  fileStoriesToMultica,
+  __setMulticaRunnerForTest,
+} from "./plan-runner.ts";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 
 let minervaHome: string;
@@ -145,4 +151,82 @@ test("storyToIssueFields: derives title from story YAML, keeps full content as d
 test("storyToIssueFields: falls back to the story id when YAML has no title", () => {
   const f = storyToIssueFields({ id: "s9", content: "not: really\n" });
   assert.equal(f.title, "[s9] s9");
+});
+
+test("parseStoryDependsOn: reads top-level depends_on list, ignores step-level depends_on", () => {
+  assert.deepEqual(parseStoryDependsOn({ id: "s2", content: "id: s2\ndepends_on: [s1, s0]\n" }), ["s1", "s0"]);
+  assert.deepEqual(parseStoryDependsOn({ id: "s1", content: "id: s1\ndepends_on: []\n" }), []);
+  // Only the TOP-LEVEL depends_on counts; a step-level depends_on must NOT be picked up.
+  assert.deepEqual(
+    parseStoryDependsOn({ id: "s0", content: "id: s0\nsteps:\n  - id: a\n    depends_on: [b]\n" }),
+    [],
+  );
+  assert.deepEqual(parseStoryDependsOn({ id: "s0", content: "not: yaml: [broken" }), []);
+});
+
+test("fileStoriesToMultica: files into the SEED ticket's project (not the CLI default) and carries depends_on", () => {
+  const calls: string[][] = [];
+  const prev = __setMulticaRunnerForTest((args: string[]) => {
+    calls.push(args);
+    if (args[0] === "issue" && args[1] === "get") {
+      // The seed ticket lives in Pantheon Core — filed stories must inherit THIS project.
+      return { id: "SEED", project_id: "d8ecfab4-pantheon-core", status: "todo" };
+    }
+    if (args[0] === "issue" && args[1] === "create") {
+      const title = String(args[args.indexOf("--title") + 1] ?? "");
+      // Return a distinct id per story so the depends_on map can resolve.
+      return { id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" };
+    }
+    if (args[0] === "issue" && args[1] === "metadata") return { ok: true };
+    return null;
+  });
+  try {
+    const epic = {
+      epic_id: "e1",
+      stories: [
+        { id: "s1", content: "id: s1\ntitle: First\ndepends_on: []\n" },
+        { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: [s1]\n" },
+      ],
+    } as any;
+    const r = fileStoriesToMultica("SEED", epic);
+
+    assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+    assert.deepEqual(r.filed.map((f) => f.issue_id).sort(), ["ISSUE-1", "ISSUE-2"]);
+
+    // Every create carried --project = the seed's own project and --status todo.
+    const creates = calls.filter((a) => a[0] === "issue" && a[1] === "create");
+    assert.equal(creates.length, 2);
+    for (const c of creates) {
+      assert.equal(c[c.indexOf("--project") + 1], "d8ecfab4-pantheon-core");
+      assert.equal(c[c.indexOf("--status") + 1], "todo");
+      assert.equal(c[c.indexOf("--parent") + 1], "SEED");
+    }
+
+    // s2's depends_on [s1] was carried as metadata pointing at s1's RESOLVED issue id.
+    const meta = calls.find((a) => a[0] === "issue" && a[1] === "metadata" && a[2] === "set");
+    assert.ok(meta, "expected a depends_on metadata set for the dependent story");
+    assert.equal(meta![meta!.indexOf("--key") + 1], "depends_on");
+    assert.equal(meta![meta!.indexOf("--value") + 1], "ISSUE-1");
+    // s1 has no deps -> no metadata call for it (only one metadata set total).
+    assert.equal(calls.filter((a) => a[1] === "metadata").length, 1);
+  } finally {
+    __setMulticaRunnerForTest(prev);
+  }
+});
+
+test("fileStoriesToMultica: explicit opts.project overrides the seed's project", () => {
+  const creates: string[][] = [];
+  const prev = __setMulticaRunnerForTest((args: string[]) => {
+    if (args[0] === "issue" && args[1] === "get") return { id: "SEED", project_id: "seed-proj" };
+    if (args[0] === "issue" && args[1] === "create") { creates.push(args); return { id: "X" }; }
+    return null;
+  });
+  try {
+    const epic = { epic_id: "e1", stories: [{ id: "s1", content: "id: s1\ntitle: One\ndepends_on: []\n" }] } as any;
+    fileStoriesToMultica("SEED", epic, { project: "explicit-proj" });
+    const create = creates[0]!;
+    assert.equal(create[create.indexOf("--project") + 1], "explicit-proj");
+  } finally {
+    __setMulticaRunnerForTest(prev);
+  }
 });

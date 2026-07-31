@@ -69,9 +69,22 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
 
 // --- Multica integration (shell-out to the `multica` CLI) ------------------------------------
 
-function multicaJson(args: string[]): any {
+// The multica CLI runner is indirected through a module-level slot so integration tests can
+// substitute a fake (no real `multica` process). The production path is unchanged.
+let _multicaRunner = (args: string[]): any => {
   const out = execFileSync("multica", args, { encoding: "utf8" });
-  return JSON.parse(out);
+  return out.trim() ? JSON.parse(out) : null;
+};
+
+function multicaJson(args: string[]): any {
+  return _multicaRunner(args);
+}
+
+// Test-only: swap the multica CLI runner. Returns the previous runner so a test can restore it.
+export function __setMulticaRunnerForTest(fn: (args: string[]) => any): (args: string[]) => any {
+  const prev = _multicaRunner;
+  _multicaRunner = fn;
+  return prev;
 }
 
 // Resolve an idea brief from a Multica ticket: `title` + `description`, joined into the prose the
@@ -102,6 +115,20 @@ export function storyToIssueFields(story: { id: string; content: string }): { ti
   return { title: `[${story.id}] ${storyTitle}`, description: story.content };
 }
 
+// Extract a story's STORY-LEVEL depends_on — the list of sibling story ids this story must
+// follow — from the plugin-hive story YAML. Returns [] when absent/unparseable. This is the
+// TOP-LEVEL `depends_on`, distinct from any per-step depends_on nested inside the story's steps.
+export function parseStoryDependsOn(story: { id: string; content: string }): string[] {
+  try {
+    const parsed = parseYaml(story.content) as any;
+    const d = parsed && parsed.depends_on;
+    if (Array.isArray(d)) return d.map((x) => String(x).trim()).filter((s) => s.length > 0);
+  } catch {
+    // non-YAML/unexpected shape -> no declared dependencies
+  }
+  return [];
+}
+
 export interface FiledStory {
   story_id: string;
   issue_id: string;
@@ -119,10 +146,38 @@ export function fileStoriesToMultica(
 ): { filed: FiledStory[]; errors: Array<{ story_id: string; error: string }> } {
   const filed: FiledStory[] = [];
   const errors: Array<{ story_id: string; error: string }> = [];
+
+  // Resolve the PROJECT the filed stories must live in. A decomposed story is only ever picked
+  // up by the Auriga router if it lands in a SCANNED project; when no --project is passed the
+  // multica server drops these --parent'd sub-issues into a fallback project the router never
+  // scans (the Mnemosyne-project orphan that stranded PAN-6939/40/41 — the whole plan invisible
+  // to Auriga, todoUnassigned stuck at 0). Default to the SEED ticket's OWN project so a seed
+  // dropped in Pantheon Core yields stories in Pantheon Core, where the router sees + dispatches
+  // them. An explicit opts.project still overrides (caller knows best).
+  let project = opts.project;
+  if (!project) {
+    try {
+      const parent = multicaJson(["issue", "get", ticketId, "--output", "json"]);
+      if (parent && typeof parent.project_id === "string" && parent.project_id.length > 0) {
+        project = parent.project_id;
+      }
+    } catch (e) {
+      // Non-fatal: fall back to the CLI default project (legacy behavior) but record why, so a
+      // stranded plan is diagnosable rather than silent.
+      errors.push({ story_id: "(resolve-project)", error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   const tmp = mkdtempSync(join(tmpdir(), "minerva-story-"));
+  // story_id -> created issue_id, and story_id -> its declared depends_on, tracked across the
+  // whole epic so the dependency graph can be wired AFTER every sibling exists (a dependency may
+  // be filed later in the loop than the story that depends on it).
+  const idByStory = new Map<string, string>();
+  const dependsByStory = new Map<string, string[]>();
   try {
     for (const story of epic.stories) {
       const { title, description } = storyToIssueFields(story);
+      dependsByStory.set(story.id, parseStoryDependsOn(story));
       const descFile = join(tmp, `${story.id}.txt`);
       writeFileSync(descFile, description);
       const args = [
@@ -134,16 +189,53 @@ export function fileStoriesToMultica(
         title,
         "--description-file",
         descFile,
+        // Explicit todo status: the router's candidate pool is status==='todo'. Filed stories
+        // must be immediately dispatchable, never parked in backlog.
+        "--status",
+        "todo",
         "--output",
         "json",
       ];
-      if (opts.project) args.push("--project", opts.project);
+      if (project) args.push("--project", project);
       try {
         const created = multicaJson(args);
         const issueId = typeof created.id === "string" ? created.id : String(created.id ?? "");
         filed.push({ story_id: story.id, issue_id: issueId });
+        if (issueId) idByStory.set(story.id, issueId);
       } catch (e) {
         errors.push({ story_id: story.id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    // Second pass: CARRY the depends_on DAG into Multica as per-issue metadata the Auriga router
+    // reads to enforce ordering — it never dispatches a story whose dependency issues aren't done
+    // (see depsSatisfied in the router's core). We store the resolved sibling ISSUE ids
+    // (comma-separated string) under the `depends_on` metadata key. Best-effort per story: a
+    // metadata failure is recorded but never aborts filing (the story itself is already filed).
+    for (const [storyId, deps] of dependsByStory) {
+      const selfId = idByStory.get(storyId);
+      if (!selfId) continue;
+      const depIssueIds = deps
+        .map((d) => idByStory.get(d))
+        .filter((v): v is string => typeof v === "string" && v.length > 0);
+      if (depIssueIds.length === 0) continue;
+      try {
+        multicaJson([
+          "issue",
+          "metadata",
+          "set",
+          selfId,
+          "--key",
+          "depends_on",
+          "--value",
+          depIssueIds.join(","),
+          "--type",
+          "string",
+          "--output",
+          "json",
+        ]);
+      } catch (e) {
+        errors.push({ story_id: storyId, error: `depends_on metadata: ${e instanceof Error ? e.message : String(e)}` });
       }
     }
   } finally {

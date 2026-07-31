@@ -21,6 +21,7 @@ import { getRunStatus, readRunRecord, type Question } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
 import type { CompletedEpic } from "./output-emitter.ts";
 import type { PlanDefaultsMode } from "./plan-defaults.ts";
+import { parseTargetRepoLine, stampTargetRepo } from "./target-repo-signal.ts";
 
 export interface PlanRequest {
   idea: string;
@@ -90,7 +91,7 @@ export function __setMulticaRunnerForTest(fn: (args: string[]) => any): (args: s
 // Resolve an idea brief from a Multica ticket: `title` + `description`, joined into the prose the
 // kickoff skill expects. Throws if the ticket can't be read/parsed -- a router must not silently
 // plan an empty idea.
-export function resolveIdeaFromTicket(ticketId: string): { idea: string; title: string } {
+export function resolveIdeaFromTicket(ticketId: string): { idea: string; title: string; targetRepo: string | null } {
   const issue = multicaJson(["issue", "get", ticketId, "--output", "json"]);
   const title = typeof issue.title === "string" ? issue.title : "";
   const description = typeof issue.description === "string" ? issue.description : "";
@@ -98,7 +99,17 @@ export function resolveIdeaFromTicket(ticketId: string): { idea: string; title: 
   if (idea.trim().length === 0) {
     throw new Error(`Multica ticket ${ticketId} has no title/description to plan from`);
   }
-  return { idea, title };
+  // The seed's declared build target (Gate-2): the ticket's metadata.target_repo (set
+  // programmatically) OR a `target_repo: <owner/repo>` line in its description/title — the SAME
+  // signal the build lane reads. Null when the seed declares no target (greenfield). This is what
+  // lets a RAW seed's build target flow down to its decomposed child stories and into the repo.
+  const metaRepo =
+    issue && issue.metadata && typeof issue.metadata.target_repo === "string"
+      ? issue.metadata.target_repo.trim()
+      : "";
+  const targetRepo =
+    (metaRepo.length > 0 ? metaRepo : parseTargetRepoLine(description) ?? parseTargetRepoLine(title)) || null;
+  return { idea, title, targetRepo };
 }
 
 // Derive a sub-issue title + description from a plugin-hive story YAML.
@@ -142,7 +153,7 @@ export interface FiledStory {
 export function fileStoriesToMultica(
   ticketId: string,
   epic: CompletedEpic,
-  opts: { project?: string } = {},
+  opts: { project?: string; targetRepo?: string } = {},
 ): { filed: FiledStory[]; errors: Array<{ story_id: string; error: string }> } {
   const filed: FiledStory[] = [];
   const errors: Array<{ story_id: string; error: string }> = [];
@@ -178,8 +189,12 @@ export function fileStoriesToMultica(
     for (const story of epic.stories) {
       const { title, description } = storyToIssueFields(story);
       dependsByStory.set(story.id, parseStoryDependsOn(story));
+      // Stamp the seed's target repo onto every child story description (Gate-2), so the build
+      // lane resolves the SAME repo for the decomposed work it resolved for the seed. Without this
+      // a child story carries no target_repo and the build lane cannot resolve where to build it.
+      const stampedDescription = stampTargetRepo(description, opts.targetRepo ?? null);
       const descFile = join(tmp, `${story.id}.txt`);
-      writeFileSync(descFile, description);
+      writeFileSync(descFile, stampedDescription);
       const args = [
         "issue",
         "create",
@@ -202,6 +217,18 @@ export function fileStoriesToMultica(
         const issueId = typeof created.id === "string" ? created.id : String(created.id ?? "");
         filed.push({ story_id: story.id, issue_id: issueId });
         if (issueId) idByStory.set(story.id, issueId);
+        // Also carry the target repo as ticket metadata (the build lane's secondary signal), best-
+        // effort — the description line above is the primary, CLI-readable signal.
+        if (issueId && opts.targetRepo) {
+          try {
+            multicaJson([
+              "issue", "metadata", "set", issueId,
+              "--key", "target_repo", "--value", opts.targetRepo, "--type", "string", "--output", "json",
+            ]);
+          } catch (e) {
+            errors.push({ story_id: story.id, error: `target_repo metadata: ${e instanceof Error ? e.message : String(e)}` });
+          }
+        }
       } catch (e) {
         errors.push({ story_id: story.id, error: e instanceof Error ? e.message : String(e) });
       }
@@ -253,7 +280,7 @@ export function fileStoriesToMultica(
 export function fileAllStoriesToMultica(
   ticketId: string,
   epics: CompletedEpic[],
-  opts: { project?: string } = {},
+  opts: { project?: string; targetRepo?: string } = {},
 ): { filed: Array<FiledStory & { epic_id: string }>; errors: Array<{ story_id: string; epic_id: string; error: string }> } {
   const filed: Array<FiledStory & { epic_id: string }> = [];
   const errors: Array<{ story_id: string; epic_id: string; error: string }> = [];

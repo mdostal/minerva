@@ -21,6 +21,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runHeadlessPlan, resolveIdeaFromTicket, fileAllStoriesToMultica } from "../src/plan-runner.ts";
+import { resolveLocalCheckout } from "../src/target-repo-signal.ts";
 import type { PlanDefaultsMode } from "../src/plan-defaults.ts";
 
 interface Args {
@@ -115,10 +116,12 @@ async function main(): Promise<void> {
 
   let idea: string;
   let ideaLabel: string;
+  let ticketTargetRepo: string | null = null;
   if (args.ticket !== undefined) {
     const resolved = resolveIdeaFromTicket(args.ticket);
     idea = resolved.idea;
     ideaLabel = resolved.title || `ticket ${args.ticket}`;
+    ticketTargetRepo = resolved.targetRepo;
   } else if (args.ideaBrief !== undefined) {
     idea = readFileSync(args.ideaBrief, "utf8");
     ideaLabel = args.ideaBrief;
@@ -127,9 +130,23 @@ async function main(): Promise<void> {
     ideaLabel = idea.slice(0, 60);
   }
 
+  // Resolve the build target repo for this seed (Gate-2). Explicit --target-repo (CLI) wins;
+  // otherwise the ticket's OWN declared target_repo (metadata or a `target_repo:` line in the
+  // description) drives it. A slug/URL is cloned on demand into a local checkout (with a `dev`
+  // branch) so the finished plan is committed+pushed into that real repo, and the slug is stamped
+  // onto every filed child story so the build lane builds each in the same repo.
+  let targetRepoPath: string | undefined = args.targetRepo;
+  let targetRepoSlug: string | null = null;
+  const declaredTarget = args.targetRepo ?? ticketTargetRepo ?? null;
+  if (declaredTarget) {
+    const checkout = resolveLocalCheckout(declaredTarget);
+    targetRepoPath = checkout.localPath;
+    targetRepoSlug = checkout.slug;
+  }
+
   const result = await runHeadlessPlan({
     idea,
-    ...(args.targetRepo ? { targetRepo: args.targetRepo } : {}),
+    ...(targetRepoPath ? { targetRepo: targetRepoPath } : {}),
     mode: args.mode,
     ...(args.ticket ? { ticketId: args.ticket } : {}),
   });
@@ -163,9 +180,13 @@ async function main(): Promise<void> {
   // ticket. Multi-epic plans (the norm) file all of their stories, not just the first epic's.
   if (args.fileToMultica) {
     if (!args.ticket) throw new Error("--file-to-multica requires --ticket (the parent to link sub-issues under)");
-    const filed = fileAllStoriesToMultica(args.ticket, result.epics, args.project ? { project: args.project } : {});
+    const filed = fileAllStoriesToMultica(args.ticket, result.epics, {
+      ...(args.project ? { project: args.project } : {}),
+      ...(targetRepoSlug ? { targetRepo: targetRepoSlug } : {}),
+    });
     report.filed_stories = filed.filed;
     report.file_errors = filed.errors;
+    report.target_repo = targetRepoSlug ?? targetRepoPath ?? null;
   }
 
   emit(

@@ -5,7 +5,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { __setDriverForTest } from "./kickoff-engine.ts";
@@ -209,6 +209,47 @@ test("fileStoriesToMultica: files into the SEED ticket's project (not the CLI de
     assert.equal(meta![meta!.indexOf("--value") + 1], "ISSUE-1");
     // s1 has no deps -> no metadata call for it (only one metadata set total).
     assert.equal(calls.filter((a) => a[1] === "metadata").length, 1);
+  } finally {
+    __setMulticaRunnerForTest(prev);
+  }
+});
+
+test("fileStoriesToMultica: stamps opts.targetRepo onto each child story (description + metadata)", () => {
+  const calls: string[][] = [];
+  const descs: Record<string, string> = {};
+  const prev = __setMulticaRunnerForTest((args: string[]) => {
+    calls.push(args);
+    if (args[0] === "issue" && args[1] === "get") return { id: "SEED", project_id: "proj" };
+    if (args[0] === "issue" && args[1] === "create") {
+      // capture the description file contents the create was given
+      const df = args[args.indexOf("--description-file") + 1];
+      if (df) { try { descs[df] = readFileSync(df, "utf8"); } catch {} }
+      const title = String(args[args.indexOf("--title") + 1] ?? "");
+      return { id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" };
+    }
+    if (args[0] === "issue" && args[1] === "metadata") return { ok: true };
+    return null;
+  });
+  try {
+    const epic = {
+      epic_id: "e1",
+      stories: [
+        { id: "s1", content: "id: s1\ntitle: First\ndepends_on: []\n" },
+        { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: []\n" },
+      ],
+    } as any;
+    const r = fileStoriesToMultica("SEED", epic, { targetRepo: "mdostal/cron-maker" });
+    assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+
+    // Every filed story's DESCRIPTION carried the build-lane target_repo signal.
+    const bodies = Object.values(descs);
+    assert.equal(bodies.length, 2);
+    for (const b of bodies) assert.match(b, /target_repo:\s*mdostal\/cron-maker/, `desc must carry target_repo: ${b}`);
+
+    // And each was ALSO set as ticket metadata target_repo (build lane's secondary signal).
+    const metaSets = calls.filter((a) => a[1] === "metadata" && a[2] === "set" && a[a.indexOf("--key") + 1] === "target_repo");
+    assert.equal(metaSets.length, 2, "one target_repo metadata set per filed story");
+    for (const m of metaSets) assert.equal(m[m.indexOf("--value") + 1], "mdostal/cron-maker");
   } finally {
     __setMulticaRunnerForTest(prev);
   }

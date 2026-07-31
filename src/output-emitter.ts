@@ -312,7 +312,18 @@ export function commitAndPushPlan(
   if (pushed.code !== 0) {
     return { committed: true, pushed: false, branch, reason: `committed, push failed: ${pushed.stderr.trim()}` };
   }
-  return { committed: true, pushed: true, branch, reason: `plan committed + pushed to origin/${branch}` };
+  // Gate-2: also land the plan bundle on the target repo's `dev` branch, which is where the build
+  // lane checks out to find a committed .pHive/epics/<epic> plan. The run branch was cut from dev,
+  // so HEAD is dev + this one plan commit and fast-forwards cleanly. Best-effort + NEVER force: if
+  // dev moved on origin since the worktree was cut this is skipped and reported, and the plan is
+  // still durably pushed on the run branch above.
+  const devPush =
+    branch === "dev"
+      ? { code: 0, stdout: "", stderr: "" }
+      : gitCapture(cwd, ["push", "origin", "HEAD:refs/heads/dev"]);
+  const devNote =
+    devPush.code === 0 ? "; plan landed on dev for the build lane" : `; dev fast-forward skipped: ${devPush.stderr.trim()}`;
+  return { committed: true, pushed: true, branch, reason: `plan committed + pushed to origin/${branch}${devNote}` };
 }
 
 // Called by kickoff-engine.ts after every drive/resume call, before appending a new pending

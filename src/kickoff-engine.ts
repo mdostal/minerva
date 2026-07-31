@@ -43,14 +43,26 @@ export function __setDriverForTest(d: Driver): Driver {
   return prev;
 }
 
-// Test seam: swap the real `/plugin-hive:kickoff {idea}` prompt for a cheap synthetic one so
-// the automated suite doesn't drive a full real kickoff (slow, costly, many gates) on every
-// run. The spawn/resume MECHANISM is identical either way -- only prompt content differs. The
-// real prompt is exercised by manual confirmation (see this story's review notes), and by the
-// Risk-A spike this engine directly reuses (docs/spike-plugin-hive-drivability-findings.md).
+// Build the initial headless drive prompt. This must PLAN (decompose), never IMPLEMENT: it
+// drives plugin-hive's `/plugin-hive:plan` DECOMPOSE skill, which writes an epic +
+// dependency-tracked stories into `.pHive/epics/<id>/` -- the filesystem fact
+// checkAndMarkComplete keys completion off. The previous `/plugin-hive:kickoff` prompt, under
+// the auto-answer loop, drove kickoff's build path: it wrote+committed the feature itself and
+// never emitted an epic manifest, so findCompletedEpics stayed empty, the run never marked
+// complete, and it parked at waiting_on_human (epic_count:0) -- the plan->commit->push->file
+// seam downstream never fired. Headless-safe flags: `--skip-sign-off` drops the user-facing
+// sign-off gates; `--lite` drops the collaborative review gate + structured outline (keeps the
+// design-discussion artifact). Any residual routine gate is still auto-answered by the
+// pre-baked-defaults loop.
+//
+// Test seam: MINERVA_TEST_DRIVE_PROMPT swaps this real skill prompt for a cheap synthetic one so
+// the automated suite doesn't drive a full real plan (slow, costly, many gates) on every run.
+// The spawn/resume MECHANISM is identical either way -- only prompt content differs.
 function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
   const override = process.env.MINERVA_TEST_DRIVE_PROMPT;
-  const base = override ? override.replace(/\{idea\}/g, idea) : `/plugin-hive:kickoff ${idea}`;
+  const base = override
+    ? override.replace(/\{idea\}/g, idea)
+    : `/plugin-hive:plan ${idea} --skip-sign-off --lite`;
   // Append any operator-configured suffix (e.g. an explicit "skip the sign-off gate"
   // instruction). Empty string when unset -> prompt is byte-identical to before.
   return base + drivePromptSuffix(defaults);

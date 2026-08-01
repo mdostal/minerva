@@ -21,7 +21,7 @@ import { getRunStatus, readRunRecord, type Question } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
 import type { CompletedEpic } from "./output-emitter.ts";
 import type { PlanDefaultsMode } from "./plan-defaults.ts";
-import { parseTargetRepoLine, stampTargetRepo } from "./target-repo-signal.ts";
+import { parseTargetRepoLine, stampTargetRepo, deriveRepoSlugFromWorkspace } from "./target-repo-signal.ts";
 
 export interface PlanRequest {
   idea: string;
@@ -153,7 +153,7 @@ export interface FiledStory {
 export function fileStoriesToMultica(
   ticketId: string,
   epic: CompletedEpic,
-  opts: { project?: string; targetRepo?: string } = {},
+  opts: { project?: string; targetRepo?: string; workspacePath?: string } = {},
 ): { filed: FiledStory[]; errors: Array<{ story_id: string; error: string }> } {
   const filed: FiledStory[] = [];
   const errors: Array<{ story_id: string; error: string }> = [];
@@ -179,6 +179,13 @@ export function fileStoriesToMultica(
     }
   }
 
+  // Guarantee a build target for EVERY child story: the seed's explicitly-resolved target repo
+  // (opts.targetRepo) when known, else derive it from the run WORKSPACE's own git origin remote —
+  // the repo the plan actually ran against. This closes the gap where a seed that never declared an
+  // explicit target_repo (greenfield/god-scoped resolution happened inside kickoff, not at the CLI)
+  // left opts.targetRepo null, so stampTargetRepo no-op'd and children shipped with no target_repo.
+  const effectiveTargetRepo =
+    opts.targetRepo ?? (opts.workspacePath ? deriveRepoSlugFromWorkspace(opts.workspacePath) : null);
   const tmp = mkdtempSync(join(tmpdir(), "minerva-story-"));
   // story_id -> created issue_id, and story_id -> its declared depends_on, tracked across the
   // whole epic so the dependency graph can be wired AFTER every sibling exists (a dependency may
@@ -192,7 +199,7 @@ export function fileStoriesToMultica(
       // Stamp the seed's target repo onto every child story description (Gate-2), so the build
       // lane resolves the SAME repo for the decomposed work it resolved for the seed. Without this
       // a child story carries no target_repo and the build lane cannot resolve where to build it.
-      const stampedDescription = stampTargetRepo(description, opts.targetRepo ?? null);
+      const stampedDescription = stampTargetRepo(description, effectiveTargetRepo);
       const descFile = join(tmp, `${story.id}.txt`);
       writeFileSync(descFile, stampedDescription);
       const args = [
@@ -219,11 +226,11 @@ export function fileStoriesToMultica(
         if (issueId) idByStory.set(story.id, issueId);
         // Also carry the target repo as ticket metadata (the build lane's secondary signal), best-
         // effort — the description line above is the primary, CLI-readable signal.
-        if (issueId && opts.targetRepo) {
+        if (issueId && effectiveTargetRepo) {
           try {
             multicaJson([
               "issue", "metadata", "set", issueId,
-              "--key", "target_repo", "--value", opts.targetRepo, "--type", "string", "--output", "json",
+              "--key", "target_repo", "--value", effectiveTargetRepo, "--type", "string", "--output", "json",
             ]);
           } catch (e) {
             errors.push({ story_id: story.id, error: `target_repo metadata: ${e instanceof Error ? e.message : String(e)}` });
@@ -280,7 +287,7 @@ export function fileStoriesToMultica(
 export function fileAllStoriesToMultica(
   ticketId: string,
   epics: CompletedEpic[],
-  opts: { project?: string; targetRepo?: string } = {},
+  opts: { project?: string; targetRepo?: string; workspacePath?: string } = {},
 ): { filed: Array<FiledStory & { epic_id: string }>; errors: Array<{ story_id: string; epic_id: string; error: string }> } {
   const filed: Array<FiledStory & { epic_id: string }> = [];
   const errors: Array<{ story_id: string; epic_id: string; error: string }> = [];

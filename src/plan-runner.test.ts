@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { __setDriverForTest } from "./kickoff-engine.ts";
 import {
   runHeadlessPlan,
@@ -252,6 +253,55 @@ test("fileStoriesToMultica: stamps opts.targetRepo onto each child story (descri
     for (const m of metaSets) assert.equal(m[m.indexOf("--value") + 1], "mdostal/cron-maker");
   } finally {
     __setMulticaRunnerForTest(prev);
+  }
+});
+
+test("fileStoriesToMultica: falls back to the WORKSPACE origin remote for target_repo when none is declared", () => {
+  // A seed that never declared an explicit target_repo still plans inside a real run workspace whose
+  // git origin IS the build target. Every child story must carry that workspace-derived target_repo,
+  // so the build lane never blocks with "missing target_repo" (the regression this closes forward).
+  const gitRepo = mkdtempSync(join(tmpdir(), "minerva-ws-origin-"));
+  execFileSync("git", ["-C", gitRepo, "init", "-q"]);
+  execFileSync("git", ["-C", gitRepo, "remote", "add", "origin", "git@github.com:mdostal/janus.git"]);
+
+  const descs: Record<string, string> = {};
+  const calls: string[][] = [];
+  const prev = __setMulticaRunnerForTest((args: string[]) => {
+    calls.push(args);
+    if (args[0] === "issue" && args[1] === "get") return { id: "SEED", project_id: "proj" };
+    if (args[0] === "issue" && args[1] === "create") {
+      const df = args[args.indexOf("--description-file") + 1];
+      if (df) { try { descs[df] = readFileSync(df, "utf8"); } catch {} }
+      const title = String(args[args.indexOf("--title") + 1] ?? "");
+      return { id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" };
+    }
+    if (args[0] === "issue" && args[1] === "metadata") return { ok: true };
+    return null;
+  });
+  try {
+    const epic = {
+      epic_id: "e1",
+      stories: [
+        { id: "s1", content: "id: s1\ntitle: First\ndepends_on: []\n" },
+        { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: []\n" },
+      ],
+    } as any;
+    // NOTE: no opts.targetRepo is passed — only the run workspace path.
+    const r = fileStoriesToMultica("SEED", epic, { workspacePath: gitRepo });
+    assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+
+    const bodies = Object.values(descs);
+    assert.equal(bodies.length, 2, "both child stories filed");
+    for (const b of bodies) {
+      assert.match(b, /target_repo:\s*mdostal\/janus/, `child story must carry workspace-derived target_repo: ${b}`);
+    }
+    // Also carried as ticket metadata (the build lane's secondary signal).
+    const metaSets = calls.filter((a) => a[1] === "metadata" && a[2] === "set" && a[a.indexOf("--key") + 1] === "target_repo");
+    assert.equal(metaSets.length, 2, "one target_repo metadata set per filed story");
+    for (const m of metaSets) assert.equal(m[m.indexOf("--value") + 1], "mdostal/janus");
+  } finally {
+    __setMulticaRunnerForTest(prev);
+    rmSync(gitRepo, { recursive: true, force: true });
   }
 });
 

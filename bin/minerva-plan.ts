@@ -21,7 +21,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runHeadlessPlan, resolveIdeaFromTicket, fileAllStoriesToMultica } from "../src/plan-runner.ts";
-import { resolveLocalCheckout } from "../src/target-repo-signal.ts";
+import { resolveLocalCheckout, deriveRepoSlugFromWorkspace } from "../src/target-repo-signal.ts";
 import type { PlanDefaultsMode } from "../src/plan-defaults.ts";
 
 interface Args {
@@ -183,10 +183,14 @@ async function main(): Promise<void> {
     const filed = fileAllStoriesToMultica(args.ticket, result.epics, {
       ...(args.project ? { project: args.project } : {}),
       ...(targetRepoSlug ? { targetRepo: targetRepoSlug } : {}),
+      // The run workspace's own origin remote is the guaranteed fallback build target, so every
+      // filed child story carries target_repo even when the seed declared none explicitly.
+      workspacePath: result.workspace_path,
     });
     report.filed_stories = filed.filed;
     report.file_errors = filed.errors;
-    report.target_repo = targetRepoSlug ?? targetRepoPath ?? null;
+    report.target_repo =
+      targetRepoSlug ?? deriveRepoSlugFromWorkspace(result.workspace_path) ?? targetRepoPath ?? null;
   }
 
   emit(

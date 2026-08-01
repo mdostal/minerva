@@ -51,6 +51,7 @@ function parseArgs(argv) {
     else if (k === '--attach') a.attach.push(next());
     else if (k === '--item') a.item = next();
     else if (k === '--resume') a.resume = true;
+    else if (k === '--scan') a.scan = true;
     else if (k === '--refile-existing') a.refileExisting = true;
     else if (k === '--decompose') a.decompose = true;
     else if (k === '--no-commit') a.noCommit = true;
@@ -63,7 +64,9 @@ function parseArgs(argv) {
 }
 
 const die = (msg) => { console.error(`ideate-to-consus: ${msg}`); process.exit(1); };
-const log = (...m) => console.log('[ideate]', ...m);
+// Diagnostics go to STDERR so STDOUT carries ONLY the final JSON result (clean for the autopilot
+// agent + any caller to parse).
+const log = (...m) => console.error('[ideate]', ...m);
 
 /* ------------------------------ multica ---------------------------------- */
 function multicaBin() {
@@ -419,63 +422,166 @@ function extractHumanInput(item) {
   return { text: parts.join('\n'), hasInput: parts.length > 0, signedOff };
 }
 
+// A stable signature of the human's per-question answers — the IDEMPOTENCY key. Auto-resume fires
+// once per distinct answer-set: when Mathew adds/edits/deletes an answer the signature changes and a
+// new iterate fires; if nothing changed since the last resume, the scanner skips (no double-resume).
+// Built ONLY from human messages (agent replies/iterations never change it), so the agent's own
+// re-file doesn't re-trigger itself.
+function answerSignature(item) {
+  const parts = [];
+  const threads = (item && item.threads && typeof item.threads === 'object') ? item.threads : {};
+  for (const [qid, thread] of Object.entries(threads)) {
+    for (const m of (Array.isArray(thread) ? thread : [])) {
+      if (m && m.role === 'human' && String(m.text || '').trim()) parts.push(`${qid}${m.text}${m.editedAt || m.ts || ''}`);
+    }
+  }
+  if (!parts.length && item && item.answers && typeof item.answers === 'object') {
+    for (const [qid, a] of Object.entries(item.answers)) { const v = a && a.value; if (v && String(v).trim()) parts.push(`${qid}${v}`); }
+  }
+  if (!parts.length) return null;
+  const s = parts.sort().join('');
+  let h = 0; for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return `${parts.length}:${(h >>> 0).toString(36)}`;
+}
+function countAnswered(item) {
+  const threads = (item && item.threads) || {};
+  return (item && Array.isArray(item.questions) ? item.questions : []).filter((q) => {
+    const t = threads[String(q.id)];
+    return Array.isArray(t) && t.some((m) => m.role === 'human' && String(m.text || '').trim());
+  }).length;
+}
+
+// Reconstruct the ideation attachments from the workdir PATHS (the adapter re-reads them on render).
+// We pass paths, not the enriched blobs from the read, so we never persist inlined HTML/markdown back.
+function ideationAttachments(workdir) {
+  const at = [];
+  const mmd = existsSync(join(workdir, 'flow.mmd')) ? readFileSync(join(workdir, 'flow.mmd'), 'utf8').trim() : '';
+  if (existsSync(join(workdir, 'wireframe.html'))) at.push({ id: 'wireframe', label: 'wireframe.html', kind: 'wireframe', path: join(workdir, 'wireframe.html') });
+  if (existsSync(join(workdir, 'prd.md'))) at.push({ id: 'prd', label: 'PRD.md', kind: 'prd', path: join(workdir, 'prd.md') });
+  if (mmd) at.push({ id: 'diagram', label: 'flow.mermaid', kind: 'diagram', diagram: { kind: 'mermaid', code: mmd } });
+  if (existsSync(join(workdir, 'design-discussion.md'))) at.push({ id: 'design', label: 'design-discussion.md', path: join(workdir, 'design-discussion.md') });
+  if (existsSync(join(workdir, 'what-changed.md'))) at.push({ id: 'whatchanged', label: 'what-i-did.md', path: join(workdir, 'what-changed.md') });
+  if (existsSync(join(workdir, 'open-questions.md'))) at.push({ id: 'questions', label: 'open-questions.md', path: join(workdir, 'open-questions.md') });
+  return at;
+}
+
+// Resume ONE ideation survey on the human's answers — the conversational iterate. CONSERVATIVE by
+// design so his input is untouchable: it KEEPS the same questions (his answers stay attached via the
+// store's merge), regenerates the wireframe/PRD to fold in his answers, adds an agent "here's what I
+// did with your answers" note, and stamps the idempotency signature. HONEST: if the planner is
+// unreachable it records that (never fakes an iterate) and still stamps the sig so it doesn't loop —
+// Mathew edits/adds an answer (new sig) to trigger another attempt. NEVER decomposes here (that is a
+// separate, gated step). Returns a result summary.
+export async function resumeOne(a, item, { sig } = {}) {
+  const dp = (item && item.decision_payload) || {};
+  const slug = dp.slug || String(item.id).replace(/^ideation:/, '');
+  const workdir = dp.workdir || join(a.repo, 'docs', 'ideation', slug);
+  const answerSig = sig || answerSignature(item);
+  const human = extractHumanInput(item);
+  if (!human.hasInput) return { item: item.id, resumed: false, reason: 'no human answers yet (waiting)' };
+  mkdirSync(workdir, { recursive: true });
+
+  // CLAIM the answer-set up front (set the idempotency marker BEFORE the heavy planner) so a second
+  // autopilot run that overlaps this one sees the marker and SKIPS — no concurrent double-resume. The
+  // merge preserves his answers. If the planner later fails, the marker stays (no retry loop); he
+  // edits/adds an answer (new sig) to trigger another pass. Best-effort — a claim failure doesn't
+  // block the iterate.
+  try {
+    await janusPost(a.janus, 'decision.file', {
+      id: item.id, source: 'agent', type: 'survey', title: item.title,
+      kicker: 'IDEATION · ITERATING…', summary: `Auto-resume in progress — folding your answers into the design (${countAnswered(item)}/${(item.questions || []).length} answered).`,
+      questions: item.questions, attachments: ideationAttachments(workdir), recommended: dp.recommended,
+      decision_payload: { ...dp, autoResumedSig: answerSig, claimedAt: new Date().toISOString() },
+    });
+  } catch (e) { log('claim write failed (continuing):', String(e.message || e).slice(0, 120)); }
+
+  // 1. Planner: fold his answers into the artifacts; write what-changed.md. DO NOT touch questions.json
+  //    (his answers are keyed to those question ids).
+  const prevPrd = existsSync(join(workdir, 'prd.md')) ? readFileSync(join(workdir, 'prd.md'), 'utf8') : '(none)';
+  const prompt = `You are Minerva iterating the Consus ideation loop for "${item.title}". Mathew ANSWERED the survey — fold his answers into the DESIGN. UPDATE these files in ${workdir}: prd.md, wireframe.html, flow.mmd (reflect his decisions). Then WRITE what-changed.md — a short "Here's what I did with your answers" (3-8 bullets) plus any questions that are still genuinely open. Do NOT modify questions.json (his answers are attached to those question ids). Do NOT decompose into tickets.
+
+HIS ANSWERS (per question):
+${human.text}
+
+PREVIOUS PRD (reference):
+${prevPrd.slice(0, 16000)}
+
+Write the updated files now, then print one line.`;
+  let plannerOk = false; let whatChanged = '';
+  if (!a.dryRun) {
+    const plan = await runPlanner({ prompt, cwd: workdir, model: a.model });
+    plannerOk = !!plan.ok;
+    if (!plannerOk) log(`resumeOne(${item.id}): planner unreachable — ${plan.reason || plan.code} (recording honestly)`);
+    whatChanged = existsSync(join(workdir, 'what-changed.md')) ? readFileSync(join(workdir, 'what-changed.md'), 'utf8') : '';
+  }
+
+  const answered = countAnswered(item);
+  const total = Array.isArray(item.questions) ? item.questions.length : 0;
+  const allAnswered = total > 0 && answered >= total;
+
+  // 2. Re-file as a SURVEY, KEEPING the same questions (the store MERGE preserves his answers/threads);
+  //    refresh attachments + summary + the idempotency marker.
+  const summary = `Auto-resumed on your answers (${answered}/${total} answered). ` +
+    (plannerOk ? 'I folded your input into the wireframe + PRD (see "what I did" below and the updated attachments).'
+               : '(The planner was unreachable this pass — nothing was faked; your answers are safe. Edit or add an answer to trigger another pass.)') + ' ' +
+    (allAnswered ? 'All questions answered — review the updated artifacts, then reply/edit to refine or say the word to build.'
+                 : 'Keep answering the remaining questions — I iterate each time you do.');
+  const refiled = await janusPost(a.janus, 'decision.file', {
+    id: item.id, source: 'agent', type: 'survey',
+    kicker: allAnswered ? 'IDEATION · READY FOR SIGN-OFF' : 'IDEATION · UPDATED · KEEP ANSWERING',
+    title: item.title, summary,
+    questions: item.questions,               // SAME questions → his answers stay attached (merge)
+    attachments: ideationAttachments(workdir),
+    recommended: dp.recommended,
+    decision_payload: { ...dp, autoResumedSig: answerSig, iterated_at: new Date().toISOString(), plannerOk },
+  });
+
+  // 3. Agent note — "here's what I did with your answers" (honest if the planner failed).
+  const note = plannerOk
+    ? `Auto-resume: I folded your answers into the design and updated the wireframe + PRD.${whatChanged ? '\n\nWhat I did:\n' + whatChanged.slice(0, 1400) : ''}\n\nEdit any answer or add more, and I'll iterate again.`
+    : `Auto-resume tried to iterate on your answers but the planner was unreachable this pass — recorded honestly (no faked changes). Your answers are safe. Add or edit an answer and I'll try again.`;
+  try { await janusPost(a.janus, 'discuss', { itemId: item.id, actor: 'minerva@auto-resume', text: note }); } catch (e) { log('discuss note failed:', String(e.message || e).slice(0, 120)); }
+
+  if (!a.noCommit && plannerOk) gitCommitPush(a.repo, [join('docs', 'ideation', slug)], `docs(ideation): ${slug} — auto-resume iterate on answers\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`);
+  return { item: item.id, resumed: true, plannerOk, version: refiled.version, answered, total, allAnswered };
+}
+
+// Single-item resume (hand invocation / testing): --resume --item <id>.
 async function doResume(a) {
   if (!a.item) die('--resume needs --item <id> (e.g. ideation:pan-6965)');
   const decisions = await janusReadDecisions(a.janus);
   const item = decisions.find((d) => d.id === a.item);
   if (!item) die(`item "${a.item}" not found in Consus (filed yet?)`);
   const human = extractHumanInput(item);
-  if (!human.hasInput) { log('no human answers yet — nothing to iterate. The loop is correctly WAITING (not grinding to build).'); console.log(JSON.stringify({ ok: true, mode: 'resume', waiting: true, item: a.item }, null, 2)); return; }
-
+  if (!human.hasInput) { log('no human answers yet — the loop is correctly WAITING (not grinding to build).'); console.log(JSON.stringify({ ok: true, mode: 'resume', waiting: true, item: a.item }, null, 2)); return; }
   log('human input detected:\n' + human.text);
-  const dp = item.decision_payload || {};
-  const slug = dp.slug || String(a.item).replace(/^ideation:/, '');
-  const workdir = dp.workdir || join(a.repo, 'docs', 'ideation', slug);
+  const r = await resumeOne(a, item, {});
+  console.log(JSON.stringify({ ok: true, mode: 'resume', ...r }, null, 2));
+}
 
-  // SIGN-OFF → hand to build (decompose via Minerva), never before.
-  if (human.signedOff && dp.ticket) {
-    log(`human SIGNED OFF (chose "${item.decided.choice}"). Handing to build.`);
-    if (a.decompose) {
-      const planBin = join(a.repo, 'bin', 'minerva-plan.ts');
-      log(`decomposing: minerva-plan --ticket ${dp.ticket} --file-to-multica  (run this to route to build via Auriga)`);
-      // We print the command rather than force-run to keep this reversible; pass --decompose to run.
-      try {
-        const out = execFileSync('npx', ['tsx', planBin, '--ticket', dp.ticket, '--file-to-multica'], { cwd: a.repo, encoding: 'utf8', timeout: 300000, env: { ...process.env, PATH: `/opt/homebrew/bin:${HOME}/.local/bin:${process.env.PATH || ''}` } });
-        log('decompose output:\n' + out.slice(-1000));
-      } catch (e) { log('decompose invocation failed (run manually): ' + String(e.message || e).slice(0, 300)); }
-    }
-    console.log(JSON.stringify({ ok: true, mode: 'resume', signedOff: true, ticket: dp.ticket, decompose: !!a.decompose }, null, 2));
-    return;
+// SCAN — the AUTOPILOT's action. Polls Consus for ideation surveys with NEW human answers (signature
+// changed since the last resume) and iterates each. Idempotent (the signature marker), resilient
+// (per-item try/catch; honest awaiting-reply on planner failure), and SCOPED: only `ideation` surveys
+// are touched — Mathew's fired `[idea]` intake tickets are NOT here and are never auto-decomposed.
+async function doScan(a) {
+  const decisions = await janusReadDecisions(a.janus);
+  const candidates = decisions.filter((it) => it && it.type === 'survey' && it.decision_payload && it.decision_payload.kind === 'ideation');
+  log(`scan: ${candidates.length} ideation survey(s) on the surface`);
+  const results = [];
+  for (const item of candidates) {
+    const sig = answerSignature(item);
+    if (!sig) { results.push({ item: item.id, action: 'wait', reason: 'no human answers yet' }); continue; }
+    const marker = item.decision_payload && item.decision_payload.autoResumedSig;
+    if (marker === sig) { results.push({ item: item.id, action: 'skip', reason: 'already resumed for these answers (idempotent)' }); continue; }
+    // --dry-run is strictly READ-ONLY: report what WOULD resume, mutate NOTHING (never touches items).
+    if (a.dryRun) { results.push({ item: item.id, action: 'would-resume', answered: countAnswered(item), total: (item.questions || []).length }); continue; }
+    log(`scan: AUTO-RESUME ${item.id} — answers changed (sig ${sig} != marker ${marker || '∅'})`);
+    try { const r = await resumeOne(a, item, { sig }); results.push({ item: item.id, action: 'resumed', ...r }); }
+    catch (e) { results.push({ item: item.id, action: 'error', error: String((e && e.message) || e).slice(0, 200) }); }
   }
-
-  // Otherwise ITERATE: re-run the planner WITH the human's answers as new context; re-file (bump).
-  mkdirSync(workdir, { recursive: true });
-  const prevPrd = existsSync(join(workdir, 'prd.md')) ? readFileSync(join(workdir, 'prd.md'), 'utf8') : '(none)';
-  const prompt = `You are Minerva iterating the ideation loop for "${item.title}". The human has ANSWERED your open questions. Incorporate their answers, UPDATE the artifacts in ${workdir} (design-discussion.md, prd.md, wireframe.html, flow.mmd), and rewrite questions.json with any REMAINING open questions (empty open_questions array if all resolved and you now recommend proceeding).\n\nHUMAN ANSWERS:\n${human.text}\n\nPREVIOUS PRD (for reference):\n${prevPrd.slice(0, 20000)}\n\nWrite the updated files now. Do not decompose to tickets. Print a one-line confirmation.`;
-  log('iterating with the planner given the human answers…');
-  if (a.dryRun) { log('dry-run: skipping planner'); return; }
-  const plan = await runPlanner({ prompt, cwd: workdir, model: a.model });
-  if (!plan.ok) log(`planner iterate returned: ${plan.reason || plan.code} (using whatever files exist).`);
-
-  // Re-file (same id → version bump), refreshed questions + a durable note of what changed.
-  let questions = null;
-  try { questions = JSON.parse(readFileSync(join(workdir, 'questions.json'), 'utf8').replace(/^```json\s*|\s*```$/g, '')); } catch {}
-  const nq = questions && Array.isArray(questions.open_questions) ? questions.open_questions.length : 0;
-  if (!a.noCommit) gitCommitPush(a.repo, [join('docs', 'ideation', slug)], `docs(ideation): ${slug} — iterate on human answers (${nq} open question(s) remain)\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`);
-
-  // append an agent message so the human sees the iteration in the thread
-  try { await janusPost(a.janus, 'discuss', { itemId: a.item, actor: 'minerva@ideation', text: `Iterated on your answers. ${nq === 0 ? 'All questions resolved — ready for your sign-off to build.' : nq + ' question(s) remain; wireframe + PRD updated.'}` }); } catch (e) { log('discuss append failed:', String(e.message || e).slice(0, 160)); }
-
-  const refiled = await janusPost(a.janus, 'decision.file', {
-    id: a.item, type: 'choose', kicker: nq ? 'IDEATION · UPDATED · NEEDS YOUR ANSWERS' : 'IDEATION · READY FOR SIGN-OFF',
-    title: item.title, summary: `${questions && questions.summary ? questions.summary + ' ' : ''}${nq ? nq + ' open question(s) remain after your answers. Updated wireframe + PRD attached.' : 'All questions resolved. Review the updated wireframe + PRD and sign off to hand to build.'}`,
-    options: nq ? (questions.interpretations || []).map((o) => ({ id: o.id, title: o.title, note: o.note })) : [{ id: 'build', title: 'Sign off → build', note: 'decompose + route to Auriga' }, { id: 'discuss', title: 'More changes', note: 'keep iterating' }],
-    recommended: questions && questions.recommended, composeHybrid: true,
-    attachments: item.attachments, // paths re-read fresh by the adapter on render
-    decision_payload: { ...(item.decision_payload || {}), open_questions: (questions && questions.open_questions) || [], iterated_at: new Date().toISOString() },
-  });
-  log(`RE-FILED: id=${refiled.id} version=${refiled.version} (${nq} open questions remain)`);
-  console.log(JSON.stringify({ ok: true, mode: 'resume', iterated: true, item: a.item, openQuestionsRemaining: nq }, null, 2));
+  const resumed = results.filter((r) => r.action === 'resumed').length;
+  log(`scan done: ${resumed} resumed, ${results.length - resumed} skipped/waiting`);
+  console.log(JSON.stringify({ ok: true, mode: 'scan', scanned: candidates.length, resumed, results }, null, 2));
 }
 
 /* ========================= REFILE-EXISTING ============================== */
@@ -510,7 +616,8 @@ async function doRefileExisting(a) {
 (async () => {
   const a = parseArgs(process.argv.slice(2));
   try {
-    if (a.refileExisting) await doRefileExisting(a);
+    if (a.scan) await doScan(a);
+    else if (a.refileExisting) await doRefileExisting(a);
     else if (a.resume) await doResume(a);
     else await doFile(a);
   } catch (e) {

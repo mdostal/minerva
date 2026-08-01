@@ -1,25 +1,26 @@
 # What Changed Based on Your Answers
 
-## Changes Made
+## Updates Made
 
-- **Priority:** Bumped to SUPER HIGH — immediately following end-to-end workflow completion. Added explicit note: critical for fixing context usage and enabling continuity (agents currently "go full amnesiac").
+- **Multi-phase strategy:** Restructured as a **phased, multi-backend approach**. Phase 1 MVP = pre/post hooks wrapping Hive's existing file-based memory (extends Claude Code auto-memory + SQLite). Phase 2+ adds Qdrant, CodeGraph, and document-section indexing. Phases 3-5 add short-term/long-term split, role-scoped memory, and Sandman cleanup.
 
-- **Memory Injection Strategy:** Clarified Phase 1 approach is a **mix** of direct context injection + on-demand tool lookup + bubble-up to orchestrator layers. Agent has tools to request context, not just passive injection. Memory status (in-progress/reviewed/full-send) is AWARE when bubbling upstream.
+- **Memory injection strategy:** Changed to a **hybrid mix**: some memories injected directly into context, some available via tool lookup, with bubble-up to orchestrator layers when agents need more context mid-task. Agent has tools to request context, not just passive injection.
 
-- **CodeGraph Integration:** Added reference architecture (https://github.com/mdostal/swarm-memory + https://www.falkordb.com/blog/code-graph/). **Requires CBA/comparison document with options presented in Consus console for approval before Phase 2 implementation.** New risk added to track this.
+- **Document-section granularity (Phase 2):** Move from full-file loading (acknowledged as inefficient — "Claude's shit ass memory just feeds full files") to **line-range-scoped sections** (e.g., "lines 100-120 of CLAUDE.md"). Pre-hook injects only relevant sections; agent can request more via tool.
 
-- **Qdrant Reference Architecture:** Added explicit reference to prior ruvflow + Qdrant + hooks system (mdostal.com/blog/35-agent-ai-coding-swarm) as superior to Claude's large file-based memory.
+- **Short-term vs. long-term memory (Phase 3):** Added temporal memory separation. Short-term = in-progress work (visible as high-level summaries to other agents). Long-term = only promoted when PR is fully approved. Post-PR approval hook triggers promotion.
 
-- **Migration Strategy:** Phase 1 now **extends** Claude Code auto-memory (not replaces). Hive wrappers + SQLite on top. Phase 2 improves/replaces with Qdrant. Acknowledged Claude's system is inferior to prior architecture.
+- **Role-scoped memory layers (Phase 4):** Orchestrator always loads all repo metadata + skills + orchestration options. Architect loads full repo graph + metadata (no individual docs). Dev loads only necessary repo subset + impacted API contracts from graph (not full external codebases).
 
-- **Sandman Agent:** Clarified Sandman is a **separate specialized agent** (not just a post-hook extension) for nightly cleanup. Mixed responsibility model: post-hook handles immediate writes, Sandman handles long-term curation.
+- **CodeGraph integration (Phase 2):** Added requirement for **deep CBA and comparison** of CodeGraph systems (swarm-memory reference at https://github.com/mdostal/swarm-memory, FalkorDB at https://www.falkordb.com/blog/code-graph/, others) with detailed breakdown in Consus console for approval before implementation. Tree-sitter AST, call graphs, dependency graphs.
 
-- **Role-Scoped Memory (Phase 4):** Clarified distinction — orchestrator sees all repo metadata + skills + orchestration toggles; architect sees full repo graph + metadata (not individual docs); dev sees only necessary subset + impacted API contracts (knows other codebases call their APIs, but not what those codebases are/do).
+- **Qdrant reference architecture:** Added explicit reference to prior ruvflow + Qdrant + hooks system (https://mdostal.com/blog/35-agent-ai-coding-swarm) as superior baseline to Claude Code's large file-based memory.
 
-- **Auto-Save Triggers:** Added interval-based auto-save (not just on agent stop/completion). Short-term/long-term split: short-term visible as high-level summaries to other agents; long-term only promoted when PR fully approved.
+- **Sandman cleanup agent (Phase 5):** Named specialized agent to run **nightly memory curation** — identifies duplicate/stale/low-value memories and archives/deletes them. Post-hook handles immediate writes; Sandman handles long-term cleanup.
+
+- **Priority escalation:** Marked as **SUPER HIGH** priority — must follow end-to-end workflow completion to immediately fix context usage and enable agent continuity. Agents currently "go full amnesiac" between sessions, blocking effective work continuation.
 
 ## Open Questions
 
-**You mentioned a LONG answer was submitted multiple times but went missing.** I don't have access to that content. If it's still relevant, please paste it or point me to where it's stored (memory file, discussion thread, etc.) so I can fold it in.
-
-All other answers have been incorporated into the PRD, wireframe (added role filter + status tags), and flow diagram (added on-demand lookup, bubble-up, PR-approval promotion).
+**Q: Do you have the LONG answer you mentioned about "mix of all of these" for the overall direction?**  
+You mentioned it was submitted multiple times but went missing. If you still have that answer and there's additional nuance beyond what I've incorporated (5-phase strategy, hybrid injection, role-scoped memory, temporal split, CodeGraph CBA, Qdrant reference, Sandman cleanup), please share it so I can fold in the missing details.

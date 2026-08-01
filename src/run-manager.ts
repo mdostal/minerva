@@ -82,6 +82,21 @@ function runRecordPath(runId: string): string {
   return join(runDir(runId), "run.yaml");
 }
 
+export function defaultSeedRepoPath(): string {
+  return join(homedir(), "repos", "consus-seeds");
+}
+
+function resolveSeedRepo(): string {
+  const seedRepo = process.env.MINERVA_SEED_REPO || defaultSeedRepoPath();
+  if (!existsSync(seedRepo)) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Seed repo does not exist: ${seedRepo}. Set MINERVA_SEED_REPO to a local git repo path, or set up the default with: git clone git@github.com:mdostal/consus-seeds.git ${defaultSeedRepoPath()}`,
+    );
+  }
+  return seedRepo;
+}
+
 function writeRunRecord(record: RunRecord): void {
   mkdirSync(runDir(record.run_id), { recursive: true });
   writeFileSync(runRecordPath(record.run_id), JSON.stringify(record, null, 2));
@@ -143,8 +158,8 @@ export function allocateRun(idea: string, targetRepo: string | undefined): { run
     allocateWorktreeWorkspace(targetRepo, runId, workspacePath);
     workspaceKind = "worktree";
   } else {
-    allocateFreshInitWorkspace(runId, workspacePath);
-    workspaceKind = "fresh_init";
+    allocateWorktreeWorkspace(resolveSeedRepo(), runId, workspacePath);
+    workspaceKind = "worktree";
   }
 
   const statePath = join(workspacePath, ".pHive");

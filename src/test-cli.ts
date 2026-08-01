@@ -2,7 +2,9 @@
 // boundary, per AD-1). Used across every story's tests from run-workspace-allocation on.
 
 import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,4 +33,11 @@ export function call(
 ): { result?: any; error?: any; status: number } {
   const { stdout, status } = runCli(JSON.stringify({ method, params }), env);
   return { ...JSON.parse(stdout), status };
+}
+
+export function createSeedRepo(prefix = "minerva-seed-repo-"): string {
+  const repo = mkdtempSync(join(tmpdir(), prefix));
+  execFileSync("git", ["init", "-q", "-b", "dev", repo]);
+  execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
+  return repo;
 }

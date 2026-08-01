@@ -353,21 +353,22 @@
         <div class="header-meta">
             <span>Project: <strong>minerva</strong></span>
             <span>Brand: <span class="brand-tag">firefly-events</span></span>
+            <span>Role: <span class="brand-tag">architect</span></span>
         </div>
     </header>
 
     <div class="tabs">
         <div class="tab">
-            Session
+            Short-Term
             <span class="tab-badge">8</span>
         </div>
         <div class="tab active">
-            Project
+            Long-Term (Approved)
             <span class="tab-badge">24</span>
         </div>
         <div class="tab">
-            User
-            <span class="tab-badge">157</span>
+            Backends
+            <span class="tab-badge">3</span>
         </div>
     </div>
 
@@ -379,76 +380,79 @@
 
             <div class="filters">
                 <div class="filter-chip active">All</div>
-                <div class="filter-chip">user</div>
-                <div class="filter-chip">feedback</div>
-                <div class="filter-chip">project</div>
-                <div class="filter-chip">reference</div>
+                <div class="filter-chip">file-based</div>
+                <div class="filter-chip">qdrant</div>
+                <div class="filter-chip">codegraph</div>
+                <div class="filter-chip">doc-sections</div>
             </div>
 
             <div class="memory-list">
-                <div class="memory-item">
-                    <div class="memory-item-header">
-                        <div class="memory-item-title">pantheon-architecture</div>
-                        <div class="memory-item-type">project</div>
-                    </div>
-                    <div class="memory-item-desc">
-                        Core Pantheon agents (Minerva, Hermes, Athena) and their orchestration model
-                    </div>
-                    <div class="memory-item-meta">
-                        <span class="meta-tag">brand:pantheon</span>
-                    </div>
-                </div>
-
                 <div class="memory-item active">
                     <div class="memory-item-header">
-                        <div class="memory-item-title">firefly-brand-guidelines</div>
-                        <div class="memory-item-type">reference</div>
+                        <div class="memory-item-title">codegraph-ast-index</div>
+                        <div class="memory-item-type">codegraph</div>
                     </div>
                     <div class="memory-item-desc">
-                        Firefly Events brand voice, color palette, and tone guidelines
+                        Tree-sitter AST, call edges, dependencies (Phase 2)
                     </div>
                     <div class="memory-item-meta">
-                        <span class="meta-tag">brand:firefly-events</span>
-                        <span class="meta-tag">persona:minerva</span>
+                        <span class="meta-tag">backend:codegraph</span>
+                        <span class="meta-tag">phase:2</span>
                     </div>
                 </div>
 
                 <div class="memory-item">
                     <div class="memory-item-header">
-                        <div class="memory-item-title">user-prefers-terse-output</div>
-                        <div class="memory-item-type">feedback</div>
+                        <div class="memory-item-title">qdrant-semantic-search</div>
+                        <div class="memory-item-type">qdrant</div>
                     </div>
                     <div class="memory-item-desc">
-                        User wants concise responses without trailing summaries
+                        Embedding-based memory retrieval for semantic lookup
                     </div>
                     <div class="memory-item-meta">
-                        <span class="meta-tag">updated: 2026-07-28</span>
+                        <span class="meta-tag">backend:qdrant</span>
+                        <span class="meta-tag">phase:2</span>
                     </div>
                 </div>
 
                 <div class="memory-item">
                     <div class="memory-item-header">
-                        <div class="memory-item-title">hive-directory-structure</div>
-                        <div class="memory-item-type">reference</div>
+                        <div class="memory-item-title">doc-section-lines-100-120</div>
+                        <div class="memory-item-type">doc-section</div>
                     </div>
                     <div class="memory-item-desc">
-                        .pHive directory layout: projects, triage, workflows, metrics
+                        CLAUDE.md lines 100-120: memory lifecycle hooks (Phase 2)
                     </div>
                     <div class="memory-item-meta">
-                        <span class="meta-tag">brand:pantheon</span>
+                        <span class="meta-tag">file:CLAUDE.md</span>
+                        <span class="meta-tag">lines:100-120</span>
                     </div>
                 </div>
 
                 <div class="memory-item">
                     <div class="memory-item-header">
-                        <div class="memory-item-title">ruvflow-historical-context</div>
-                        <div class="memory-item-type">project</div>
+                        <div class="memory-item-title">ruvflow-orchestrator-reference</div>
+                        <div class="memory-item-type">file-based</div>
                     </div>
                     <div class="memory-item-desc">
-                        Legacy ruvflow orchestrator used hooks and memory for state continuity
+                        Historical reference: ruvflow + qdrant + hooks (mdostal.com/blog/35-agent-ai-coding-swarm)
                     </div>
                     <div class="memory-item-meta">
-                        <span class="meta-tag">brand:dostal-tech</span>
+                        <span class="meta-tag">status:long-term</span>
+                    </div>
+                </div>
+
+                <div class="memory-item">
+                    <div class="memory-item-header">
+                        <div class="memory-item-title">short-term-pr-in-progress</div>
+                        <div class="memory-item-type">file-based</div>
+                    </div>
+                    <div class="memory-item-desc">
+                        In-progress work on PAN-1234 (promoted to long-term on PR approval)
+                    </div>
+                    <div class="memory-item-meta">
+                        <span class="meta-tag">status:in-progress</span>
+                        <span class="meta-tag">phase:3</span>
                     </div>
                 </div>
             </div>
@@ -456,10 +460,10 @@
 
         <main class="viewer">
             <div class="viewer-header">
-                <div class="viewer-title">firefly-brand-guidelines</div>
+                <div class="viewer-title">codegraph-ast-index</div>
                 <div class="viewer-actions">
-                    <button class="btn">Delete</button>
-                    <button class="btn btn-primary">Edit</button>
+                    <button class="btn">Archive</button>
+                    <button class="btn btn-primary">View Source</button>
                 </div>
             </div>
 
@@ -467,51 +471,51 @@
                 <div class="frontmatter">
                     <div class="frontmatter-row">
                         <div class="frontmatter-label">Name</div>
-                        <div class="frontmatter-value">firefly-brand-guidelines</div>
+                        <div class="frontmatter-value">codegraph-ast-index</div>
                     </div>
                     <div class="frontmatter-row">
                         <div class="frontmatter-label">Description</div>
-                        <div class="frontmatter-value">Firefly Events brand voice, color palette, and tone guidelines</div>
+                        <div class="frontmatter-value">Tree-sitter AST, call edges, dependencies (Phase 2)</div>
                     </div>
                     <div class="frontmatter-row">
-                        <div class="frontmatter-label">Type</div>
-                        <div class="frontmatter-value">reference</div>
+                        <div class="frontmatter-label">Backend</div>
+                        <div class="frontmatter-value">codegraph</div>
                     </div>
                     <div class="frontmatter-row">
-                        <div class="frontmatter-label">Brand</div>
-                        <div class="frontmatter-value">firefly-events</div>
+                        <div class="frontmatter-label">Phase</div>
+                        <div class="frontmatter-value">2</div>
                     </div>
                     <div class="frontmatter-row">
-                        <div class="frontmatter-label">Persona</div>
-                        <div class="frontmatter-value">minerva</div>
+                        <div class="frontmatter-label">Status</div>
+                        <div class="frontmatter-value">long-term (PR-approved)</div>
                     </div>
                     <div class="frontmatter-row">
                         <div class="frontmatter-label">Last Updated</div>
-                        <div class="frontmatter-value">2026-07-28T14:32:00Z</div>
+                        <div class="frontmatter-value">2026-07-31T12:00:00Z</div>
                     </div>
                 </div>
 
                 <div class="markdown-content">
-                    <h2>Brand Voice</h2>
+                    <h2>CodeGraph Integration</h2>
                     <p>
-                        Firefly Events uses a warm, approachable, and celebratory tone. The brand embodies joy, connection, and unforgettable moments. When writing for Firefly, emphasize <strong>community</strong>, <strong>celebration</strong>, and <strong>attention to detail</strong>.
+                        Phase 2 adds CodeGraph for local-first code intelligence: tree-sitter AST parsing, call edges, and dependency tracking. Stores results in local SQLite database for fast retrieval.
                     </p>
 
-                    <h2>Visual Identity</h2>
+                    <h2>Reference Implementation</h2>
                     <p>
-                        Primary colors: Deep Purple (#6B46C1), Warm Gold (#F59E0B), Soft Cream (#FEF3C7).
-                        Typography: Use Montserrat for headings, Inter for body text.
+                        <strong>GitHub:</strong> <a href="https://github.com/mdostal/swarm-memory">mdostal/swarm-memory</a><br>
+                        <strong>Blog:</strong> <a href="https://mdostal.com/blog/35-agent-ai-coding-swarm">35-agent-ai-coding-swarm</a><br>
+                        <strong>Alternative:</strong> <a href="https://www.falkordb.com/blog/code-graph/">FalkorDB CodeGraph</a>
                     </p>
 
-                    <h2>Tone Guidelines</h2>
+                    <h2>Decision Required</h2>
                     <p>
-                        <strong>Do:</strong> Be warm, inclusive, and detail-oriented. Celebrate milestones. Use vivid, sensory language.<br>
-                        <strong>Don't:</strong> Be overly formal, corporate, or transactional. Avoid jargon.
+                        Deep CBA and comparison of CodeGraph systems needed before implementation. User expects detailed breakdown in Consus console for approval.
                     </p>
 
                     <h2>How to Apply</h2>
                     <p>
-                        When Minerva generates content for Firefly Events (emails, web copy, social posts), this memory should be loaded to ensure brand consistency. Related: [[firefly-event-templates]], [[firefly-client-preferences]]
+                        When agent requests code structure context, CodeGraph backend provides AST/call-graph/dependency info without loading full file text. Related: [[qdrant-semantic-search]], [[doc-section-indexing]]
                     </p>
                 </div>
             </div>

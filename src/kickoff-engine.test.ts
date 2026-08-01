@@ -8,9 +8,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call } from "./test-cli.ts";
+import { call, createSeedRepo } from "./test-cli.ts";
 
 let minervaHome: string;
+let seedRepo: string;
 
 const TEST_DRIVE_PROMPT =
   "You are running headlessly (no interactive terminal, no AskUserQuestion tool available) " +
@@ -21,6 +22,7 @@ const TEST_DRIVE_PROMPT =
 function env() {
   return {
     MINERVA_HOME: minervaHome,
+    MINERVA_SEED_REPO: seedRepo,
     MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
     MINERVA_TEST_DRIVE_PROMPT: TEST_DRIVE_PROMPT,
   };
@@ -28,10 +30,12 @@ function env() {
 
 before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-engine-"));
+  seedRepo = createSeedRepo();
 });
 
 after(() => {
   rmSync(minervaHome, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
 });
 
 test("startRun drives a real headless session to its first question; getQuestions surfaces raw prose on the human channel only", () => {

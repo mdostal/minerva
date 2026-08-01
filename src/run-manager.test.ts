@@ -13,6 +13,7 @@ import { call } from "./test-cli.ts";
 let minervaHome: string;
 let existingRepo: string; // throwaway repo WITH a dev branch, for the worktree case
 let noDevRepo: string; // throwaway repo WITHOUT a dev branch
+let seedRepo: string; // throwaway repo used when target_repo is absent
 
 // Since kickoff-engine-plumbing, startRun composes workspace allocation with a REAL claude -p
 // drive call. These tests care about workspace allocation, not engine behavior, so they use
@@ -25,6 +26,7 @@ const TEST_DRIVE_PROMPT =
 function env() {
   return {
     MINERVA_HOME: minervaHome,
+    MINERVA_SEED_REPO: seedRepo,
     MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
     MINERVA_TEST_DRIVE_PROMPT: TEST_DRIVE_PROMPT,
   };
@@ -37,6 +39,10 @@ before(() => {
   execFileSync("git", ["init", "-q", "-b", "dev", existingRepo]);
   execFileSync("git", ["-C", existingRepo, "commit", "-q", "--allow-empty", "-m", "init"]);
 
+  seedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-"));
+  execFileSync("git", ["init", "-q", "-b", "dev", seedRepo]);
+  execFileSync("git", ["-C", seedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
+
   noDevRepo = mkdtempSync(join(tmpdir(), "minerva-nodev-repo-"));
   execFileSync("git", ["init", "-q", "-b", "main", noDevRepo]);
   execFileSync("git", ["-C", noDevRepo, "commit", "-q", "--allow-empty", "-m", "init"]);
@@ -45,6 +51,7 @@ before(() => {
 after(() => {
   rmSync(minervaHome, { recursive: true, force: true });
   rmSync(existingRepo, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
   rmSync(noDevRepo, { recursive: true, force: true });
 });
 
@@ -74,16 +81,35 @@ test("two concurrent startRuns against the SAME target_repo both succeed", () =>
   assert.notEqual(res1.result.run_id, res2.result.run_id);
 });
 
-test("startRun with no target_repo creates a fresh git-init scratch repo with an initial commit", () => {
+test("startRun with no target_repo creates a worktree from MINERVA_SEED_REPO", () => {
   const res = call("startRun", { idea: "greenfield idea" }, env());
   assert.equal(res.status, 0);
   const runId = res.result.run_id;
+
+  const runRecord = JSON.parse(readFileSync(join(minervaHome, "runs", runId, "run.yaml"), "utf8"));
+  assert.equal(runRecord.workspace_kind, "worktree");
+  assert.ok(runRecord.workspace_path.startsWith(join(minervaHome, "runs", runId)));
+
+  const worktrees = execFileSync("git", ["-C", seedRepo, "worktree", "list", "--porcelain"], {
+    encoding: "utf8",
+  });
+  assert.match(worktrees, new RegExp(`branch refs/heads/run/${runId}`));
 
   const status = call("getRunStatus", { run_id: runId }, env());
   assert.equal(status.status, 0);
   // Post kickoff-engine-plumbing, startRun drives the workspace to its first question --
   // "in_progress" was correct before the engine existed; now it's waiting_on_human.
   assert.equal(status.result.status, "waiting_on_human");
+});
+
+test("startRun with no target_repo returns setup instructions when MINERVA_SEED_REPO is missing", () => {
+  const missingSeedRepo = join(tmpdir(), `minerva-missing-seed-repo-${Date.now()}`);
+  const res = call("startRun", { idea: "greenfield idea" }, { ...env(), MINERVA_SEED_REPO: missingSeedRepo });
+  assert.equal(res.status, 1);
+  assert.equal(res.error.code, "VALIDATION_FAILED");
+  assert.match(res.error.message, /Seed repo does not exist/);
+  assert.match(res.error.message, /MINERVA_SEED_REPO/);
+  assert.match(res.error.message, /git clone/);
 });
 
 test("target_repo with no dev branch returns a clear VALIDATION_FAILED error, not a raw git failure", () => {
@@ -124,8 +150,11 @@ test("getRunStatus on an unknown run_id returns NOT_FOUND", () => {
 
 test("listRuns returns all allocated runs with correct status", () => {
   const localHome = mkdtempSync(join(tmpdir(), "minerva-home-listruns-"));
+  const localSeedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-listruns-"));
   try {
-    const localEnv = { MINERVA_HOME: localHome };
+    execFileSync("git", ["init", "-q", "-b", "dev", localSeedRepo]);
+    execFileSync("git", ["-C", localSeedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
+    const localEnv = { MINERVA_HOME: localHome, MINERVA_SEED_REPO: localSeedRepo };
     const ids = [
       call("startRun", { idea: "a" }, localEnv).result.run_id,
       call("startRun", { idea: "b" }, localEnv).result.run_id,
@@ -139,5 +168,6 @@ test("listRuns returns all allocated runs with correct status", () => {
     for (const r of res.result.runs) assert.equal(r.status, "waiting_on_human");
   } finally {
     rmSync(localHome, { recursive: true, force: true });
+    rmSync(localSeedRepo, { recursive: true, force: true });
   }
 });

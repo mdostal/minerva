@@ -12,13 +12,15 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { MinervaError, type ErrorCode } from "./errors.ts";
 import { dispatch } from "./dispatch.ts";
 import {
   allocateRun,
+  defaultSeedRepoPath,
   updateRunRecord,
   readRunRecord,
   normalizeQuestionKind,
@@ -32,15 +34,22 @@ import { checkAndMarkComplete } from "./output-emitter.ts";
 import { abortRun, type CleanupLedgerRecord } from "./cleanup-ledger.ts";
 
 let minervaHome: string;
+let seedRepo: string;
 
 before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-types-"));
+  seedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-types-"));
+  execFileSync("git", ["init", "-q", "-b", "dev", seedRepo]);
+  execFileSync("git", ["-C", seedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   process.env.MINERVA_HOME = minervaHome;
+  process.env.MINERVA_SEED_REPO = seedRepo;
 });
 
 after(() => {
   delete process.env.MINERVA_HOME;
+  delete process.env.MINERVA_SEED_REPO;
   rmSync(minervaHome, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
 });
 
 function ledgerLines(): CleanupLedgerRecord[] {
@@ -165,6 +174,44 @@ test("allocateRun starts a run in_progress with no pending questions", () => {
   const record = readRunRecord(runId);
   assert.equal(record.status, "in_progress");
   assert.deepEqual(record.questions, []);
+});
+
+test("defaultSeedRepoPath uses ~/repos/consus-seeds when MINERVA_SEED_REPO is unset", () => {
+  assert.equal(defaultSeedRepoPath(), join(homedir(), "repos", "consus-seeds"));
+});
+
+test("allocateRun with no target_repo uses MINERVA_SEED_REPO as a worktree source", () => {
+  const { run_id: runId } = allocateRun("seeded greenfield run", undefined);
+  const record = readRunRecord(runId);
+  assert.equal(record.workspace_kind, "worktree");
+  assert.ok(existsSync(record.workspace_path));
+
+  const worktrees = execFileSync("git", ["-C", seedRepo, "worktree", "list", "--porcelain"], {
+    encoding: "utf8",
+  });
+  assert.match(worktrees, new RegExp(`branch refs/heads/run/${runId}`));
+});
+
+test("allocateRun with no target_repo fails with setup instructions when the seed repo is missing", () => {
+  const previousSeedRepo = process.env.MINERVA_SEED_REPO;
+  process.env.MINERVA_SEED_REPO = join(tmpdir(), `minerva-missing-seed-repo-${Date.now()}`);
+  try {
+    assert.throws(
+      () => allocateRun("missing seed repo", undefined),
+      (e) =>
+        e instanceof MinervaError &&
+        e.code === "VALIDATION_FAILED" &&
+        /Seed repo does not exist/.test(e.message) &&
+        /MINERVA_SEED_REPO/.test(e.message) &&
+        /git clone/.test(e.message),
+    );
+  } finally {
+    if (previousSeedRepo) {
+      process.env.MINERVA_SEED_REPO = previousSeedRepo;
+    } else {
+      delete process.env.MINERVA_SEED_REPO;
+    }
+  }
 });
 
 test("stall invariant: a rejected submitAnswers call (wrong channel) never advances status or answers the question", async () => {

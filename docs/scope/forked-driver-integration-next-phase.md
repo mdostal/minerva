@@ -81,38 +81,57 @@ this epic behind an unrelated review-and-merge timeline.
 
 ## Two new findings from direct empirical testing (this repo, 2026-07-26) — not in the PR description
 
-**1. Headless-routing compliance is model-capability-dependent, not just code-dependent.** The
-whole "check `detect_interactive_mode()`, route through `ask_or_emit()`" mechanism is
-*prose-instructed* in each skill's `SKILL.md` — there is no code that intercepts or enforces it;
-the model has to actually read and follow that instruction. Tested identically against the same
-fork checkout, same `HIVE_HEADLESS=1`, same fresh-kickoff prompt:
+**SUPERSEDED 2026-07-26 by the `spike-stateless-model-tier` story's own controlled testing.**
+The two findings below were this doc's original read of two uncontrolled, ad-hoc tests written
+during planning, before the epic's own spike story ran its proper, repeated, controlled version.
+The spike found the real root cause and it is NOT model tier — see
+`.pHive/epics/forked-driver-integration/docs/spike-stateless-model-tier-findings.md` for the
+full writeup. Keeping the original text below (struck through in spirit, not literally deleted)
+for the historical record of how the ad-hoc pre-planning read differed from the controlled
+finding — this is exactly the kind of incremental-patching-without-cross-checking mistake
+PR #341's own review rounds caught in the upstream docs; worth leaving visible here too.
 
-- `claude-haiku-4-5-20251001` (Minerva's current default drive model) **did not** follow the
-  headless-routing instruction — it asked the metrics question inline as prose, exactly as if
-  headless mode were off, and wrote no envelope file at all.
-- `claude-sonnet-4-5` **did** follow it correctly and reliably across two independent
-  invocations (fresh kickoff writing 3 envelopes across phases `1a`/`1b`/`project-classification`;
-  resume after answering `1a`, which correctly deleted that envelope, reported the answer,
-  and listed the two still-pending envelopes untouched).
+**1. (SUPERSEDED) "Headless-routing compliance is model-capability-dependent."** Two uncontrolled
+tests seemed to show Haiku failing and Sonnet succeeding. The spike's controlled, repeated
+testing (both tiers, multiple runs, transcript-level inspection) found the real variable: the
+bare drive prompt lacks an explicit "your response ends here" instruction, and BOTH tiers fill
+that ambiguity with their own reasonable-seeming initiative (Haiku answers inline; Sonnet/Opus
+build and run their own simulation of the protocol) rather than actually failing due to
+capability. **With an explicit, forceful stop instruction added to the drive prompt, both Haiku
+and Sonnet comply correctly** — no model-tier change from Minerva's existing
+`MINERVA_DRIVE_MODEL` default is needed.
 
-**Consequence:** ForkedHiveDriver almost certainly cannot inherit SpawnDriver/SubagentDriver's
-cost-optimized Haiku default (`MINERVA_DRIVE_MODEL`) — that default would make the whole
-protocol silently degrade back to prose-asking, defeating the point of building this driver.
-Needs its own model-tier decision, and the stateless-turn spike (story 1) should establish the
-*minimum* reliable tier empirically (only Haiku vs. Sonnet has been tested so far — Haiku 4.5
-vs. Opus, or a cheaper Sonnet variant, is unexplored), not just re-use "sonnet worked once."
+**2. (NEEDS RE-VERIFICATION) "`kind` is not a strictly-enforced closed enum."** The specific
+`kind: yes-no` example cited below was observed in a pre-fix, self-simulating Sonnet run — i.e.
+from a model-improvised wrapper script that called the real gateway functions directly but
+wasn't itself the real skill's genuine behavior. Every envelope observed post-fix (in the spike)
+correctly used `kind: single-select`. The underlying claim (the gateway does not enforce the
+`kind` enum in code) is still true and defensive parsing is still the right call, but the
+specific `yes-no` evidence should not be cited as confirmed real-gateway output going forward.
 
-**2. `kind` is not a strictly-enforced closed enum in practice, despite being documented as
-one.** The schema doc states `kind: single-select | multi-select | free-text`, and the gateway
-code (`question_gateway.py`'s `ask_or_emit`) does nothing to validate or constrain it —
-`q.get("kind", "single-select")` just passes through whatever value the calling skill (i.e. the
-model, writing the envelope via its own tool calls per `SKILL.md`'s prose instructions) decided
-to use. A real Sonnet-driven kickoff run wrote `kind: yes-no` for the metrics opt-in question —
-a value that appears nowhere in the documented enum. **Consequence:** Minerva's envelope-question
-parsing (open question 3 below) cannot assume `kind` is closed to the three documented values —
-it must handle/normalize unexpected values defensively (e.g. treat any unrecognized `kind` as
-free-text, or specifically recognize `yes-no` as a `single-select` with implied `[yes, no]`
-options) rather than throwing or silently misparsing.
+Original (superseded) text, preserved for the record:
+
+> **1. Headless-routing compliance is model-capability-dependent, not just code-dependent.** The
+> whole "check `detect_interactive_mode()`, route through `ask_or_emit()`" mechanism is
+> *prose-instructed* in each skill's `SKILL.md` — there is no code that intercepts or enforces it;
+> the model has to actually read and follow that instruction. Tested identically against the same
+> fork checkout, same `HIVE_HEADLESS=1`, same fresh-kickoff prompt:
+>
+> - `claude-haiku-4-5-20251001` (Minerva's current default drive model) **did not** follow the
+>   headless-routing instruction — it asked the metrics question inline as prose, exactly as if
+>   headless mode were off, and wrote no envelope file at all.
+> - `claude-sonnet-4-5` **did** follow it correctly and reliably across two independent
+>   invocations (fresh kickoff writing 3 envelopes across phases `1a`/`1b`/`project-classification`;
+>   resume after answering `1a`, which correctly deleted that envelope, reported the answer,
+>   and listed the two still-pending envelopes untouched).
+>
+> **2. `kind` is not a strictly-enforced closed enum in practice, despite being documented as
+> one.** The schema doc states `kind: single-select | multi-select | free-text`, and the gateway
+> code (`question_gateway.py`'s `ask_or_emit`) does nothing to validate or constrain it —
+> `q.get("kind", "single-select")` just passes through whatever value the calling skill (i.e. the
+> model, writing the envelope via its own tool calls per `SKILL.md`'s prose instructions) decided
+> to use. A real Sonnet-driven kickoff run wrote `kind: yes-no` for the metrics opt-in question —
+> a value that appears nowhere in the documented enum.
 
 ## Why this is a bigger win than SubagentDriver's mechanism
 
@@ -125,7 +144,12 @@ risk on the question-wait step, because nothing is running while the question is
 
 ## Open design questions (unresolved — do not guess; these gate the actual story breakdown)
 
-1. **Can each phase invocation be stateless?** The skill's own on-disk state
+1. **RESOLVED by the spike: yes, feasible.** A genuinely fresh, non-`--resume` invocation
+   correctly continued a headless kickoff run from on-disk state alone (workspace files +
+   `.pHive/questions/`) once the explicit-stop drive-prompt fix was applied — no session_id
+   juggling needed for this driver path. See
+   `.pHive/epics/forked-driver-integration/docs/spike-stateless-model-tier-findings.md`.
+   (Original open question, for context): the skill's own on-disk state
    (`.pHive/epics/`, and now `.pHive/questions/`) may be sufficient continuity — meaning
    ForkedHiveDriver might not need `--resume`/session tracking *at all* between phases, unlike
    SpawnDriver and SubagentDriver, both of which depend on conversation continuity. This would be
@@ -157,12 +181,12 @@ risk on the question-wait step, because nothing is running while the question is
    accept the upstream default (`re-emit` on expiry) as an acceptable degraded behavior? Since
    renewal only applies pre-consumption (see "Deletion on consume" above), this is purely about
    the waiting-on-human window, not anything post-answer.
-6. **Minimum reliable model tier.** Confirmed empirically that `claude-haiku-4-5-20251001`
-   (Minerva's current cost-optimized default) does not reliably follow the headless-routing
-   instruction (see "Two new findings" above) while `claude-sonnet-4-5` does. The stateless-turn
-   spike (story 1) should establish the actual minimum viable tier — untested territory beyond
-   these two data points — since a wrong choice either silently breaks headless compliance
-   (too cheap) or needlessly inflates cost (too conservative).
+6. **RESOLVED by the spike.** Not a model-tier question after all — see
+   `.pHive/epics/forked-driver-integration/docs/spike-stateless-model-tier-findings.md`. Both
+   `claude-haiku-4-5-20251001` and `claude-sonnet-4-5` reliably comply once the drive prompt
+   includes an explicit stop instruction; `ForkedHiveDriver` uses the same `MINERVA_DRIVE_MODEL`
+   default as `SpawnDriver`/`SubagentDriver`, no new tier needed. Stateless-turn feasibility
+   (also this question's original scope) is confirmed feasible under the same fix.
 
 ## Proposed story shape (draft — for the planning kickoff to confirm/revise, not to build from directly)
 

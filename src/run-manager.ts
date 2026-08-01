@@ -13,6 +13,23 @@ export type WorkspaceKind = "worktree" | "fresh_init";
 export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
 export type Channel = "agent" | "human";
 
+// Closed to exactly the three values the headless-question-protocol's envelope schema
+// documents (forked-driver-integration epic). The gateway itself does not enforce this enum in
+// code -- normalizeQuestionKind() below is the defensive boundary that guarantees Minerva's own
+// internal Question type never carries anything outside this set.
+export type QuestionKind = "single-select" | "multi-select" | "free-text";
+
+// Never throws, never guesses a channel-like value -- any value outside the three documented
+// kinds defaults to "free-text" (the least-structured, always-safe interpretation). Confirmed
+// necessary empirically: the gateway's own code does not validate `kind`, so a malformed or
+// unexpected value reaching this boundary is a real, expected input shape, not a hypothetical.
+export function normalizeQuestionKind(raw: unknown): QuestionKind {
+  if (raw === "single-select" || raw === "multi-select" || raw === "free-text") {
+    return raw;
+  }
+  return "free-text";
+}
+
 export interface Question {
   id: string;
   text: string;
@@ -21,6 +38,18 @@ export interface Question {
   reason: string;
   channel: Channel;
   status: "pending" | "answered";
+  // Optional -- only present for Driver implementations whose upstream source carries this
+  // shape (currently: ForkedHiveDriver's envelope-sourced questions, per the
+  // headless-question-protocol's question-envelope-schema.md). SpawnDriver/SubagentDriver never
+  // set these fields; every existing code path that constructs a Question without them is
+  // unaffected -- this extension is strictly additive.
+  kind?: QuestionKind;
+  options?: string[] | null;
+  // The envelope's own qid (question-envelope-schema.md), distinct from this Question's own
+  // `id` (Minerva's internally-generated id, e.g. "q-1"). Carried through so ForkedHiveDriver's
+  // answer-write-back step can address the correct question within a multi-question envelope
+  // without re-deriving the mapping.
+  qid?: string;
 }
 
 export interface RunRecord {

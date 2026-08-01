@@ -7,19 +7,23 @@ import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, type Driver } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
 // already proven in production. Operators opt into "subagent" where orphaning is the active
-// pain; an unrecognized value fails loudly at startup rather than silently falling back.
+// pain, or "forked" (forked-driver-integration epic) where even the question-wait step should
+// carry zero orphan risk (no live process at all while waiting on a human -- state lives on
+// disk as a question envelope); an unrecognized value fails loudly at startup rather than
+// silently falling back.
 function selectDriver(): Driver {
   const value = process.env.MINERVA_DRIVER ?? "spawn";
   if (value === "spawn") return new SpawnDriver();
   if (value === "subagent") return new SubagentDriver();
+  if (value === "forked") return new ForkedHiveDriver();
   throw new MinervaError(
     "VALIDATION_FAILED",
-    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn" or "subagent"`,
+    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn", "subagent", or "forked"`,
   );
 }
 
@@ -105,14 +109,20 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
 
 interface Answer {
   question_id: string;
-  answer: string;
+  // string for single-select/free-text; string[] for multi-select (question-envelope-schema.md
+  // §"Question object fields" -- "Array for multi-select, string otherwise").
+  answer: string | string[];
+}
+
+function isValidAnswerValue(value: unknown): value is string | string[] {
+  return typeof value === "string" || (Array.isArray(value) && value.every((v) => typeof v === "string"));
 }
 
 function isAnswerArray(value: unknown): value is Answer[] {
   return (
     Array.isArray(value) &&
     value.every(
-      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && typeof (a as any).answer === "string",
+      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && isValidAnswerValue((a as any).answer),
     )
   );
 }
@@ -156,10 +166,14 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   const updatedQuestions = record.questions.map((q) => (q.id === questionId ? { ...q, status: "answered" as const } : q));
   updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
+  // Driver.runTurn's prompt is always a plain string -- a multi-select answer (string[]) is
+  // joined into readable prose for the driven turn, matching how a human would phrase multiple
+  // selections in a chat message.
+  const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
   const { session_id: newSessionId, raw_result: rawResult } = await driver.runTurn({
     cwd: record.workspace_path,
     sessionId: record.session_id,
-    prompt: answer,
+    prompt: answerPrompt,
   });
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).

@@ -17,7 +17,16 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { MinervaError, type ErrorCode } from "./errors.ts";
 import { dispatch } from "./dispatch.ts";
-import { allocateRun, updateRunRecord, readRunRecord, type Channel, type RunStatus } from "./run-manager.ts";
+import {
+  allocateRun,
+  updateRunRecord,
+  readRunRecord,
+  normalizeQuestionKind,
+  type Channel,
+  type RunStatus,
+  type Question,
+  type QuestionKind,
+} from "./run-manager.ts";
 import { getQuestions, submitAnswers } from "./kickoff-engine.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { abortRun, type CleanupLedgerRecord } from "./cleanup-ledger.ts";
@@ -284,4 +293,105 @@ test("abortRun is idempotent on an already-terminal run -- no double ledger reco
 
   const entries = ledgerLines().filter((l) => l.run_id === runId);
   assert.equal(entries.length, 0); // already-terminal short-circuits before recordCleanup ever runs
+});
+
+// --- Question/Answer type extension (forked-driver-integration epic) ----------------------
+// Additive fields for ForkedHiveDriver's structured envelope questions -- kind/options/qid are
+// all optional, so SpawnDriver/SubagentDriver's existing free-text-only Question construction
+// (which never sets them) remains valid and unaffected. See
+// .pHive/epics/forked-driver-integration/stories/question-answer-type-extension.yaml.
+
+test("Question accepts the optional kind/options/qid fields without requiring them", () => {
+  // Existing free-text-only shape (SpawnDriver/SubagentDriver's actual usage) -- must still
+  // compile and construct with none of the new fields present.
+  const plain: Question = {
+    id: "q-1",
+    text: "What's your favorite fruit?",
+    suggested_channel: "human",
+    confidence: 0.9,
+    reason: "test",
+    channel: "human",
+    status: "pending",
+  };
+  assert.equal(plain.kind, undefined);
+
+  // Extended shape (ForkedHiveDriver's envelope-sourced questions).
+  const extended: Question = {
+    ...plain,
+    kind: "single-select",
+    options: ["yes", "no"],
+    qid: "enable_metrics",
+  };
+  assert.equal(extended.kind, "single-select");
+  assert.deepEqual(extended.options, ["yes", "no"]);
+  assert.equal(extended.qid, "enable_metrics");
+});
+
+test("QuestionKind is closed to exactly single-select|multi-select|free-text -- exhaustive switch compiles", () => {
+  function assertExhaustive(k: QuestionKind): QuestionKind {
+    switch (k) {
+      case "single-select":
+      case "multi-select":
+      case "free-text":
+        return k;
+      default: {
+        const _exhaustive: never = k;
+        throw new Error(`unreachable kind: ${_exhaustive}`);
+      }
+    }
+  }
+  for (const k of ["single-select", "multi-select", "free-text"] as const) {
+    assert.equal(assertExhaustive(k), k);
+  }
+});
+
+test("normalizeQuestionKind passes through the three documented values unchanged", () => {
+  assert.equal(normalizeQuestionKind("single-select"), "single-select");
+  assert.equal(normalizeQuestionKind("multi-select"), "multi-select");
+  assert.equal(normalizeQuestionKind("free-text"), "free-text");
+});
+
+test("normalizeQuestionKind defaults any unrecognized value to free-text, never throws", () => {
+  // The empirically-observed (pre-fix, self-simulation-artifact) yes-no value, kept as a
+  // regression case even though it's no longer expected from a genuine gateway run -- the
+  // defensive requirement stands regardless of whether this exact value recurs.
+  assert.equal(normalizeQuestionKind("yes-no"), "free-text");
+  assert.equal(normalizeQuestionKind(undefined), "free-text");
+  assert.equal(normalizeQuestionKind(null), "free-text");
+  assert.equal(normalizeQuestionKind(""), "free-text");
+  assert.equal(normalizeQuestionKind(42), "free-text");
+  assert.equal(normalizeQuestionKind({}), "free-text");
+});
+
+test("submitAnswers' Answer type accepts a string[] answer (multi-select), not just a bare string", async () => {
+  const { run_id: runId } = allocateRun("multi-select answer check", undefined);
+  updateRunRecord(runId, {
+    status: "waiting_on_human",
+    questions: [
+      {
+        id: "q-1",
+        text: "Pick your favorite fruits",
+        suggested_channel: "human",
+        confidence: 0.9,
+        reason: "test",
+        channel: "human",
+        status: "pending",
+        kind: "multi-select",
+        options: ["apple", "mango", "kiwi"],
+        qid: "favorite_fruits",
+      },
+    ],
+  });
+
+  // A string[] answer must pass the answers[]-shape check specifically -- confirmed by asserting
+  // the rejection is NOT the shape-check's own error message, even though the call still fails
+  // downstream (no active drive session in this fast, live-API-free test) for an unrelated
+  // reason. This confirms the type extension is honored at the runtime validation layer, not
+  // just the TypeScript type declaration.
+  await assert.rejects(
+    () => submitAnswers({ run_id: runId, channel: "human", answers: [{ question_id: "q-1", answer: ["apple", "mango"] }] }),
+    (e) =>
+      e instanceof MinervaError &&
+      !/non-empty answers array/.test(e.message),
+  );
 });

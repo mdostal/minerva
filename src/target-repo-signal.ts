@@ -169,3 +169,23 @@ export function stampTargetRepo(description: string, slug: string | null | undef
   const sep = description.length > 0 && !description.endsWith("\n") ? "\n" : "";
   return `${description}${sep}target_repo: ${slug}\n`;
 }
+
+// Derive the owner/repo slug from a git checkout / run-workspace's OWN origin remote — the
+// authoritative, foolproof build target: the repo the plan actually ran against. This is the
+// forward-facing mirror of the one-off backfill rule (a story's target_repo = the git origin of
+// its Minerva workspace). Returns null when the path is not a git repo or has no origin remote (a
+// genuinely greenfield / fresh_init workspace), so a child story legitimately carries no
+// target_repo rather than a guessed one — Minerva never invents a repo it cannot prove.
+export function deriveRepoSlugFromWorkspace(workspacePath: string | undefined | null): string | null {
+  if (!workspacePath) return null;
+  try {
+    const remote = execFileSync("git", ["-C", workspacePath, "remote", "get-url", "origin"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!remote) return null;
+    return normalizeTargetRepoValue(remote).slug;
+  } catch {
+    return null;
+  }
+}

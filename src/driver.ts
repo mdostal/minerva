@@ -34,11 +34,14 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
 import { listEnvelopes } from "./envelope-detection.ts";
 
 const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
+const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 
 // Production finding (2026-07-26): a real kickoff->planning transition turn legitimately runs
 // past the old hardcoded 120s ceiling, causing SubagentDriver's poll to time out short of
@@ -110,9 +113,31 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 
+function readClaudeOauthTokenFromZshrc(): string | undefined {
+  const home = process.env.HOME || homedir();
+  try {
+    const zshrc = readFileSync(join(home, ".zshrc"), "utf8");
+    const match = zshrc.match(
+      /(?:^|\n)\s*(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN=(?:"([^"]*)"|'([^']*)'|([^\s#\n]+))/,
+    );
+    return match?.[1] ?? match?.[2] ?? match?.[3];
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveClaudeSpawnEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...(extraEnv ?? {}) };
+  if (!env[CLAUDE_OAUTH_TOKEN_ENV]) {
+    const token = readClaudeOauthTokenFromZshrc();
+    if (token) env[CLAUDE_OAUTH_TOKEN_ENV] = token;
+  }
+  return env;
+}
+
 function spawnClaude(cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<ClaudePResult> {
   return new Promise((resolve, reject) => {
-    const env = extraEnv ? { ...process.env, ...extraEnv } : undefined;
+    const env = resolveClaudeSpawnEnv(extraEnv);
     const child = spawn("claude", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     inFlightChild = child;
 
@@ -188,7 +213,12 @@ interface BackgroundAgentEntry {
 }
 
 function runClaudeUtility(args: string[], cwd?: string): string {
-  return execFileSync("claude", args, { encoding: "utf8", timeout: UTILITY_CMD_TIMEOUT_MS, cwd });
+  return execFileSync("claude", args, {
+    encoding: "utf8",
+    timeout: UTILITY_CMD_TIMEOUT_MS,
+    cwd,
+    env: resolveClaudeSpawnEnv(),
+  });
 }
 
 function dispatchBackground(cwd: string, sessionId: string | null, prompt: string): string {

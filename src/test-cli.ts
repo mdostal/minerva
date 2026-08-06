@@ -9,6 +9,26 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN = join(__dirname, "..", "bin", "minerva.ts");
+const DEFAULT_TEST_MODEL = "claude-haiku-4-5-20251001";
+
+export function testHeimdallRouteUrl(model = DEFAULT_TEST_MODEL, cli = "claude"): string {
+  return `data:application/json,${encodeURIComponent(JSON.stringify({ cli, model }))}`;
+}
+
+function withDefaultTestRoute(env: Record<string, string>): Record<string, string> {
+  if (
+    env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL ||
+    env.MINERVA_HEIMDALL_URL ||
+    env.HEIMDALL_URL ||
+    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL ||
+    process.env.MINERVA_HEIMDALL_URL ||
+    process.env.HEIMDALL_URL
+  ) {
+    return env;
+  }
+  const model = env.MINERVA_DRIVE_MODEL ?? process.env.MINERVA_DRIVE_MODEL ?? DEFAULT_TEST_MODEL;
+  return { MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl(model), ...env };
+}
 
 export function runCli(
   input: string,
@@ -18,7 +38,7 @@ export function runCli(
     const stdout = execFileSync("npx", ["tsx", BIN], {
       input,
       encoding: "utf8",
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...withDefaultTestRoute(env) },
     });
     return { stdout, status: 0 };
   } catch (e: any) {

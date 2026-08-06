@@ -26,7 +26,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { SubagentDriver } from "./driver.ts";
-import { call, createSeedRepo } from "./test-cli.ts";
+import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
@@ -42,14 +42,22 @@ const TSX_BIN = join(__dirname, "..", "node_modules", ".bin", "tsx");
 // about "the swappable driver feature" back instead). The SIGKILL test below already creates
 // its own per-test scratch dir; this one is shared by the other three tests.
 let scratchCwd: string;
+let previousRouteUrl: string | undefined;
 
 before(() => {
+  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
   scratchCwd = mkdtempSync(join(tmpdir(), "minerva-subagent-driver-test-"));
   execFileSync("git", ["init", "-q", scratchCwd]);
   execFileSync("git", ["-C", scratchCwd, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
 });
 
 after(() => {
+  if (previousRouteUrl === undefined) {
+    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  } else {
+    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+  }
   rmSync(scratchCwd, { recursive: true, force: true });
 });
 

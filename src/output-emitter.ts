@@ -118,6 +118,27 @@ export function commitPlan(root: string, epicId: string): void {
   });
 }
 
+// Pushes the run's `run/<runId>` branch to origin right after commitPlan finishes, so the
+// committed plan is immediately fetchable by downstream build agents (Auriga, Vulcan, etc.)
+// without a manual push step (PAN-6747). Deliberately non-blocking: the plan is already safely
+// committed locally by commitPlan, so a missing remote or a push failure (auth/network) is only
+// ever logged, never thrown -- it must not prevent the run from completing.
+export function pushPlan(root: string, runId: string): void {
+  try {
+    execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { stdio: "pipe" });
+  } catch {
+    console.warn(`pushPlan: no 'origin' remote configured for ${root}; skipping push`);
+    return;
+  }
+
+  try {
+    execFileSync("git", ["-C", root, "push", "--set-upstream", "origin", `run/${runId}`], { stdio: "pipe" });
+  } catch (e) {
+    const stderr = e instanceof Error && "stderr" in e ? String((e as any).stderr) : String(e);
+    console.warn(`pushPlan: failed to push run/${runId} to origin: ${stderr.trim()}`);
+  }
+}
+
 // Called by kickoff-engine.ts after every drive/resume call, before appending a new pending
 // question. Returns true (and marks the run complete) if plugin-hive's own skill has written
 // an epic.yaml into the workspace since the run started.
@@ -129,6 +150,7 @@ export function checkAndMarkComplete(runId: string): boolean {
   // Commit before updateRunRecord: if the commit throws, the run stays non-complete so a later
   // poll retries, rather than marking the run complete over an uncommitted plan.
   commitPlan(found.root, found.epic.epic_id);
+  pushPlan(found.root, runId);
   updateRunRecord(runId, { status: "complete", output: found.epic });
   // AD-4: exactly one ledger record + one cleanup_needed event per run, at the moment it
   // transitions to a terminal state. This branch only runs once per run (guarded by the

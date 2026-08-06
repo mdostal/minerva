@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call, createSeedRepo } from "./test-cli.ts";
-import { findCompletedEpic, commitPlan } from "./output-emitter.ts";
+import { findCompletedEpic, commitPlan, pushPlan } from "./output-emitter.ts";
 
 let minervaHome: string;
 let seedRepo: string;
@@ -167,6 +167,75 @@ test("commitPlan commits an untracked epic dir with a conventional commit messag
 
     const status = execFileSync("git", ["-C", repo, "status", "--porcelain"], { encoding: "utf8" });
     assert.equal(status.trim(), "", "working tree should be clean after commitPlan");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// pushPlan story (PAN-6747): unit-level git-mechanics tests, same style as commitPlan's above --
+// throwaway temp repos + a throwaway bare repo standing in for a real remote.
+function initRepoWithRemote(): { repo: string; remote: string } {
+  const repo = initRepo();
+  const remote = mkdtempSync(join(tmpdir(), "minerva-push-plan-remote-"));
+  execFileSync("git", ["init", "-q", "--bare", "-b", "dev", remote]);
+  execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]);
+  return { repo, remote };
+}
+
+test("pushPlan pushes the run/<runId> branch to origin when a remote is configured", () => {
+  const { repo, remote } = initRepoWithRemote();
+  try {
+    execFileSync("git", ["-C", repo, "checkout", "-q", "-b", "run/test-run-1"]);
+    writeEpic(repo, "widget-epic");
+    commitPlan(repo, "widget-epic");
+
+    pushPlan(repo, "test-run-1");
+
+    const remoteBranches = execFileSync("git", ["-C", remote, "branch", "--list", "run/test-run-1"], {
+      encoding: "utf8",
+    });
+    assert.match(remoteBranches, /run\/test-run-1/);
+
+    const localHead = execFileSync("git", ["-C", repo, "rev-parse", "run/test-run-1"], { encoding: "utf8" }).trim();
+    const remoteHead = execFileSync("git", ["-C", remote, "rev-parse", "run/test-run-1"], {
+      encoding: "utf8",
+    }).trim();
+    assert.equal(localHead, remoteHead, "expected origin's run/test-run-1 to match the local branch");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test("pushPlan skips without throwing when no remote is configured", () => {
+  const repo = initRepo();
+  try {
+    execFileSync("git", ["-C", repo, "checkout", "-q", "-b", "run/test-run-2"]);
+    writeEpic(repo, "widget-epic");
+    commitPlan(repo, "widget-epic");
+
+    assert.doesNotThrow(() => pushPlan(repo, "test-run-2"));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("pushPlan does not throw when the push itself fails (bad remote url)", () => {
+  const repo = initRepo();
+  try {
+    execFileSync("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      join(tmpdir(), "minerva-push-plan-nonexistent-remote"),
+    ]);
+    execFileSync("git", ["-C", repo, "checkout", "-q", "-b", "run/test-run-3"]);
+    writeEpic(repo, "widget-epic");
+    commitPlan(repo, "widget-epic");
+
+    assert.doesNotThrow(() => pushPlan(repo, "test-run-3"));
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

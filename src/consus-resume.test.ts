@@ -94,7 +94,42 @@ test("resumeFromConsusAnswer skips runs that are not awaiting a human answer", a
 
   assert.equal(submitCalled, false);
   assert.equal(result.resumed, false);
-  assert.equal(result.reason, "run is complete, not waiting_on_human");
+  assert.equal(result.reason, "run is complete, not waiting_on_human or awaiting-consus");
+});
+
+test("resumeFromConsusAnswer resumes a run awaiting Consus", async () => {
+  const submitted: any[] = [];
+  let status = "awaiting-consus";
+
+  const result = await resumeFromConsusAnswer(
+    { run_id: "run-3", question_id: "q-1", channel: "agent", answer: "Use mdostal/minerva." },
+    {
+      async submitAnswers(params) {
+        submitted.push(params);
+        status = "waiting_on_human";
+        return { result: {} };
+      },
+      getRunStatus() {
+        return { status };
+      },
+      getOutput() {
+        return { epic };
+      },
+      fileAllStoriesToMultica() {
+        throw new Error("should not file");
+      },
+    },
+  );
+
+  assert.deepEqual(submitted, [
+    {
+      run_id: "run-3",
+      channel: "agent",
+      answers: [{ question_id: "q-1", answer: "Use mdostal/minerva." }],
+    },
+  ]);
+  assert.equal(result.status, "waiting_on_human");
+  assert.equal(result.resumed, true);
 });
 
 test("fileAllStoriesToMultica creates todo child issues without assigning them and stamps target_repo", () => {

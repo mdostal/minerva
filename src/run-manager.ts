@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
-export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
+export type RunStatus = "in_progress" | "waiting_on_human" | "awaiting-consus" | "complete" | "aborted";
 export type Channel = "agent" | "human";
 
 // Closed to exactly the three values the headless-question-protocol's envelope schema

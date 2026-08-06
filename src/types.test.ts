@@ -150,11 +150,12 @@ test("submitAnswers accepts the correctly-keyed question_id shape past the shape
 
 // --- Status transitions + stall invariant -------------------------------------------------
 
-test("Status is closed to exactly in_progress|waiting_on_human|complete|aborted -- exhaustive switch compiles", () => {
+test("Status is closed to exactly in_progress|waiting_on_human|awaiting-consus|complete|aborted -- exhaustive switch compiles", () => {
   function assertExhaustive(s: RunStatus): RunStatus {
     switch (s) {
       case "in_progress":
       case "waiting_on_human":
+      case "awaiting-consus":
       case "complete":
       case "aborted":
         return s;
@@ -164,7 +165,7 @@ test("Status is closed to exactly in_progress|waiting_on_human|complete|aborted 
       }
     }
   }
-  for (const s of ["in_progress", "waiting_on_human", "complete", "aborted"] as const) {
+  for (const s of ["in_progress", "waiting_on_human", "awaiting-consus", "complete", "aborted"] as const) {
     assert.equal(assertExhaustive(s), s);
   }
 });

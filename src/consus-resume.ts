@@ -116,14 +116,14 @@ export async function resumeFromConsusAnswer(
   }
 
   const before = deps.getRunStatus({ run_id: params.run_id }) as { status: string };
-  if (before.status !== "waiting_on_human") {
+  if (before.status !== "waiting_on_human" && before.status !== "awaiting-consus") {
     return {
       run_id: params.run_id,
       status: before.status,
       resumed: false,
       filed_stories: [],
       file_errors: [],
-      reason: `run is ${before.status}, not waiting_on_human`,
+      reason: `run is ${before.status}, not waiting_on_human or awaiting-consus`,
     };
   }
 

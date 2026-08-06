@@ -40,8 +40,9 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
 import { listEnvelopes } from "./envelope-detection.ts";
 
-const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
+const DEFAULT_HEIMDALL_URL = "http://127.0.0.1:8787";
+const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
 
 // Production finding (2026-07-26): a real kickoff->planning transition turn legitimately runs
 // past the old hardcoded 120s ceiling, causing SubagentDriver's poll to time out short of
@@ -62,6 +63,88 @@ function resolveTurnTimeoutMs(): number {
   return parsed;
 }
 const CLAUDE_TIMEOUT_MS = resolveTurnTimeoutMs();
+
+export interface RuntimeRoute {
+  cli: string;
+  model: string;
+}
+
+type RouteFetch = (
+  input: string,
+  init: { method: "GET"; signal: AbortSignal },
+) => Promise<{
+  ok: boolean;
+  status: number;
+  statusText: string;
+  text(): Promise<string>;
+}>;
+
+function resolveRouteTimeoutMs(): number {
+  const raw = process.env.MINERVA_HEIMDALL_ROUTE_TIMEOUT_MS;
+  if (raw === undefined) return DEFAULT_ROUTE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid MINERVA_HEIMDALL_ROUTE_TIMEOUT_MS value "${raw}" -- expected a positive number of milliseconds`,
+    );
+  }
+  return parsed;
+}
+
+function availableRouteUrl(): string {
+  const exact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  if (exact) return exact;
+  const base = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? DEFAULT_HEIMDALL_URL;
+  return new URL("/available-route", base.endsWith("/") ? base : `${base}/`).toString();
+}
+
+export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
+  const root = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const route =
+    root && typeof root.route === "object" && root.route !== null
+      ? (root.route as Record<string, unknown>)
+      : root && typeof root.runtime === "object" && root.runtime !== null
+        ? (root.runtime as Record<string, unknown>)
+        : root && typeof root.selected_route === "object" && root.selected_route !== null
+          ? (root.selected_route as Record<string, unknown>)
+        : root && typeof root.selected === "object" && root.selected !== null
+          ? (root.selected as Record<string, unknown>)
+          : root;
+
+  const cli = route?.cli ?? route?.command ?? route?.executable ?? route?.cli_command ?? route?.tool ?? route?.provider;
+  const model = route?.model ?? route?.model_name ?? route?.modelName;
+  if (typeof cli !== "string" || cli.trim() === "" || typeof model !== "string" || model.trim() === "") {
+    throw new Error(`Heimdall /available-route response must include non-empty cli and model strings`);
+  }
+  return { cli: cli.trim(), model: model.trim() };
+}
+
+export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fetch): Promise<RuntimeRoute> {
+  const endpoint = availableRouteUrl();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), resolveRouteTimeoutMs());
+  try {
+    const res = await fetchImpl(endpoint, { method: "GET", signal: controller.signal });
+    const body = await res.text();
+    if (!res.ok) {
+      throw new Error(`Heimdall /available-route failed with HTTP ${res.status} ${res.statusText}: ${body}`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch (e) {
+      throw new Error(`Heimdall /available-route returned non-JSON output: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return parseAvailableRoutePayload(parsed);
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error(`Heimdall /available-route timed out after ${resolveRouteTimeoutMs()}ms`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface DriverInput {
   cwd: string;
@@ -135,10 +218,10 @@ export function resolveClaudeSpawnEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.Proc
   return env;
 }
 
-function spawnClaude(cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<ClaudePResult> {
+function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<ClaudePResult> {
   return new Promise((resolve, reject) => {
     const env = resolveClaudeSpawnEnv(extraEnv);
-    const child = spawn("claude", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
+    const child = spawn(route.cli, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     inFlightChild = child;
 
     let stdout = "";
@@ -164,17 +247,17 @@ function spawnClaude(cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv):
       clearTimeout(timer);
       if (inFlightChild === child) inFlightChild = null;
       if (signal) {
-        reject(new Error(`claude was killed by signal ${signal}${stderr ? `: ${stderr}` : ""}`));
+        reject(new Error(`${route.cli} was killed by signal ${signal}${stderr ? `: ${stderr}` : ""}`));
         return;
       }
       if (code !== 0) {
-        reject(new Error(`claude exited with code ${code}: ${stderr}`));
+        reject(new Error(`${route.cli} exited with code ${code}: ${stderr}`));
         return;
       }
       try {
         resolve(JSON.parse(stdout) as ClaudePResult);
       } catch (e) {
-        reject(new Error(`claude produced non-JSON output: ${e instanceof Error ? e.message : String(e)}`));
+        reject(new Error(`${route.cli} produced non-JSON output: ${e instanceof Error ? e.message : String(e)}`));
       }
     });
   });
@@ -182,11 +265,12 @@ function spawnClaude(cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv):
 
 export class SpawnDriver implements Driver {
   async runTurn(input: DriverInput): Promise<DriverResult> {
+    const route = await resolveRuntimeRoute();
     const sessionArgs = input.sessionId ? ["--resume", input.sessionId] : ["--session-id", randomUUID()];
     const args = [
       "-p",
       "--model",
-      MODEL,
+      route.model,
       "--output-format",
       "json",
       "--permission-mode",
@@ -195,7 +279,7 @@ export class SpawnDriver implements Driver {
       ...classificationSchemaArgs(),
       input.prompt,
     ];
-    const result = await spawnClaude(input.cwd, args);
+    const result = await spawnRuntime(route, input.cwd, args);
     return { session_id: result.session_id, raw_result: result.result };
   }
 }
@@ -212,8 +296,8 @@ interface BackgroundAgentEntry {
   state?: string;
 }
 
-function runClaudeUtility(args: string[], cwd?: string): string {
-  return execFileSync("claude", args, {
+function runRuntimeUtility(route: RuntimeRoute, args: string[], cwd?: string): string {
+  return execFileSync(route.cli, args, {
     encoding: "utf8",
     timeout: UTILITY_CMD_TIMEOUT_MS,
     cwd,
@@ -221,26 +305,26 @@ function runClaudeUtility(args: string[], cwd?: string): string {
   });
 }
 
-function dispatchBackground(cwd: string, sessionId: string | null, prompt: string): string {
+function dispatchBackground(route: RuntimeRoute, cwd: string, sessionId: string | null, prompt: string): string {
   const args = [
     "--bg",
     "--model",
-    MODEL,
+    route.model,
     "--permission-mode",
     "bypassPermissions",
     ...(sessionId ? ["--resume", sessionId] : []),
     prompt,
   ];
-  const out = runClaudeUtility(args, cwd);
+  const out = runRuntimeUtility(route, args, cwd);
   const match = out.match(/backgrounded\s*[·:]\s*(\S+)/);
   if (!match || !match[1]) {
-    throw new Error(`could not parse a background session id from claude --bg output: ${out}`);
+    throw new Error(`could not parse a background session id from ${route.cli} --bg output: ${out}`);
   }
   return match[1];
 }
 
-function listBackgroundAgents(): BackgroundAgentEntry[] {
-  const out = runClaudeUtility(["agents", "--json"]);
+function listBackgroundAgents(route: RuntimeRoute): BackgroundAgentEntry[] {
+  const out = runRuntimeUtility(route, ["agents", "--json"]);
   const parsed = JSON.parse(out) as BackgroundAgentEntry[];
   return parsed.filter((a) => a.kind === "background");
 }
@@ -252,10 +336,10 @@ function sleep(ms: number): Promise<void> {
 // Polls until the dispatched session's state is done OR blocked -- both represent "the turn
 // produced a response and stopped" from Minerva's perspective (confirmed empirically: a --bg
 // session that asks a question and waits for input shows state: blocked, not done).
-async function pollUntilTerminal(shortId: string): Promise<BackgroundAgentEntry> {
+async function pollUntilTerminal(route: RuntimeRoute, shortId: string): Promise<BackgroundAgentEntry> {
   const deadline = Date.now() + POLL_CEILING_MS;
   while (Date.now() < deadline) {
-    const entry = listBackgroundAgents().find((a) => a.id === shortId);
+    const entry = listBackgroundAgents(route).find((a) => a.id === shortId);
     if (entry && (entry.state === "done" || entry.state === "blocked")) {
       return entry;
     }
@@ -264,15 +348,15 @@ async function pollUntilTerminal(shortId: string): Promise<BackgroundAgentEntry>
   throw new Error(`background session ${shortId} did not reach done/blocked within ${POLL_CEILING_MS}ms`);
 }
 
-function stopBackground(shortId: string): void {
-  runClaudeUtility(["stop", shortId]);
+function stopBackground(route: RuntimeRoute, shortId: string): void {
+  runRuntimeUtility(route, ["stop", shortId]);
 }
 
 // Best-effort reap used on failure paths -- a failure to stop an already-gone/already-stopped
 // session must not mask the original error being propagated up to the caller.
-function reapBackground(shortId: string): void {
+function reapBackground(route: RuntimeRoute, shortId: string): void {
   try {
-    stopBackground(shortId);
+    stopBackground(route, shortId);
   } catch {
     // already stopped/finished/gone -- fine, this is best-effort cleanup on a failure path
   }
@@ -280,31 +364,32 @@ function reapBackground(shortId: string): void {
 
 export class SubagentDriver implements Driver {
   async runTurn(input: DriverInput): Promise<DriverResult> {
-    const shortId = dispatchBackground(input.cwd, input.sessionId, input.prompt);
+    const route = await resolveRuntimeRoute();
+    const shortId = dispatchBackground(route, input.cwd, input.sessionId, input.prompt);
 
     let entry: BackgroundAgentEntry;
     try {
-      entry = await pollUntilTerminal(shortId);
+      entry = await pollUntilTerminal(route, shortId);
     } catch (e) {
       // Production finding (2026-07-26): a poll timeout previously left the underlying --bg
       // session running and untracked -- never stopped, accumulating and burning tokens until
       // manually reaped. Reap it here even though we're giving up on this turn; the original
       // timeout error still propagates to the caller.
-      reapBackground(shortId);
+      reapBackground(route, shortId);
       throw e;
     }
 
     const fullSessionId = entry.sessionId;
     if (!fullSessionId) {
-      reapBackground(shortId);
+      reapBackground(route, shortId);
       throw new Error(`background session ${shortId} reached a terminal state with no sessionId`);
     }
-    stopBackground(shortId);
+    stopBackground(route, shortId);
 
     const args = [
       "-p",
       "--model",
-      MODEL,
+      route.model,
       "--output-format",
       "json",
       "--permission-mode",
@@ -314,7 +399,7 @@ export class SubagentDriver implements Driver {
       ...classificationSchemaArgs(),
       EXTRACTION_INSTRUCTION,
     ];
-    const result = await spawnClaude(input.cwd, args);
+    const result = await spawnRuntime(route, input.cwd, args);
     return { session_id: result.session_id, raw_result: result.result };
   }
 }
@@ -491,10 +576,11 @@ export class ForkedHiveDriver implements Driver {
   }
 
   private async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
+    const route = await resolveRuntimeRoute();
     const args = [
       "-p",
       "--model",
-      MODEL,
+      route.model,
       "--output-format",
       "json",
       "--permission-mode",
@@ -504,7 +590,7 @@ export class ForkedHiveDriver implements Driver {
       randomUUID(),
       skillPrompt + EXPLICIT_STOP_INSTRUCTION,
     ];
-    await spawnClaude(cwd, args, { HIVE_HEADLESS: "1" });
+    await spawnRuntime(route, cwd, args, { HIVE_HEADLESS: "1" });
     return this.surfaceNextQuestion(cwd, skillPrompt);
   }
 
@@ -574,10 +660,11 @@ export class ForkedHiveDriver implements Driver {
   }
 
   private async classify(cwd: string, questionText: string) {
+    const route = await resolveRuntimeRoute();
     const args = [
       "-p",
       "--model",
-      MODEL,
+      route.model,
       "--output-format",
       "json",
       "--permission-mode",
@@ -585,7 +672,7 @@ export class ForkedHiveDriver implements Driver {
       ...classificationOnlySchemaArgs(),
       `Classify this question, which will be asked on Minerva's behalf: ${questionText}`,
     ];
-    const result = await spawnClaude(cwd, args);
+    const result = await spawnRuntime(route, cwd, args);
     return extractClassification(result.result);
   }
 }

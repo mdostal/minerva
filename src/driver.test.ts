@@ -14,6 +14,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { SpawnDriver } from "./driver.ts";
+import { testHeimdallRouteUrl } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HARNESS = join(__dirname, "driver-sigint-harness.ts");
@@ -26,14 +27,22 @@ const HARNESS = join(__dirname, "driver-sigint-harness.ts");
 // suite avoids this via allocateRun's isolated workspaces; these driver-level tests need the
 // same isolation.
 let scratchCwd: string;
+let previousRouteUrl: string | undefined;
 
 before(() => {
+  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
   scratchCwd = mkdtempSync(join(tmpdir(), "minerva-driver-test-"));
   execFileSync("git", ["init", "-q", scratchCwd]);
   execFileSync("git", ["-C", scratchCwd, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
 });
 
 after(() => {
+  if (previousRouteUrl === undefined) {
+    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  } else {
+    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+  }
   rmSync(scratchCwd, { recursive: true, force: true });
 });
 

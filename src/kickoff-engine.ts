@@ -8,6 +8,7 @@ import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channe
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
+import { postQuestionToConsusDecisionApi } from "./consus-decisions.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
@@ -46,7 +47,7 @@ function buildDrivePrompt(idea: string): string {
 // skill has actually finished and written its epic.yaml would otherwise still be forced to
 // emit SOME filler question text -- the filesystem check routes around that entirely, ignoring
 // whatever the schema-forced response said once completion is detected.
-function recordTurn(runId: string, rawResult: string): void {
+export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
     return; // run is complete -- no pending question to append, ever
   }
@@ -67,6 +68,11 @@ function recordTurn(runId: string, rawResult: string): void {
     status: "waiting_on_human",
     questions: [...record.questions, question],
   });
+
+  const posted = await postQuestionToConsusDecisionApi(runId, question);
+  if (posted.posted) {
+    updateRunRecord(runId, { status: "awaiting-consus" });
+  }
 }
 
 export async function startRun(params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -88,7 +94,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   return { run_id: runId };
 }
@@ -178,7 +184,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   return { result: {} };
 }

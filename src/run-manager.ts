@@ -96,6 +96,14 @@ export interface RunRecord {
   // once when the run transitions to complete. Absent until then, and for fresh_init runs where
   // there is nothing to push. Opaque here; output-emitter owns the shape (PlanPushResult).
   plan_push?: unknown;
+  // Runner-agnostic planning (agnostic-plan-driver.ts). When Heimdall routes planning to a
+  // non-Claude runtime, these carry the resolved runtime + model so EVERY turn (initial
+  // decompose, auto-answered gates, human-answered resumes) reconstructs the same
+  // AgnosticPlanDriver and continues the same runtime session. Absent => the built-in claude
+  // SpawnDriver drives the run (fully backwards-compatible). Persisted so a run's runtime never
+  // changes mid-flight even across process restarts.
+  plan_runtime?: string;
+  plan_model?: string;
 }
 
 function minervaHome(): string {

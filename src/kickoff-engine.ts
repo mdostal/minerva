@@ -8,6 +8,8 @@ import { allocateRun, readRunRecord, updateRunRecord, normalizeQuestionKind, typ
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
+import { resolveAgnosticPlanDriver, agnosticPlanDriverFromRecord } from "./agnostic-plan-driver.ts";
+import type { RunRecord } from "./run-manager.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
 
@@ -41,6 +43,22 @@ export function __setDriverForTest(d: Driver): Driver {
   const prev = driver;
   driver = d;
   return prev;
+}
+
+// Resolve the driver for a given run. When runner-agnostic planning was selected at startRun
+// (Heimdall routed planning to a non-Claude runtime, and its runtime+model were frozen onto the
+// run record), rebuild the matching AgnosticPlanDriver so EVERY turn of this run — initial
+// decompose, auto-answered gates, and human-answered resumes — uses the same runtime and its
+// live opencode session. Otherwise (the common/default case, and the bulletproof fallback when
+// the ported CLI has since gone missing) fall back to the module `driver` — byte-identical to
+// the pre-agnostic behavior. A test-injected driver (__setDriverForTest) always wins, since
+// resolveAgnosticPlanDriver never fires in test mode so plan_runtime is never set there.
+function driverForRecord(record: Pick<RunRecord, "plan_runtime" | "plan_model">): Driver {
+  if (record.plan_runtime && record.plan_model && record.plan_runtime.toLowerCase() !== "claude") {
+    const agnostic = agnosticPlanDriverFromRecord(record.plan_runtime, record.plan_model);
+    if (agnostic) return agnostic;
+  }
+  return driver;
 }
 
 // Build the initial headless drive prompt. This must PLAN (decompose), never IMPLEMENT: it
@@ -164,7 +182,7 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result } = await driver.runTurn({
+    const { session_id, raw_result } = await driverForRecord(record).runTurn({
       cwd: record.workspace_path,
       sessionId: record.session_id,
       prompt: answerPrompt,
@@ -199,10 +217,24 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   const defaults = loadPlanDefaults(params.defaults);
 
   const { run_id: runId } = allocateRun(idea, targetRepo, defaults, resolved.source);
+
+  // Runner-agnostic planning (agnostic-plan-driver.ts): ask Heimdall which runtime should serve
+  // planning. When it routes to a non-Claude runtime AND the ported entrypoint + opencode are
+  // present, freeze that runtime+model onto the run record so driverForRecord() drives every turn
+  // through the ported `/plugin-hive:plan` DECOMPOSE flow on that runtime. resolveAgnosticPlanDriver
+  // returns null on ANY doubt (feature off, test mode, Heimdall down, claude route, missing
+  // CLI/opencode) — in which case this is a no-op and the built-in claude driver runs, so planning
+  // never breaks on an unavailable route or port.
+  const planDriver = await resolveAgnosticPlanDriver();
+  if (planDriver) {
+    updateRunRecord(runId, { plan_runtime: planDriver.runtime, plan_model: planDriver.model });
+  }
   const record = readRunRecord(runId);
 
-  const drivePrompt = buildDrivePrompt(idea, defaults);
-  const { session_id: sessionId, raw_result: rawResult } = await driver.runTurn({
+  // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
+  // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
+  const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults);
+  const { session_id: sessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
     cwd: record.workspace_path,
     sessionId: null,
     prompt: drivePrompt,
@@ -296,7 +328,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult } = await driver.runTurn({
+  const { session_id: newSessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
     cwd: record.workspace_path,
     sessionId: record.session_id,
     prompt: answerPrompt,

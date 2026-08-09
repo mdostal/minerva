@@ -34,6 +34,8 @@ after(() => {
 function newScratchWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "minerva-forked-driver-test-"));
   execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", dir, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
   return dir;
 }

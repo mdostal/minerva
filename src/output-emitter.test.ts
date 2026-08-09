@@ -145,6 +145,8 @@ test("getOutput validation: missing run_id returns VALIDATION_FAILED; unknown ru
 function initRepo(): string {
   const repo = mkdtempSync(join(tmpdir(), "minerva-commit-plan-repo-"));
   execFileSync("git", ["init", "-q", "-b", "dev", repo]);
+  execFileSync("git", ["-C", repo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "init"]);
   return repo;
 }

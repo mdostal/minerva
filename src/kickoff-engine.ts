@@ -4,36 +4,86 @@
 // "No Autonomous Progress" and AD-2.
 
 import { MinervaError } from "./errors.ts";
-import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
+import { allocateRun, readRunRecord, updateRunRecord, normalizeQuestionKind, type Question, type Channel } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, type Driver } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
+import { resolveAgnosticPlanDriver, agnosticPlanDriverFromRecord } from "./agnostic-plan-driver.ts";
+import type { RunRecord } from "./run-manager.ts";
+import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
+import { resolveTargetRepo } from "./repo-resolution.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
 // already proven in production. Operators opt into "subagent" where orphaning is the active
-// pain; an unrecognized value fails loudly at startup rather than silently falling back.
+// pain, or "forked" (forked-driver-integration epic) where even the question-wait step should
+// carry zero orphan risk (no live process at all while waiting on a human -- state lives on
+// disk as a question envelope); an unrecognized value fails loudly at startup rather than
+// silently falling back.
 function selectDriver(): Driver {
   const value = process.env.MINERVA_DRIVER ?? "spawn";
   if (value === "spawn") return new SpawnDriver();
   if (value === "subagent") return new SubagentDriver();
+  if (value === "forked") return new ForkedHiveDriver();
   throw new MinervaError(
     "VALIDATION_FAILED",
-    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn" or "subagent"`,
+    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn", "subagent", or "forked"`,
   );
 }
 
-const driver: Driver = selectDriver();
+// `let`, not `const`, so tests can inject a scripted fake Driver (via __setDriverForTest) to
+// exercise the auto-answer loop deterministically without spawning a real `claude` process. Every
+// engine call reads this binding live, so a swap takes effect immediately. Production code never
+// calls the setter -- the real driver from selectDriver() is used unchanged.
+let driver: Driver = selectDriver();
 
-// Test seam: swap the real `/plugin-hive:kickoff {idea}` prompt for a cheap synthetic one so
-// the automated suite doesn't drive a full real kickoff (slow, costly, many gates) on every
-// run. The spawn/resume MECHANISM is identical either way -- only prompt content differs. The
-// real prompt is exercised by manual confirmation (see this story's review notes), and by the
-// Risk-A spike this engine directly reuses (docs/spike-plugin-hive-drivability-findings.md).
-function buildDrivePrompt(idea: string): string {
+// Test-only seam. Not part of the ABI, not reachable via dispatch.ts -- kept minimal and clearly
+// named. Returns the previous driver so a test can restore it in an after() hook.
+export function __setDriverForTest(d: Driver): Driver {
+  const prev = driver;
+  driver = d;
+  return prev;
+}
+
+// Resolve the driver for a given run. When runner-agnostic planning was selected at startRun
+// (Heimdall routed planning to a non-Claude runtime, and its runtime+model were frozen onto the
+// run record), rebuild the matching AgnosticPlanDriver so EVERY turn of this run — initial
+// decompose, auto-answered gates, and human-answered resumes — uses the same runtime and its
+// live opencode session. Otherwise (the common/default case, and the bulletproof fallback when
+// the ported CLI has since gone missing) fall back to the module `driver` — byte-identical to
+// the pre-agnostic behavior. A test-injected driver (__setDriverForTest) always wins, since
+// resolveAgnosticPlanDriver never fires in test mode so plan_runtime is never set there.
+function driverForRecord(record: Pick<RunRecord, "plan_runtime" | "plan_model">): Driver {
+  if (record.plan_runtime && record.plan_model && record.plan_runtime.toLowerCase() !== "claude") {
+    const agnostic = agnosticPlanDriverFromRecord(record.plan_runtime, record.plan_model);
+    if (agnostic) return agnostic;
+  }
+  return driver;
+}
+
+// Build the initial headless drive prompt. This must PLAN (decompose), never IMPLEMENT: it
+// drives plugin-hive's `/plugin-hive:plan` DECOMPOSE skill, which writes an epic +
+// dependency-tracked stories into `.pHive/epics/<id>/` -- the filesystem fact
+// checkAndMarkComplete keys completion off. The previous `/plugin-hive:kickoff` prompt, under
+// the auto-answer loop, drove kickoff's build path: it wrote+committed the feature itself and
+// never emitted an epic manifest, so findCompletedEpics stayed empty, the run never marked
+// complete, and it parked at waiting_on_human (epic_count:0) -- the plan->commit->push->file
+// seam downstream never fired. Headless-safe flags: `--skip-sign-off` drops the user-facing
+// sign-off gates; `--lite` drops the collaborative review gate + structured outline (keeps the
+// design-discussion artifact). Any residual routine gate is still auto-answered by the
+// pre-baked-defaults loop.
+//
+// Test seam: MINERVA_TEST_DRIVE_PROMPT swaps this real skill prompt for a cheap synthetic one so
+// the automated suite doesn't drive a full real plan (slow, costly, many gates) on every run.
+// The spawn/resume MECHANISM is identical either way -- only prompt content differs.
+function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
   const override = process.env.MINERVA_TEST_DRIVE_PROMPT;
-  if (override) return override.replace(/\{idea\}/g, idea);
-  return `/plugin-hive:kickoff ${idea}`;
+  const base = override
+    ? override.replace(/\{idea\}/g, idea)
+    : `/plugin-hive:plan ${idea} --skip-sign-off --lite`;
+  // Append any operator-configured suffix (e.g. an explicit "skip the sign-off gate"
+  // instruction). Empty string when unset -> prompt is byte-identical to before.
+  return base + drivePromptSuffix(defaults);
 }
 
 // Called after every drive/resume call. Checks completion (a filesystem fact -- see
@@ -48,6 +98,7 @@ function recordTurn(runId: string, rawResult: string): void {
   }
   const record = readRunRecord(runId);
   const classified = extractClassifiedQuestion(rawResult);
+  const shape = extractQuestionShape(rawResult);
   const question: Question = {
     id: `q-${record.questions.length + 1}`,
     text: classified.text,
@@ -58,6 +109,12 @@ function recordTurn(runId: string, rawResult: string): void {
     // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
     channel: classified.suggested_channel,
     status: "pending",
+    // Structured envelope fields (kind/options/qid) carried through when the driver supplies
+    // them (ForkedHiveDriver's envelope-sourced questions do; SpawnDriver/SubagentDriver's prose
+    // questions don't). Additive -- undefined for prose questions, which then resolve via the
+    // free-text default path. These are what let the auto-answer loop pick a real option for a
+    // single/multi-select gate instead of only ever answering free-text.
+    ...shape,
   };
   updateRunRecord(runId, {
     status: "waiting_on_human",
@@ -65,18 +122,119 @@ function recordTurn(runId: string, rawResult: string): void {
   });
 }
 
+// Best-effort parse of the structured envelope fields a driver may embed alongside the question
+// text in its raw_result JSON (ForkedHiveDriver does; see its surfaceNextQuestion). Never throws
+// -- a non-JSON or field-less raw_result (the SpawnDriver/SubagentDriver prose case) yields an
+// empty object, leaving the Question free-text-shaped exactly as before.
+function extractQuestionShape(rawResult: string): Partial<Pick<Question, "kind" | "options" | "qid">> {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(rawResult);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object") return {};
+  const shape: Partial<Pick<Question, "kind" | "options" | "qid">> = {};
+  if (parsed.kind !== undefined) shape.kind = normalizeQuestionKind(parsed.kind);
+  if (Array.isArray(parsed.options) && parsed.options.every((o: unknown) => typeof o === "string")) {
+    shape.options = parsed.options as string[];
+  } else if (parsed.options === null) {
+    shape.options = null;
+  }
+  if (typeof parsed.qid === "string") shape.qid = parsed.qid;
+  return shape;
+}
+
+// The pre-baked-defaults auto-answer loop (prebaked-plan-defaults epic). Called after every
+// drive/resume turn. While the current run has a pending question for which the run's frozen
+// plan-defaults config resolves a pre-decided answer, it supplies that answer through the SAME
+// mark-answered + re-drive path submitAnswers uses -- there is no separate "autonomous progress"
+// mechanism, just an operator's pre-decided answers delivered without a live human keystroke.
+//
+// It STOPS (leaving the run parked as waiting_on_human, exactly as before) the moment it hits a
+// question with no resolvable default -- a genuine strategic gate that still needs a human
+// (AD-5 preserved) -- or the run completes, or the max_auto_answers guardrail trips. This is the
+// whole reason a fresh headless idea-build no longer hangs on the first routine gate: those
+// gates now get answered from the config instead of waiting forever for a submitAnswers call.
+async function autoAnswerLoop(runId: string): Promise<void> {
+  const initial = readRunRecord(runId);
+  const defaults: PlanDefaults = initial.defaults ?? loadPlanDefaults();
+  if (defaults.mode === "off") return; // feature disabled -- classic park-every-question behavior
+
+  let answered = 0;
+  while (answered < defaults.max_auto_answers) {
+    const record = readRunRecord(runId);
+    if (record.status === "complete" || record.status === "aborted") return;
+
+    const pending = record.questions.find((q) => q.status === "pending");
+    if (!pending) return; // nothing to answer (shouldn't happen while waiting_on_human, but safe)
+
+    const answer = resolveDefaultAnswer(pending, defaults, record.idea ?? "");
+    if (answer === null) return; // no pre-baked default -> genuine human gate; leave it parked
+
+    if (!record.session_id) return; // no live session to resume against -- cannot drive further
+
+    // Mark answered + re-drive, mirroring submitAnswers exactly (its own "No Autonomous Progress"
+    // advancement path). The pre-baked answer is the operator's, supplied ahead of time.
+    const updatedQuestions = record.questions.map((q) =>
+      q.id === pending.id ? { ...q, status: "answered" as const } : q,
+    );
+    updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
+
+    const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
+    const { session_id, raw_result } = await driverForRecord(record).runTurn({
+      cwd: record.workspace_path,
+      sessionId: record.session_id,
+      prompt: answerPrompt,
+    });
+    updateRunRecord(runId, { session_id });
+    recordTurn(runId, raw_result);
+    answered++;
+  }
+  // Guardrail tripped: leave whatever recordTurn last set (waiting_on_human or complete). Bounded,
+  // never an infinite loop -- a pathological run parks for a human rather than spinning forever.
+}
+
 export async function startRun(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const idea = params.idea;
   if (typeof idea !== "string" || idea.length === 0) {
     throw new MinervaError("VALIDATION_FAILED", "startRun requires a non-empty string `idea`");
   }
-  const targetRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
+  const explicitRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
 
-  const { run_id: runId } = allocateRun(idea, targetRepo);
+  // Resolve a REAL build-target repo for this seed (PAN-6745 autonomy unlock). An explicit
+  // target_repo wins; otherwise god-scoped work maps to that god's repo, and greenfield work
+  // falls back to a configured incubator repo. Only when nothing at all is configured does this
+  // return undefined, preserving the legacy fresh_init behavior. Resolving a real repo is what
+  // lets the finished plan be committed + pushed somewhere a build agent can check it out, instead
+  // of being stranded in a throwaway fresh_init scratch that is never pushed anywhere.
+  const resolved = resolveTargetRepo({ explicit: explicitRepo, idea });
+  const targetRepo = resolved.repo;
+
+  // Resolve the effective pre-baked-defaults config once, here, from built-in + env + the
+  // per-run `defaults` override, and freeze it onto the run record (prebaked-plan-defaults epic).
+  // Every subsequent auto-answer turn uses this same frozen config.
+  const defaults = loadPlanDefaults(params.defaults);
+
+  const { run_id: runId } = allocateRun(idea, targetRepo, defaults, resolved.source);
+
+  // Runner-agnostic planning (agnostic-plan-driver.ts): ask Heimdall which runtime should serve
+  // planning. When it routes to a non-Claude runtime AND the ported entrypoint + opencode are
+  // present, freeze that runtime+model onto the run record so driverForRecord() drives every turn
+  // through the ported `/plugin-hive:plan` DECOMPOSE flow on that runtime. resolveAgnosticPlanDriver
+  // returns null on ANY doubt (feature off, test mode, Heimdall down, claude route, missing
+  // CLI/opencode) — in which case this is a no-op and the built-in claude driver runs, so planning
+  // never breaks on an unavailable route or port.
+  const planDriver = await resolveAgnosticPlanDriver();
+  if (planDriver) {
+    updateRunRecord(runId, { plan_runtime: planDriver.runtime, plan_model: planDriver.model });
+  }
   const record = readRunRecord(runId);
 
-  const drivePrompt = buildDrivePrompt(idea);
-  const { session_id: sessionId, raw_result: rawResult } = await driver.runTurn({
+  // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
+  // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
+  const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults);
+  const { session_id: sessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
     cwd: record.workspace_path,
     sessionId: null,
     prompt: drivePrompt,
@@ -85,6 +243,10 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
   recordTurn(runId, rawResult);
+
+  // Auto-answer any routine gate questions from the pre-baked defaults so a fresh headless run
+  // drives itself forward instead of hanging on the first gate. No-op when mode is "off".
+  await autoAnswerLoop(runId);
 
   return { run_id: runId };
 }
@@ -105,14 +267,20 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
 
 interface Answer {
   question_id: string;
-  answer: string;
+  // string for single-select/free-text; string[] for multi-select (question-envelope-schema.md
+  // §"Question object fields" -- "Array for multi-select, string otherwise").
+  answer: string | string[];
+}
+
+function isValidAnswerValue(value: unknown): value is string | string[] {
+  return typeof value === "string" || (Array.isArray(value) && value.every((v) => typeof v === "string"));
 }
 
 function isAnswerArray(value: unknown): value is Answer[] {
   return (
     Array.isArray(value) &&
     value.every(
-      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && typeof (a as any).answer === "string",
+      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && isValidAnswerValue((a as any).answer),
     )
   );
 }
@@ -156,15 +324,24 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   const updatedQuestions = record.questions.map((q) => (q.id === questionId ? { ...q, status: "answered" as const } : q));
   updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
-  const { session_id: newSessionId, raw_result: rawResult } = await driver.runTurn({
+  // Driver.runTurn's prompt is always a plain string -- a multi-select answer (string[]) is
+  // joined into readable prose for the driven turn, matching how a human would phrase multiple
+  // selections in a chat message.
+  const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
+  const { session_id: newSessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
     cwd: record.workspace_path,
     sessionId: record.session_id,
-    prompt: answer,
+    prompt: answerPrompt,
   });
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });
   recordTurn(runId, rawResult);
+
+  // After a human (or agent) answers an escalated question, resume auto-answering any further
+  // routine gates from the pre-baked defaults, so answering one strategic question doesn't leave
+  // the run stalled on the next mechanical one. No-op when mode is "off".
+  await autoAnswerLoop(runId);
 
   return { result: {} };
 }

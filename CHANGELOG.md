@@ -4,6 +4,11 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Pre-baked plan defaults — fresh headless runs no longer hang** (`feat/prebaked-plan-defaults`): a new `plan-defaults` layer lets a fresh plan run supply operator-pre-decided answers to the standard kickoff/plan gate questions automatically, so an idea-build drives kickoff+plan to a finished epic+stories unattended instead of parking on the first gate. Three modes (`off` = classic park-everything default; `agent` = auto-answer routine/`agent`-channel gates, still escalate genuine strategic `human` gates per AD-5; `auto` = fully unattended). Config resolves from built-in → `MINERVA_PLAN_DEFAULTS` file → `MINERVA_PLAN_DEFAULTS_MODE` env → per-run `startRun params.defaults`, with sign-off/tech-stack/select-strategy/free-text/explicit-answer rules — all overridable per-run. Envelope questions now carry `kind`/`options`/`qid` end-to-end so selects get a real option picked, not just a free-text answer. See `docs/plan-defaults.example.yaml`.
+- **Auriga-invokable headless-plan entry** (`bin/minerva-plan`): a router-facing one-shot command that turns a Multica ticket (or an idea-brief/idea) into a dependency-tracked epic + stories headlessly (pre-baked defaults, `mode: auto`), writes the `.pHive` epic+stories, and — with `--file-to-multica` — files the decomposed stories back to Multica as sub-issues linked to the origin ticket (left unassigned per standing policy). This is the interface Auriga routes an un-planned ticket to; only the resulting PLANNED stories then go to dev agents. Backed by `src/plan-runner.ts`; the core ABI stays Multica-agnostic. A `minerva-dev` Multica agent persona runs this on assigned tickets.
+
 ## [0.1.1] - 2026-07-26
 
 **Minerva ships as an agent-drivable idea-to-spec engine — plugin-hive's kickoff+plan flow is now callable end-to-end over a stable subprocess ABI, with a swappable, orphan-resistant driver underneath.**

@@ -95,3 +95,76 @@ export function extractClassifiedQuestion(rawResult: string): ClassifiedQuestion
 
   return { text, suggested_channel: channel, confidence, reason };
 }
+
+// --- Classification-only path (forked-driver-integration epic) -----------------------------
+// ForkedHiveDriver's envelope questions arrive already-structured (text/kind/options straight
+// from the envelope) -- no extraction step is needed, unlike SpawnDriver/SubagentDriver's
+// prose-scraping turns. This is a SEPARATE, smaller schema that requests only the
+// classification fields, reusing the exact same safe-default fallback discipline as
+// extractClassifiedQuestion() above. Each call classifies exactly one question -- callers
+// classify a multi-question envelope's batch by calling this once per question, never bundling
+// several questions' judgments into one ambiguous response.
+
+const CLASSIFICATION_ONLY_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    suggested_channel: {
+      type: "string",
+      enum: ["agent", "human"],
+      description:
+        "Classify the given question. Escalate to human if the question is strategic, " +
+        "ambiguous, irreversible, or you have low confidence in a safe default answer. " +
+        "Classify as agent if the question is routine, mechanical, or has an obvious/safe " +
+        "pre-decided default that a coding agent could answer on the human operator's behalf " +
+        "without real risk. When genuinely uncertain, always choose human -- never guess.",
+    },
+    confidence: {
+      type: "number",
+      description: "Your confidence, 0.0 to 1.0, in the suggested_channel classification above.",
+    },
+    reason: {
+      type: "string",
+      description: "One concise sentence explaining why you classified it this way.",
+    },
+  },
+  required: ["suggested_channel", "confidence", "reason"],
+});
+
+export function classificationOnlySchemaArgs(): string[] {
+  return ["--json-schema", CLASSIFICATION_ONLY_SCHEMA];
+}
+
+export type Classification = Omit<ClassifiedQuestion, "text">;
+
+// Same safe-default fallback discipline as extractClassifiedQuestion(): any parse failure or
+// missing/invalid field falls back to human/confidence-0/a safe-default reason, never guesses,
+// never throws.
+export function extractClassification(rawResult: string): Classification {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(rawResult);
+  } catch {
+    return {
+      suggested_channel: "human",
+      confidence: 0,
+      reason: SAFE_DEFAULT_REASON,
+    };
+  }
+
+  const channel: Channel =
+    parsed && (parsed.suggested_channel === "agent" || parsed.suggested_channel === "human")
+      ? parsed.suggested_channel
+      : "human";
+
+  const confidence: number =
+    parsed && typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
+      ? parsed.confidence
+      : 0;
+
+  const reason: string =
+    parsed && typeof parsed.reason === "string" && parsed.reason.trim().length > 0
+      ? parsed.reason.trim()
+      : SAFE_DEFAULT_REASON;
+
+  return { suggested_channel: channel, confidence, reason };
+}

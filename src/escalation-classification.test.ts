@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractClassifiedQuestion } from "./escalation-classification.ts";
+import { extractClassifiedQuestion, extractClassification, classificationOnlySchemaArgs } from "./escalation-classification.ts";
 
 test("parses a well-formed classified question with all four fields", () => {
   const raw = JSON.stringify({
@@ -84,4 +84,60 @@ test("out-of-range confidence value falls back to 0 rather than propagating an i
   });
   const result = extractClassifiedQuestion(raw);
   assert.equal(result.confidence, 0);
+});
+
+// --- Classification-only path (forked-driver-integration epic) -----------------------------
+// ForkedHiveDriver's envelope questions arrive already-structured (text/kind/options from the
+// envelope) -- no extraction step is needed, so this is a SEPARATE, smaller schema/parser that
+// classifies without also re-extracting question text. Reuses the exact same safe-default
+// fallback discipline as extractClassifiedQuestion() above -- never guesses, never throws.
+// See .pHive/epics/forked-driver-integration/stories/escalation-classification-envelope.yaml.
+
+test("classificationOnlySchemaArgs returns a --json-schema pair whose schema has no `question` property", () => {
+  const args = classificationOnlySchemaArgs();
+  assert.equal(args[0], "--json-schema");
+  const schema = JSON.parse(args[1] as string);
+  assert.equal(schema.properties.question, undefined);
+  assert.ok(schema.properties.suggested_channel);
+  assert.ok(schema.properties.confidence);
+  assert.ok(schema.properties.reason);
+  assert.deepEqual(schema.required.sort(), ["confidence", "reason", "suggested_channel"]);
+});
+
+test("extractClassification parses a well-formed classification-only response", () => {
+  const raw = JSON.stringify({
+    suggested_channel: "human",
+    confidence: 0.9,
+    reason: "Strategic preference requiring user judgment.",
+  });
+  const result = extractClassification(raw);
+  assert.equal(result.suggested_channel, "human");
+  assert.equal(result.confidence, 0.9);
+  assert.match(result.reason, /Strategic/);
+});
+
+test("extractClassification falls back to the safe default on malformed JSON, matching extractClassifiedQuestion's discipline exactly", () => {
+  const result = extractClassification("not json at all");
+  assert.equal(result.suggested_channel, "human");
+  assert.equal(result.confidence, 0);
+  assert.match(result.reason, /unavailable/);
+});
+
+test("extractClassification never guesses a channel on an invalid suggested_channel value", () => {
+  const raw = JSON.stringify({ suggested_channel: "maybe", confidence: 0.8, reason: "test" });
+  const result = extractClassification(raw);
+  assert.equal(result.suggested_channel, "human");
+});
+
+test("extractClassification clamps an out-of-range confidence to 0, exactly like the extraction-time parser", () => {
+  const raw = JSON.stringify({ suggested_channel: "agent", confidence: 99, reason: "test" });
+  const result = extractClassification(raw);
+  assert.equal(result.confidence, 0);
+});
+
+test("extractClassification's result never carries a `text`/`question` field -- it classifies, it does not re-extract", () => {
+  const raw = JSON.stringify({ suggested_channel: "human", confidence: 0.5, reason: "test" });
+  const result = extractClassification(raw);
+  assert.equal("text" in result, false);
+  assert.equal("question" in result, false);
 });

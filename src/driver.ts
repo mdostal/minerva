@@ -32,8 +32,11 @@
 // ForkedHiveDriver lands in this same file in a later story of this epic.
 
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { classificationSchemaArgs } from "./escalation-classification.ts";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
+import { listEnvelopes } from "./envelope-detection.ts";
 
 const MODEL = process.env.MINERVA_DRIVE_MODEL ?? "claude-haiku-4-5-20251001";
 
@@ -107,9 +110,10 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 
-function spawnClaude(cwd: string, args: string[]): Promise<ClaudePResult> {
+function spawnClaude(cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<ClaudePResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn("claude", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const env = extraEnv ? { ...process.env, ...extraEnv } : undefined;
+    const child = spawn("claude", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     inFlightChild = child;
 
     let stdout = "";
@@ -285,19 +289,273 @@ export class SubagentDriver implements Driver {
   }
 }
 
-// Inert stub for the future plugin-hive-fork driver -- the fork doesn't exist yet. Not wired
-// into MINERVA_DRIVER's selection logic (see kickoff-engine.ts's selectDriver()); exists as a
-// class, not a live option, so there is no way to accidentally select it in production.
-// Throws rather than silently no-op-ing or returning fabricated data, consistent with this
-// epic's "never guess" discipline (AD-5) -- a Driver that silently no-ops would be worse than
-// one that fails loudly, since a caller might not notice the swap happened. When the fork is
-// ready, this becomes a real implementation consuming its structured headless-question protocol
-// directly (no spawn-and-parse) -- see docs/minerva-next-tests-and-driver-paths.md §3.
+// ForkedHiveDriver (forked-driver-integration epic) -- drives the real headless-question-
+// protocol shipped in firefly-events/plugin-hive#341 (branch feat/headless-question-protocol).
+// Unlike SpawnDriver/SubagentDriver, this driver does NOT keep a live session across the
+// question-wait boundary at all -- there is no process running while a question sits
+// unanswered, because the protocol hands off via a FILE (.pHive/questions/*.yaml), not a
+// tracked background job or a resumed conversation. This is the actual fix for the orphaning
+// risk the whole swappable-driver epic exists to address.
+//
+// CONFIRMED BY THE EPIC'S OWN SPIKE (spike-stateless-model-tier), not assumed:
+// (1) Stateless turns are feasible -- a fresh, non---resume claude -p call correctly continues
+//     a headless run using on-disk state alone.
+// (2) Model tier is NOT the limiting factor -- both Haiku and Sonnet comply reliably once the
+//     drive prompt includes an explicit, forceful stop-after-writing-envelope instruction. The
+//     bare skill-invocation prompt alone is NOT sufficient regardless of tier: without that
+//     instruction, the model fills the ambiguity with its own initiative (self-answering
+//     inline, or building/running a self-authored wrapper script that simulates the entire
+//     protocol end-to-end in one turn) -- confirmed directly, repeatedly, via transcript
+//     inspection. Every prompt this driver sends therefore always appends
+//     EXPLICIT_STOP_INSTRUCTION.
+//
+// STATE ACROSS CALLS: ForkedHiveDriver never uses session_id for --resume (statelessness makes
+// that unnecessary). Instead, per the Driver contract's own "opaque from run-manager's
+// perspective" design, session_id is repurposed to carry TWO things a stateless driver still
+// needs to remember between calls: which envelope+question an incoming answer belongs to, and
+// the ORIGINAL skill-invocation prompt (e.g. "/plugin-hive:kickoff {idea}") needed to correctly
+// re-dispatch -- confirmed empirically that re-issuing the SAME initial prompt (not a generic
+// "continue") is what makes the skill re-check its own on-disk state and progress. See
+// EnvelopePointer / encodeEnvelopePointer / decodeEnvelopePointer below.
+//
+// MULTI-QUESTION ENVELOPES: an envelope's closure invariant (question-envelope-schema.md) means
+// it's only consumable once EVERY required question has a non-null answer. writeAnswerOntoEnvelope
+// tracks this per-envelope, not per-question -- answering one question in a multi-question
+// envelope surfaces the NEXT unanswered question (required or optional, in encounter order)
+// with NO new live dispatch at all, until the closure invariant is satisfied; only then does
+// this driver re-dispatch the skill to let it consume+progress.
+//
+// TESTING: point MINERVA_HIVE_PLUGIN_DIR at a local plugin-hive-fork checkout to test/drive
+// against the fork directly (via `claude --plugin-dir`) before PR #341 ships in a real release
+// -- unset in production once the protocol is installed via the normal marketplace mechanism.
+
+// Optional -- when unset, no --plugin-dir flag is passed and claude relies on whatever
+// plugin-hive is installed via the normal marketplace mechanism (the production case, once
+// PR #341 ships). Set for local development/testing against a fork checkout.
+//
+// Read LAZILY (inside the function, not as a module-level const) -- confirmed by a live-test
+// failure that a module-level capture reads process.env at import time, which in a test file
+// that sets this var inside a before() hook is BEFORE the hook runs (ESM import evaluation
+// precedes test-runner hook execution), silently resulting in no --plugin-dir flag ever being
+// passed and a silent fallback to the marketplace-installed plugin-hive.
+function pluginDirArgs(): string[] {
+  const dir = process.env.MINERVA_HIVE_PLUGIN_DIR;
+  return dir ? ["--plugin-dir", dir] : [];
+}
+
+// Confirmed directly and repeatedly (the epic's own spike) to be necessary and sufficient --
+// without this, both Haiku and Sonnet self-simulate the entire protocol in one turn instead of
+// stopping for a real orchestrator answer, regardless of model tier.
+//
+// Second confirmed finding (real-forked-hive-driver story, live-integration debugging): a model
+// resolving `from hive.lib.question_gateway import ask_or_emit` via the Bash tool naturally `cd`s
+// into $CLAUDE_PLUGIN_ROOT first so the `hive` package import succeeds. But
+// ask_or_emit()/askOrEmit()'s default base_dir is Path.cwd() (resp. process.cwd()) at CALL time
+// -- so a `cd`-first invocation writes the envelope under the PLUGIN directory's own
+// .pHive/questions/, not the actual project's, and ForkedHiveDriver (which only ever looks under
+// the project cwd) never finds it. Confirmed empirically: invoking instead with
+// `PYTHONPATH="$CLAUDE_PLUGIN_ROOT" python3 -c "..."` (Node equivalent: NODE_PATH, or an absolute
+// require/import path) from the project's own unchanged working directory resolves the import
+// AND writes the envelope to the correct project-relative path.
+//
+// Third confirmed finding (same debugging session): even with PYTHONPATH used correctly (no cd),
+// a model will sometimes still pass an explicit base_dir kwarg (e.g. base_dir=".pHive", guessing
+// it means "the state directory root") to be extra-explicit about where it wants the envelope.
+// But ask_or_emit's base_dir, when supplied, IS the exact questions directory itself (internally:
+// `Path(base_dir)`, NOT `Path(base_dir) / "questions"`) -- passing base_dir=".pHive" silently
+// writes to .pHive/kickoff-*.yaml instead of .pHive/questions/kickoff-*.yaml, which
+// listEnvelopes() (always .pHive/questions/ under the project cwd) then never finds. The fix is
+// instructional, not a code workaround: never pass base_dir at all -- the default already
+// resolves correctly as long as cwd is left unchanged (see the PYTHONPATH finding above).
+const EXPLICIT_STOP_INSTRUCTION =
+  "\n\nIMPORTANT: You are running headlessly with no human present. When this protocol's " +
+  "headless routing tells you to call ask_or_emit()/askOrEmit(), you MUST invoke that real " +
+  "function via the Bash tool against hive/lib/question_gateway.py or .js -- do NOT write a " +
+  "wrapper script that simulates or loops through phases/rounds. Do NOT `cd` into the plugin " +
+  "directory to resolve the import -- that changes your working directory and causes the " +
+  "envelope to be written under the PLUGIN's own .pHive/questions/ instead of THIS project's. " +
+  "Keep your working directory unchanged (this project's root) and instead set PYTHONPATH (for " +
+  "Python) so the import resolves without changing directory, e.g.: " +
+  "`PYTHONPATH=\"$CLAUDE_PLUGIN_ROOT\" python3 -c \"from hive.lib.question_gateway import " +
+  "ask_or_emit; ...\"` -- or the equivalent NODE_PATH/absolute-require approach for the JS " +
+  "gateway. Do NOT pass a base_dir argument to ask_or_emit()/askOrEmit() -- its default already " +
+  "resolves to the correct directory as long as your working directory is left unchanged; " +
+  "passing base_dir yourself (e.g. base_dir=\".pHive\") is interpreted as the exact questions " +
+  "directory itself, not a parent to search under, and will silently write the envelope to the " +
+  "wrong path. The MOMENT an envelope is written with status: pending, your response MUST end " +
+  "immediately. Do not answer the question yourself, do not continue to the next phase or " +
+  "round, do not simulate what an orchestrator would do. Print the envelope path and STOP.";
+
+interface EnvelopePointer {
+  envelopePath: string;
+  qid: string;
+  skillPrompt: string;
+}
+
+const POINTER_PREFIX = "forked-hive-driver:";
+export const NO_PENDING_SENTINEL = "forked-hive-driver:no-pending-envelope";
+
+export function encodeEnvelopePointer(pointer: EnvelopePointer): string {
+  return `${POINTER_PREFIX}${JSON.stringify(pointer)}`;
+}
+
+// Never throws -- returns null for the no-pending sentinel or any unrecognized/malformed
+// session_id, so a caller can always safely attempt to decode without a try/catch of its own.
+export function decodeEnvelopePointer(sessionId: string): EnvelopePointer | null {
+  if (!sessionId.startsWith(POINTER_PREFIX) || sessionId === NO_PENDING_SENTINEL) return null;
+  try {
+    const parsed = JSON.parse(sessionId.slice(POINTER_PREFIX.length));
+    if (
+      parsed &&
+      typeof parsed.envelopePath === "string" &&
+      typeof parsed.qid === "string" &&
+      typeof parsed.skillPrompt === "string"
+    ) {
+      return parsed as EnvelopePointer;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// The ONLY write path this driver has. Writes a single question's `answer`, and flips
+// `status: answered` only once every REQUIRED question in the envelope has a non-null answer
+// (the closure invariant) -- never writes id/skill/phase/provenance/question text/options,
+// matching the schema's "Single writer per field group" rule. Returns whether the envelope is
+// now fully consumable (closure invariant satisfied), so the caller knows whether to re-dispatch
+// the skill or just surface the next question with no new live call.
+export function writeAnswerOntoEnvelope(envelopePath: string, qid: string, answer: string): boolean {
+  const raw = readFileSync(envelopePath, "utf8");
+  const parsed = parseYaml(raw) as any;
+  if (!parsed || !Array.isArray(parsed.questions)) {
+    throw new Error(`Envelope at ${envelopePath} is malformed -- cannot write answer for qid ${qid}`);
+  }
+  const question = parsed.questions.find((q: any) => q && q.qid === qid);
+  if (!question) {
+    throw new Error(`Envelope at ${envelopePath} has no question with qid ${qid}`);
+  }
+  question.answer = answer;
+
+  const closureSatisfied = parsed.questions.every((q: any) => !q.required || (q.answer !== null && q.answer !== undefined));
+  if (closureSatisfied) {
+    parsed.status = "answered";
+  }
+  writeFileSync(envelopePath, stringifyYaml(parsed));
+  return closureSatisfied;
+}
+
 export class ForkedHiveDriver implements Driver {
-  async runTurn(_input: DriverInput): Promise<DriverResult> {
-    throw new Error(
-      "ForkedHiveDriver is not implemented yet -- plugin-hive-fork does not exist. " +
-        "See docs/minerva-next-tests-and-driver-paths.md §3 for the intended design.",
-    );
+  async runTurn(input: DriverInput): Promise<DriverResult> {
+    if (input.sessionId === null) {
+      return this.dispatchFresh(input.cwd, input.prompt);
+    }
+    const pointer = decodeEnvelopePointer(input.sessionId);
+    if (!pointer) {
+      // No pending envelope from the prior turn (NO_PENDING_SENTINEL), or an unrecognized
+      // session_id -- treat as a fresh dispatch rather than throwing, matching this epic's
+      // "never guess, but degrade gracefully" discipline for an odd-but-not-catastrophic input.
+      return this.dispatchFresh(input.cwd, input.prompt);
+    }
+    return this.answerAndContinue(input.cwd, pointer, input.prompt);
+  }
+
+  private async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
+    const args = [
+      "-p",
+      "--model",
+      MODEL,
+      "--output-format",
+      "json",
+      "--permission-mode",
+      "bypassPermissions",
+      ...pluginDirArgs(),
+      "--session-id",
+      randomUUID(),
+      skillPrompt + EXPLICIT_STOP_INSTRUCTION,
+    ];
+    await spawnClaude(cwd, args, { HIVE_HEADLESS: "1" });
+    return this.surfaceNextQuestion(cwd, skillPrompt);
+  }
+
+  private async answerAndContinue(cwd: string, pointer: EnvelopePointer, answerText: string): Promise<DriverResult> {
+    const closureSatisfied = writeAnswerOntoEnvelope(pointer.envelopePath, pointer.qid, answerText);
+    if (!closureSatisfied) {
+      // A required sibling question in the SAME envelope is still unanswered -- surface it with
+      // no new live dispatch at all.
+      return this.surfaceNextQuestion(cwd, pointer.skillPrompt);
+    }
+    // Every required question now has an answer -- re-dispatch the ORIGINAL skill-invocation
+    // prompt (confirmed by the spike: re-issuing the same initial prompt, not a generic
+    // "continue", is what makes the skill re-check its own on-disk state and progress).
+    return this.dispatchFresh(cwd, pointer.skillPrompt);
+  }
+
+  private async surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult> {
+    const pending = listEnvelopes(cwd).find((e) => e.status === "pending");
+    if (!pending) {
+      // No pending envelope -- the skill likely completed. checkAndMarkComplete() (shared by
+      // every Driver implementation) detects this as a filesystem fact independent of
+      // raw_result, so this placeholder is never actually consulted for completion detection.
+      return {
+        session_id: NO_PENDING_SENTINEL,
+        raw_result: JSON.stringify({
+          question: "(no pending question -- run may be complete)",
+          suggested_channel: "human",
+          confidence: 0,
+          reason: "no pending envelope found after this turn",
+        }),
+      };
+    }
+
+    // Surface the next unanswered question in encounter order -- required or optional. Only
+    // required questions gate the closure invariant, but any unanswered question (including an
+    // optional one encountered before all required ones are done) is still surfaced rather than
+    // silently skipped, so no information the skill asked for is ever lost.
+    const next = pending.questions.find((q) => q.answer === null || q.answer === undefined);
+    if (!next) {
+      // Defensive: every question already has an answer, yet the envelope is still `pending`.
+      // Should not happen if writeAnswerOntoEnvelope's own closure check is correct, but this
+      // driver never assumes that invariant holds elsewhere -- degrade to the same placeholder
+      // as "no pending envelope" rather than surface a question with nothing to ask.
+      return {
+        session_id: NO_PENDING_SENTINEL,
+        raw_result: JSON.stringify({
+          question: "(envelope has no unanswered questions)",
+          suggested_channel: "human",
+          confidence: 0,
+          reason: "defensive fallback -- envelope pending but every question already answered",
+        }),
+      };
+    }
+
+    const classification = await this.classify(cwd, next.text);
+    const pointer: EnvelopePointer = { envelopePath: pending.path, qid: next.qid, skillPrompt };
+    const rawResult = JSON.stringify({
+      question: next.text,
+      suggested_channel: classification.suggested_channel,
+      confidence: classification.confidence,
+      reason: classification.reason,
+      kind: next.kind,
+      options: next.options,
+      qid: next.qid,
+    });
+    return { session_id: encodeEnvelopePointer(pointer), raw_result: rawResult };
+  }
+
+  private async classify(cwd: string, questionText: string) {
+    const args = [
+      "-p",
+      "--model",
+      MODEL,
+      "--output-format",
+      "json",
+      "--permission-mode",
+      "bypassPermissions",
+      ...classificationOnlySchemaArgs(),
+      `Classify this question, which will be asked on Minerva's behalf: ${questionText}`,
+    ];
+    const result = await spawnClaude(cwd, args);
+    return extractClassification(result.result);
   }
 }

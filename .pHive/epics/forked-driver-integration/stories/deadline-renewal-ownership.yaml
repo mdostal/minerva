@@ -1,0 +1,108 @@
+id: deadline-renewal-ownership
+epic: forked-driver-integration
+title: Deadline renewal ownership
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [real-forked-hive-driver]
+
+description: |
+  Decide and implement whether Minerva proactively renews an envelope's `deadline` (writes a
+  later `deadline` + increments `renewal_count`, matching AD-5's "unbounded stall is fine"
+  stance) while a question sits waiting on a human past the upstream default window (1800s), or
+  accepts the upstream default (`headless.deadline_expired_action: re-emit`) as an acceptable
+  degraded behavior -- a lapsed-and-re-emitted envelope is non-destructive (a fresh envelope,
+  same phase) but would mean a human answering a now-stale envelope silently gets a
+  NOT_FOUND-shaped mismatch unless ForkedHiveDriver re-polls for the new one.
+
+  CONFIRMED: renewal is meaningful ONLY pre-consumption -- once an envelope's answers are
+  extracted, the gateway deletes it immediately (delete-on-consume), so there is nothing left to
+  renew or expire at that point. This story is scoped purely to the "question is written,
+  waiting on a human" window between envelope-write and answer-submission -- it has no
+  interaction with the post-answer/re-invocation path at all.
+
+acceptance_criteria:
+  - "Given a decision (proactive renewal vs accept upstream re-emit default), when documented, then it is written up as an explicit design_decision with rationale, not left implicit"
+  - "Given the chosen behavior, when a question is left pending past the deadline in a real test against the fork, then the observed behavior (renewed, or re-emitted per upstream default) matches what was decided and documented"
+  - "Given an ALREADY-CONSUMED envelope, when this story's logic is inspected, then it has no renewal/expiry code path reachable for it -- renewal only applies to the pre-consumption waiting-on-human window"
+
+scope_boundaries:
+  do:
+    - "Decide and implement (or explicitly decide not to implement) proactive deadline renewal"
+  do_not:
+    - "Do not build a background/polling mechanism if the decision is to accept the upstream re-emit default -- that would be unnecessary work for a decision that doesn't require it"
+    - "Do not touch any post-consume/re-invocation logic -- out of scope for this story"
+
+steps:
+  - id: research
+    description: Re-read hive/references/question-envelope-schema.md's Deadline renewal and Expiry sections in the fork, and AD-5's "unbounded stall is fine" stance in docs/architecture.md, to inform the decision.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the chosen renewal behavior (or its explicit absence) against a real envelope left pending past its deadline, via --plugin-dir against the fork.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the decided behavior. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the decision is documented with rationale and that no renewal logic accidentally became reachable for an already-consumed envelope.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: src/driver.ts
+      purpose: "Where ForkedHiveDriver's real implementation (prior story) lives -- this story's logic, if any, attaches here"
+
+files_to_modify:
+  - file: src/driver.ts
+    change: "Add (or explicitly document the absence of) proactive deadline renewal for ForkedHiveDriver"
+
+design_decisions:
+  - decision: "RESULT: Minerva implements NO proactive deadline renewal. No code changes to src/driver.ts."
+    rationale: |
+      ForkedHiveDriver only ever re-dispatches the skill (the only thing that calls
+      ask_or_emit() again for a phase) AFTER it has already written the human's answer and
+      satisfied the closure invariant (answerAndContinue() in src/driver.ts always writes the
+      answer via writeAnswerOntoEnvelope() BEFORE calling dispatchFresh()). So by the time the
+      skill re-runs and calls find_envelope_for_phase() for that phase, the on-disk envelope's
+      status is ALREADY "answered". question_gateway.py's ask_or_emit() only ever consults the
+      `deadline` field on the OTHER branch -- when the matched envelope is still unanswered
+      (_extract_answers() returns None). An answered envelope is consumed unconditionally via
+      the answers-based branch, regardless of how stale its `deadline` timestamp is. The
+      upstream deadline-expiry/re-emit code path is therefore architecturally UNREACHABLE from
+      Minerva's own usage pattern -- it exists in the protocol for a different hypothetical
+      caller shape (one that polls/re-invokes a skill periodically even without a human answer
+      yet), which ForkedHiveDriver never does; it is purely reactive, with no polling loop of
+      its own. This is exactly what AD-5 ("the stall invariant has no timeout; the hold is
+      unbounded") already promises: a human can take arbitrarily long to answer, and the
+      eventual answer is still honored correctly no matter how long the on-disk deadline has
+      technically lapsed. Confirmed empirically, not assumed: a manual live probe first, then
+      the committed automated test (src/deadline-renewal-ownership.test.ts) configures a real
+      1s answer_deadline_seconds via the scratch workspace's own hive.config.yaml (vs. the
+      upstream 1800s default -- proves the same thing in seconds instead of half an hour),
+      sleeps 5s past it, answers, and confirms the run progresses cleanly to a NEW envelope
+      rather than losing the answer or re-emitting a stale duplicate.
+  - decision: "No background/polling mechanism was built, per the story's own scope_boundaries -- unnecessary given the decision above."
+    rationale: "Would have reintroduced exactly the kind of persistent-background-process orphan-risk shape the whole swappable-driver/forked-driver-integration epic exists to eliminate, for a code path that's already provably unreachable."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "If proactive renewal is chosen and implemented as a background/polling mechanism, it could reintroduce some orphan-risk shape"
+    mitigation: "A single-file-write renewal (no persistent background process) avoids this; review step explicitly checks for it"
+
+references:
+  - path: docs/scope/forked-driver-integration-next-phase.md
+    relevant_excerpt: |
+      Deadline renewal ownership... renewal only applies pre-consumption -- once an envelope is
+      deleted, there is nothing left to renew.

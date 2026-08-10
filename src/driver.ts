@@ -43,6 +43,14 @@ import { listEnvelopes } from "./envelope-detection.ts";
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_HEIMDALL_URL = "http://127.0.0.1:4870";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
+// Heimdall routes by runtime/provider; Minerva needs the spawnable CLI.
+const RUNTIME_CLI: Record<string, string> = {
+  claude: "claude",
+  codex: "codex",
+  gemini: "opencode",
+  grok: "opencode",
+  opencode: "opencode",
+};
 
 // Production finding (2026-07-26): a real kickoff->planning transition turn legitimately runs
 // past the old hardcoded 120s ceiling, causing SubagentDriver's poll to time out short of
@@ -111,12 +119,13 @@ export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
           ? (root.selected as Record<string, unknown>)
           : root;
 
-  // Heimdall returns { runtime, model, lane_id } — map runtime/provider name to a spawnable CLI.
-  const RUNTIME_CLI: Record<string, string> = { claude: "claude", codex: "codex", gemini: "opencode", grok: "opencode", opencode: "opencode" };
   const rawCli = route?.cli ?? route?.command ?? route?.executable ?? route?.cli_command ?? route?.tool;
   const runtimeName = route?.runtime ?? route?.provider;
-  const cli = (typeof rawCli === "string" && rawCli.trim()) ? rawCli
-    : (typeof runtimeName === "string" ? (RUNTIME_CLI[runtimeName] ?? runtimeName) : undefined);
+  const cli = typeof rawCli === "string" && rawCli.trim()
+    ? rawCli.trim()
+    : typeof runtimeName === "string" && runtimeName.trim()
+      ? RUNTIME_CLI[runtimeName.trim().toLowerCase()] ?? runtimeName.trim()
+      : undefined;
   const model = route?.model ?? route?.model_name ?? route?.modelName;
   if (typeof cli !== "string" || cli.trim() === "" || typeof model !== "string" || model.trim() === "") {
     throw new Error(`Heimdall /available-route response must include non-empty cli and model strings`);

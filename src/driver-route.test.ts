@@ -20,6 +20,25 @@ test("parseAvailableRoutePayload accepts the direct Heimdall cli/model shape", (
   });
 });
 
+test("parseAvailableRoutePayload maps Heimdall runtime/model responses to spawnable CLIs", () => {
+  assert.deepEqual(parseAvailableRoutePayload({ runtime: "gemini", model: "gemini-2.5-pro" }), {
+    cli: "opencode",
+    model: "gemini-2.5-pro",
+  });
+  assert.deepEqual(parseAvailableRoutePayload({ runtime: "codex", model: "gpt-5-codex" }), {
+    cli: "codex",
+    model: "gpt-5-codex",
+  });
+  assert.deepEqual(parseAvailableRoutePayload({ runtime: "grok", model: "grok-4" }), {
+    cli: "opencode",
+    model: "grok-4",
+  });
+  assert.deepEqual(parseAvailableRoutePayload({ runtime: " claude ", model: "claude-sonnet-4-5" }), {
+    cli: "claude",
+    model: "claude-sonnet-4-5",
+  });
+});
+
 test("parseAvailableRoutePayload accepts nested route/runtime shapes and command aliases", () => {
   assert.deepEqual(parseAvailableRoutePayload({ route: { command: "kimi", model_name: "kimi-k2" } }), {
     cli: "kimi",
@@ -30,7 +49,7 @@ test("parseAvailableRoutePayload accepts nested route/runtime shapes and command
     model: "claude-sonnet-4-5",
   });
   assert.deepEqual(parseAvailableRoutePayload({ selected_route: { provider: "gemini", model: "gemini-2.5-flash" } }), {
-    cli: "gemini",
+    cli: "opencode",
     model: "gemini-2.5-flash",
   });
 });
@@ -49,11 +68,11 @@ test("resolveRuntimeRoute GETs /available-route and returns the routed CLI/model
     const calls: string[] = [];
     const route = await resolveRuntimeRoute(async (url, init) => {
       calls.push(`${init.method} ${url}`);
-      return response(JSON.stringify({ route: { cli: "gemini", model: "gemini-2.5-pro" } }));
+      return response(JSON.stringify({ runtime: "gemini", model: "gemini-2.5-pro" }));
     });
 
-    assert.deepEqual(route, { cli: "gemini", model: "gemini-2.5-pro" });
-    assert.deepEqual(calls, ["GET http://heimdall.local:9999/available-route"]);
+    assert.deepEqual(route, { cli: "opencode", model: "gemini-2.5-pro" });
+    assert.deepEqual(calls, ["GET http://heimdall.local:9999/available-route?task-type=planning"]);
   } finally {
     if (previous === undefined) {
       delete process.env.MINERVA_HEIMDALL_URL;

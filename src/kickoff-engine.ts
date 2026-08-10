@@ -4,12 +4,12 @@
 // "No Autonomous Progress" and AD-2.
 
 import { MinervaError } from "./errors.ts";
-import { allocateRun, readRunRecord, updateRunRecord, normalizeQuestionKind, type Question, type Channel } from "./run-manager.ts";
+import { allocateRun, readRunRecord, updateRunRecord, normalizeQuestionKind, type Question, type Channel, type RunRecord } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
-import { resolveAgnosticPlanDriver, agnosticPlanDriverFromRecord } from "./agnostic-plan-driver.ts";
-import type { RunRecord } from "./run-manager.ts";
+import { postQuestionToConsusDecisionApi } from "./consus-decisions.ts";
+import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
 
@@ -92,7 +92,7 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
 // skill has actually finished and written its epic.yaml would otherwise still be forced to
 // emit SOME filler question text -- the filesystem check routes around that entirely, ignoring
 // whatever the schema-forced response said once completion is detected.
-function recordTurn(runId: string, rawResult: string): void {
+export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
     return; // run is complete -- no pending question to append, ever
   }
@@ -120,6 +120,11 @@ function recordTurn(runId: string, rawResult: string): void {
     status: "waiting_on_human",
     questions: [...record.questions, question],
   });
+
+  const posted = await postQuestionToConsusDecisionApi(runId, question);
+  if (posted.posted) {
+    updateRunRecord(runId, { status: "awaiting-consus" });
+  }
 }
 
 // Best-effort parse of the structured envelope fields a driver may embed alongside the question
@@ -229,7 +234,9 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   if (planDriver) {
     updateRunRecord(runId, { plan_runtime: planDriver.runtime, plan_model: planDriver.model });
   }
+
   const record = readRunRecord(runId);
+  const driver = driverForRecord(record);
 
   // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
   // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
@@ -242,7 +249,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   // Auto-answer any routine gate questions from the pre-baked defaults so a fresh headless run
   // drives itself forward instead of hanging on the first gate. No-op when mode is "off".
@@ -329,6 +336,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
   const { session_id: newSessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
+
     cwd: record.workspace_path,
     sessionId: record.session_id,
     prompt: answerPrompt,
@@ -336,7 +344,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   // After a human (or agent) answers an escalated question, resume auto-answering any further
   // routine gates from the pre-baked defaults, so answering one strategic question doesn't leave

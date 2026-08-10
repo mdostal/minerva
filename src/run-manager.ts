@@ -11,7 +11,7 @@ import { MinervaError } from "./errors.ts";
 import type { PlanDefaults } from "./plan-defaults.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
-export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
+export type RunStatus = "in_progress" | "waiting_on_human" | "awaiting-consus" | "complete" | "aborted";
 export type Channel = "agent" | "human";
 
 // Closed to exactly the three values the headless-question-protocol's envelope schema
@@ -102,6 +102,10 @@ export interface RunRecord {
   // AgnosticPlanDriver and continues the same runtime session. Absent => the built-in claude
   // SpawnDriver drives the run (fully backwards-compatible). Persisted so a run's runtime never
   // changes mid-flight even across process restarts.
+
+  // Runner-agnostic planning (agnostic-plan-driver.ts). When present, these identify the
+  // runtime + model chosen for the run's planning turns. Absent keeps the existing claude
+  // driver behavior.
   plan_runtime?: string;
   plan_model?: string;
 }
@@ -120,6 +124,21 @@ function runDir(runId: string): string {
 
 function runRecordPath(runId: string): string {
   return join(runDir(runId), "run.yaml");
+}
+
+export function defaultSeedRepoPath(): string {
+  return join(homedir(), "repos", "consus-seeds");
+}
+
+function resolveSeedRepo(): string {
+  const seedRepo = process.env.MINERVA_SEED_REPO || defaultSeedRepoPath();
+  if (!existsSync(seedRepo)) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Seed repo does not exist: ${seedRepo}. Set MINERVA_SEED_REPO to a local git repo path, or set up the default with: git clone git@github.com:mdostal/consus-seeds.git ${defaultSeedRepoPath()}`,
+    );
+  }
+  return seedRepo;
 }
 
 function writeRunRecord(record: RunRecord): void {
@@ -203,8 +222,8 @@ export function allocateRun(
     allocateWorktreeWorkspace(targetRepo, runId, workspacePath);
     workspaceKind = "worktree";
   } else {
-    allocateFreshInitWorkspace(runId, workspacePath);
-    workspaceKind = "fresh_init";
+    allocateWorktreeWorkspace(resolveSeedRepo(), runId, workspacePath);
+    workspaceKind = "worktree";
   }
 
   const statePath = join(workspacePath, ".pHive");

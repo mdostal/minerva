@@ -35,20 +35,31 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ForkedHiveDriver, decodeEnvelopePointer, NO_PENDING_SENTINEL } from "./driver.ts";
+import { testHeimdallRouteUrl } from "./test-cli.ts";
 
 const FORK_PATH = "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork";
+let previousRouteUrl: string | undefined;
 
 before(() => {
+  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
   process.env.MINERVA_HIVE_PLUGIN_DIR = FORK_PATH;
 });
 
 after(() => {
+  if (previousRouteUrl === undefined) {
+    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  } else {
+    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+  }
   delete process.env.MINERVA_HIVE_PLUGIN_DIR;
 });
 
 function newScratchWorkspaceWithShortDeadline(): string {
   const dir = mkdtempSync(join(tmpdir(), "minerva-deadline-test-"));
   execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", dir, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
   // A 1s deadline (vs the upstream default of 1800s) lets this test prove the real behavior in
   // seconds instead of half an hour, without touching any Minerva code -- purely a fork-side

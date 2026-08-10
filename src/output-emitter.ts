@@ -24,6 +24,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { MinervaError } from "./errors.ts";
@@ -57,6 +58,7 @@ function parseFlatEpic(root: string, entryName: string, baselineIds: Set<string>
     parsed = parseYaml(epicYaml);
   } catch {
     return null; // not valid YAML -- not an epic artifact
+
   }
   if (!parsed || typeof parsed !== "object") return null;
   const hasStories = Array.isArray(parsed.stories);
@@ -148,6 +150,7 @@ function findCompletedEpicsUnder(root: string, baselineIds: Set<string>): Comple
 // `baselineIds` defaults to an empty set (backward compatible for fresh_init workspaces).
 export function findCompletedEpics(workspacePath: string, baselineIds: Set<string> = new Set()): CompletedEpic[] {
   const collected: CompletedEpic[] = [...findCompletedEpicsUnder(workspacePath, baselineIds)];
+
 
   const worktreesDir = join(workspacePath, ".claude", "worktrees");
   if (existsSync(worktreesDir)) {
@@ -326,6 +329,72 @@ export function commitAndPushPlan(
   return { committed: true, pushed: true, branch, reason: `plan committed + pushed to origin/${branch}${devNote}` };
 }
 
+export function findCompletedEpic(workspacePath: string): CompletedEpic | null {
+  return findCompletedEpicWithRoot(workspacePath)?.epic ?? null;
+}
+
+function epicRelPath(epicId: string): string {
+  return join(".pHive", "epics", epicId);
+}
+
+// A target repo may carry its own blanket ignore (e.g. `.pHive/epics/*`) predating Minerva's
+// auto-commit behavior. Appending a per-epic negation pattern re-includes just this epic's
+// directory without touching the target repo's other ignore rules.
+function ensureGitignoreAllowlist(root: string, epicId: string): void {
+  const gitignorePath = join(root, ".gitignore");
+  const allowLine = `!${epicRelPath(epicId)}/`;
+
+  const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
+  if (existing.split("\n").some((line) => line.trim() === allowLine)) return; // already allowlisted
+
+  const needsNewline = existing.length > 0 && !existing.endsWith("\n");
+  writeFileSync(gitignorePath, existing + (needsNewline ? "\n" : "") + allowLine + "\n");
+}
+
+// Auto-commits a newly-detected epic plan into the workspace's own git history, so downstream
+// build agents (Auriga, Vulcan, etc.) can read the plan without a manual commit step (PAN-6745).
+// Idempotent: if the epic dir is already tracked and clean, this is a no-op -- safe to call on
+// every checkAndMarkComplete poll without producing duplicate commits.
+export function commitPlan(root: string, epicId: string): void {
+  const relPath = epicRelPath(epicId);
+  const status = execFileSync("git", ["-C", root, "status", "--porcelain", "--ignored", "--", relPath], {
+    encoding: "utf8",
+  });
+  if (status.trim().length === 0) return; // already committed; idempotent no-op
+
+  const isIgnored = status.split("\n").some((line) => line.startsWith("!!"));
+  if (isIgnored) {
+    ensureGitignoreAllowlist(root, epicId);
+    execFileSync("git", ["-C", root, "add", "--", ".gitignore"], { stdio: "pipe" });
+  }
+
+  execFileSync("git", ["-C", root, "add", "-f", "--", relPath], { stdio: "pipe" });
+  execFileSync("git", ["-C", root, "commit", "-q", "-m", `chore(plan): commit epic plan for ${epicId}`], {
+    stdio: "pipe",
+  });
+}
+
+// Pushes the run's `run/<runId>` branch to origin right after commitPlan finishes, so the
+// committed plan is immediately fetchable by downstream build agents (Auriga, Vulcan, etc.)
+// without a manual push step (PAN-6747). Deliberately non-blocking: the plan is already safely
+// committed locally by commitPlan, so a missing remote or a push failure (auth/network) is only
+// ever logged, never thrown -- it must not prevent the run from completing.
+export function pushPlan(root: string, runId: string): void {
+  try {
+    execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { stdio: "pipe" });
+  } catch {
+    console.warn(`pushPlan: no 'origin' remote configured for ${root}; skipping push`);
+    return;
+  }
+
+  try {
+    execFileSync("git", ["-C", root, "push", "--set-upstream", "origin", `run/${runId}`], { stdio: "pipe" });
+  } catch (e) {
+    const stderr = e instanceof Error && "stderr" in e ? String((e as any).stderr) : String(e);
+    console.warn(`pushPlan: failed to push run/${runId} to origin: ${stderr.trim()}`);
+  }
+}
+
 // Called by kickoff-engine.ts after every drive/resume call, before appending a new pending
 // question. Returns true (and marks the run complete) if plugin-hive's own skill has written epic
 // artifact(s) into the workspace since the run started. Files ALL of the run's own epics into the
@@ -350,6 +419,7 @@ export function checkAndMarkComplete(runId: string): boolean {
   }
   const output: CompletionOutput = { epic: epics[0]!, epics }; // length checked non-empty above
   updateRunRecord(runId, { status: "complete", output, plan_push: planPush });
+
   // AD-4: exactly one ledger record + one cleanup_needed event per run, at the moment it
   // transitions to a terminal state. This branch only runs once per run (guarded by the
   // status === "complete" early return above), so this call is not repeated on re-checks.

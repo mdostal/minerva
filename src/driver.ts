@@ -180,12 +180,102 @@ export interface Driver {
   runTurn(input: DriverInput): Promise<DriverResult>;
 }
 
-interface ClaudePResult {
+export interface TurnResult {
   is_error: boolean;
   stop_reason: string;
   session_id: string;
   result: string;
 }
+
+export interface RuntimeTurnArgsInput {
+  sessionId?: string | null;
+  freshSessionId?: string;
+  prompt: string;
+  schemaArgs?: readonly string[];
+  extraArgs?: readonly string[];
+}
+
+export interface RuntimeBackgroundArgsInput {
+  sessionId: string | null;
+  prompt: string;
+}
+
+export interface BackgroundAgentEntry {
+  id?: string;
+  sessionId?: string;
+  kind?: string;
+  state?: string;
+}
+
+export interface RuntimeAdapter {
+  formatTurnArgs(route: RuntimeRoute, input: RuntimeTurnArgsInput): string[];
+  parseTurnResult(stdout: string): TurnResult;
+  formatBackgroundArgs(route: RuntimeRoute, input: RuntimeBackgroundArgsInput): string[];
+  parseBackgroundDispatch(stdout: string, route: RuntimeRoute): string;
+  formatListAgentsArgs(): string[];
+  parseListAgents(stdout: string): BackgroundAgentEntry[];
+  formatStopAgentArgs(shortId: string): string[];
+}
+
+export const claudeRuntimeAdapter: RuntimeAdapter = {
+  formatTurnArgs(route, input) {
+    const sessionArgs = input.sessionId
+      ? ["--resume", input.sessionId]
+      : input.freshSessionId
+        ? ["--session-id", input.freshSessionId]
+        : [];
+    return [
+      "-p",
+      "--model",
+      route.model,
+      "--output-format",
+      "json",
+      "--permission-mode",
+      "bypassPermissions",
+      ...(input.extraArgs ?? []),
+      ...sessionArgs,
+      ...(input.schemaArgs ?? []),
+      input.prompt,
+    ];
+  },
+
+  parseTurnResult(stdout) {
+    return JSON.parse(stdout) as TurnResult;
+  },
+
+  formatBackgroundArgs(route, input) {
+    return [
+      "--bg",
+      "--model",
+      route.model,
+      "--permission-mode",
+      "bypassPermissions",
+      ...(input.sessionId ? ["--resume", input.sessionId] : []),
+      input.prompt,
+    ];
+  },
+
+  parseBackgroundDispatch(stdout, route) {
+    const match = stdout.match(/backgrounded\s*[·:]\s*(\S+)/);
+    if (!match || !match[1]) {
+      throw new Error(`could not parse a background session id from ${route.cli} --bg output: ${stdout}`);
+    }
+    return match[1];
+  },
+
+  formatListAgentsArgs() {
+    return ["agents", "--json"];
+  },
+
+  parseListAgents(stdout) {
+    const parsed = JSON.parse(stdout) as BackgroundAgentEntry[];
+    return parsed.filter((a) => a.kind === "background");
+  },
+
+  formatStopAgentArgs(shortId) {
+    return ["stop", shortId];
+  },
+};
 
 // Tracks the single in-flight child so a SIGINT/SIGTERM handler can kill it before the process
 // exits. SpawnDriver drives turns one at a time per process (no concurrent children), so a
@@ -232,7 +322,7 @@ export function resolveClaudeSpawnEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.Proc
   return env;
 }
 
-function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<ClaudePResult> {
+function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<TurnResult> {
   return new Promise((resolve, reject) => {
     const env = resolveClaudeSpawnEnv(extraEnv);
     const child = spawn(route.cli, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
@@ -269,7 +359,7 @@ function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], extraEnv
         return;
       }
       try {
-        resolve(JSON.parse(stdout) as ClaudePResult);
+        resolve(claudeRuntimeAdapter.parseTurnResult(stdout));
       } catch (e) {
         reject(new Error(`${route.cli} produced non-JSON output: ${e instanceof Error ? e.message : String(e)}`));
       }
@@ -280,19 +370,12 @@ function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], extraEnv
 export class SpawnDriver implements Driver {
   async runTurn(input: DriverInput): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
-    const sessionArgs = input.sessionId ? ["--resume", input.sessionId] : ["--session-id", randomUUID()];
-    const args = [
-      "-p",
-      "--model",
-      route.model,
-      "--output-format",
-      "json",
-      "--permission-mode",
-      "bypassPermissions",
-      ...sessionArgs,
-      ...classificationSchemaArgs(),
-      input.prompt,
-    ];
+    const args = claudeRuntimeAdapter.formatTurnArgs(route, {
+      sessionId: input.sessionId,
+      freshSessionId: input.sessionId ? undefined : randomUUID(),
+      schemaArgs: classificationSchemaArgs(),
+      prompt: input.prompt,
+    });
     const result = await spawnRuntime(route, input.cwd, args);
     return { session_id: result.session_id, raw_result: result.result };
   }
@@ -302,13 +385,6 @@ const POLL_INTERVAL_MS = 2_000;
 const POLL_CEILING_MS = CLAUDE_TIMEOUT_MS; // same budget as SpawnDriver's own turn timeout
 const UTILITY_CMD_TIMEOUT_MS = 15_000; // --bg dispatch / agents --json / stop are fast, bounded ops
 const EXTRACTION_INSTRUCTION = "Structure your prior question into the required schema.";
-
-interface BackgroundAgentEntry {
-  id?: string;
-  sessionId?: string;
-  kind?: string;
-  state?: string;
-}
 
 function runRuntimeUtility(route: RuntimeRoute, args: string[], cwd?: string): string {
   return execFileSync(route.cli, args, {
@@ -320,27 +396,14 @@ function runRuntimeUtility(route: RuntimeRoute, args: string[], cwd?: string): s
 }
 
 function dispatchBackground(route: RuntimeRoute, cwd: string, sessionId: string | null, prompt: string): string {
-  const args = [
-    "--bg",
-    "--model",
-    route.model,
-    "--permission-mode",
-    "bypassPermissions",
-    ...(sessionId ? ["--resume", sessionId] : []),
-    prompt,
-  ];
+  const args = claudeRuntimeAdapter.formatBackgroundArgs(route, { sessionId, prompt });
   const out = runRuntimeUtility(route, args, cwd);
-  const match = out.match(/backgrounded\s*[·:]\s*(\S+)/);
-  if (!match || !match[1]) {
-    throw new Error(`could not parse a background session id from ${route.cli} --bg output: ${out}`);
-  }
-  return match[1];
+  return claudeRuntimeAdapter.parseBackgroundDispatch(out, route);
 }
 
 function listBackgroundAgents(route: RuntimeRoute): BackgroundAgentEntry[] {
-  const out = runRuntimeUtility(route, ["agents", "--json"]);
-  const parsed = JSON.parse(out) as BackgroundAgentEntry[];
-  return parsed.filter((a) => a.kind === "background");
+  const out = runRuntimeUtility(route, claudeRuntimeAdapter.formatListAgentsArgs());
+  return claudeRuntimeAdapter.parseListAgents(out);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -363,7 +426,7 @@ async function pollUntilTerminal(route: RuntimeRoute, shortId: string): Promise<
 }
 
 function stopBackground(route: RuntimeRoute, shortId: string): void {
-  runRuntimeUtility(route, ["stop", shortId]);
+  runRuntimeUtility(route, claudeRuntimeAdapter.formatStopAgentArgs(shortId));
 }
 
 // Best-effort reap used on failure paths -- a failure to stop an already-gone/already-stopped
@@ -400,19 +463,11 @@ export class SubagentDriver implements Driver {
     }
     stopBackground(route, shortId);
 
-    const args = [
-      "-p",
-      "--model",
-      route.model,
-      "--output-format",
-      "json",
-      "--permission-mode",
-      "bypassPermissions",
-      "--resume",
-      fullSessionId,
-      ...classificationSchemaArgs(),
-      EXTRACTION_INSTRUCTION,
-    ];
+    const args = claudeRuntimeAdapter.formatTurnArgs(route, {
+      sessionId: fullSessionId,
+      schemaArgs: classificationSchemaArgs(),
+      prompt: EXTRACTION_INSTRUCTION,
+    });
     const result = await spawnRuntime(route, input.cwd, args);
     return { session_id: result.session_id, raw_result: result.result };
   }
@@ -591,19 +646,11 @@ export class ForkedHiveDriver implements Driver {
 
   private async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
-    const args = [
-      "-p",
-      "--model",
-      route.model,
-      "--output-format",
-      "json",
-      "--permission-mode",
-      "bypassPermissions",
-      ...pluginDirArgs(),
-      "--session-id",
-      randomUUID(),
-      skillPrompt + EXPLICIT_STOP_INSTRUCTION,
-    ];
+    const args = claudeRuntimeAdapter.formatTurnArgs(route, {
+      freshSessionId: randomUUID(),
+      extraArgs: pluginDirArgs(),
+      prompt: skillPrompt + EXPLICIT_STOP_INSTRUCTION,
+    });
     await spawnRuntime(route, cwd, args, { HIVE_HEADLESS: "1" });
     return this.surfaceNextQuestion(cwd, skillPrompt);
   }
@@ -675,17 +722,10 @@ export class ForkedHiveDriver implements Driver {
 
   private async classify(cwd: string, questionText: string) {
     const route = await resolveRuntimeRoute();
-    const args = [
-      "-p",
-      "--model",
-      route.model,
-      "--output-format",
-      "json",
-      "--permission-mode",
-      "bypassPermissions",
-      ...classificationOnlySchemaArgs(),
-      `Classify this question, which will be asked on Minerva's behalf: ${questionText}`,
-    ];
+    const args = claudeRuntimeAdapter.formatTurnArgs(route, {
+      schemaArgs: classificationOnlySchemaArgs(),
+      prompt: `Classify this question, which will be asked on Minerva's behalf: ${questionText}`,
+    });
     const result = await spawnRuntime(route, cwd, args);
     return extractClassification(result.result);
   }

@@ -111,7 +111,12 @@ export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
           ? (root.selected as Record<string, unknown>)
           : root;
 
-  const cli = route?.cli ?? route?.command ?? route?.executable ?? route?.cli_command ?? route?.tool ?? route?.provider;
+  // Heimdall returns { runtime, model, lane_id } — map runtime/provider name to a spawnable CLI.
+  const RUNTIME_CLI: Record<string, string> = { claude: "claude", codex: "codex", gemini: "opencode", grok: "opencode", opencode: "opencode" };
+  const rawCli = route?.cli ?? route?.command ?? route?.executable ?? route?.cli_command ?? route?.tool;
+  const runtimeName = route?.runtime ?? route?.provider;
+  const cli = (typeof rawCli === "string" && rawCli.trim()) ? rawCli
+    : (typeof runtimeName === "string" ? (RUNTIME_CLI[runtimeName] ?? runtimeName) : undefined);
   const model = route?.model ?? route?.model_name ?? route?.modelName;
   if (typeof cli !== "string" || cli.trim() === "" || typeof model !== "string" || model.trim() === "") {
     throw new Error(`Heimdall /available-route response must include non-empty cli and model strings`);

@@ -21,6 +21,8 @@ import { getRunStatus, readRunRecord, updateRunRecord, type Question } from "./r
 import { getOutput } from "./output-emitter.ts";
 import type { CompletedEpic } from "./output-emitter.ts";
 import type { PlanDefaultsMode } from "./plan-defaults.ts";
+import { fetchConsusQuestionStatus } from "./consus-poller.ts";
+import { extractAnswerFromItem } from "./consus-resume.ts";
 import { parseTargetRepoLine, stampTargetRepo, deriveRepoSlugFromWorkspace } from "./target-repo-signal.ts";
 
 export interface PlanRequest {
@@ -89,24 +91,22 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
       }
     }
 
-    let answeredQ: { id: string; answer: string; channel: string } | null = null;
+    let answeredQ: { id: string; answer: string | string[]; channel: string } | null = null;
     await new Promise((r) => setTimeout(r, 5000));
 
     for (const [qid, cid] of consusMap.entries()) {
-      try {
-        const res = await fetch(`${consusUrl}/api/workflows/pw-${cid}/status`);
-        if (res.ok) {
-          const data = (await res.json()) as Record<string, unknown>;
-          if (data.status === "resumed" && typeof data.answer === "string" && data.answer.length > 0) {
-            const q = pending.find((q) => q.id === qid);
-            if (q) {
-              answeredQ = { id: qid, answer: data.answer, channel: q.channel };
-              break;
-            }
-          }
-        }
-      } catch (e) {
-        // ignore fetch errors on poll
+      // Poll the same /api/questions/:id resource poll-consus-answers posts to and reads --
+      // NOT /api/workflows/pw-:id/status, whose "resumed" response never carries the answer text
+      // (confirmed live against a running Consus instance), which silently stalled this loop
+      // forever after a human answered.
+      const result = await fetchConsusQuestionStatus(String(cid));
+      if (result.status !== "answered") continue;
+      const answerValue = extractAnswerFromItem(result.item, qid);
+      if (answerValue === null) continue;
+      const q = pending.find((q) => q.id === qid);
+      if (q) {
+        answeredQ = { id: qid, answer: answerValue, channel: q.channel };
+        break;
       }
     }
 

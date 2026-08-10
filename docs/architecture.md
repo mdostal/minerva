@@ -41,6 +41,12 @@ continue. `getRunStatus: in_progress` between calls does not mean work is happen
 background; it means the run is **paused, awaiting the next drive call**. No component in this
 architecture should be built to expect, or wait for, autonomous movement between calls.
 
+`pollConsusAnswers` (minerva-auto-resume epic) does not violate this: it is a fresh-process-per-
+call, read-only method like any other in the table below. It queries Consus and extracts any
+answered questions but never itself calls `submitAnswers` or mutates run state — an external
+caller re-invokes it on its own interval (cron/launchd/etc., "the polling interval") and is
+responsible for feeding what it returns to `resumeFromConsusAnswer`/`resumeAnsweredConsusDecision`.
+
 ## Components
 - **CLI/subprocess entrypoint (`bin/minerva`)** — the single executable. Reads one `{method,
   params}` envelope from stdin per invocation, dispatches, writes one `{result}`/`{error}`
@@ -187,6 +193,7 @@ Method list (adapter-ABI-style: `capabilities` first, closed error enum, `abi_ve
 | `getOutput` | `{run_id}` | `{epic: object}` or `NOT_READY` error | Only returns an artifact once the run is `complete` (REQ-04 AC3). |
 | `listRuns` | `{}` | `{runs: RunSummary[]}` | P1 / REQ-08. |
 | `abortRun` | `{run_id}` | `{result: {}}` | Explicit cleanup trigger — see AD-4. Writes a `CleanupLedgerRecord` and emits `cleanup_needed`; does not delete the workspace. Natural completion (the final `submitAnswers` that closes a run) triggers the same ledger write + event as a side effect. |
+| `pollConsusAnswers` | `{run_id?: string}` | `{polled: number, answered: PolledAnswer[], errors: PollError[]}` | One poll pass over every parked run-question mapping that carries a `consus_question_id` (optionally scoped to `run_id`): queries Consus for each's latest status and extracts the answer for any reported `"answered"`. Read-only — see "No Autonomous Progress" above. minerva-auto-resume epic. |
 
 ### `Question` shape
 ```json

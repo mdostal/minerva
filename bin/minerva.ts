@@ -5,6 +5,7 @@
 
 import { dispatch } from "../src/dispatch.ts";
 import { resumeFromConsusAnswer, resumeAnsweredConsusDecision } from "../src/consus-resume.ts";
+import { pollConsusAnswers } from "../src/consus-poller.ts";
 import { readFileSync } from "node:fs";
 
 function readStdin(): Promise<string> {
@@ -57,10 +58,18 @@ function nextValue(argv: string[], index: number, flag: string): string {
 async function mainArgs(argv: string[]): Promise<void> {
   const params: Record<string, unknown> = {};
   let consusItemFile: string | undefined;
+  let pollConsus = false;
 
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     switch (flag) {
+      case "--poll-consus":
+        pollConsus = true;
+        break;
+      case "--run":
+        params.run_id = nextValue(argv, i, flag);
+        i++;
+        break;
       case "--resume":
         params.run_id = nextValue(argv, i, flag);
         i++;
@@ -111,15 +120,17 @@ async function mainArgs(argv: string[]): Promise<void> {
 
   if (!params.channel) params.channel = "human";
 
-  const result = consusItemFile
-    ? await resumeAnsweredConsusDecision({
-        item: JSON.parse(readFileSync(consusItemFile, "utf8")),
-        file_to_multica: params.file_to_multica === true,
-        parent_issue_id: params.parent_issue_id,
-        project: params.project,
-        target_repo: params.target_repo,
-      })
-    : await resumeFromConsusAnswer(params);
+  const result = pollConsus
+    ? await pollConsusAnswers(params)
+    : consusItemFile
+      ? await resumeAnsweredConsusDecision({
+          item: JSON.parse(readFileSync(consusItemFile, "utf8")),
+          file_to_multica: params.file_to_multica === true,
+          parent_issue_id: params.parent_issue_id,
+          project: params.project,
+          target_repo: params.target_repo,
+        })
+      : await resumeFromConsusAnswer(params);
 
   process.stdout.write(JSON.stringify({ result }, null, 2) + "\n");
   process.exit(0);
@@ -131,6 +142,11 @@ const ARG_HELP = `minerva — JSON-over-stdio by default, plus Consus resume sho
           [--file-to-multica --parent <issue_id>] [--project <project_id>] [--target-repo owner/repo]
 
   minerva --consus-item-file <path.json> [--file-to-multica --parent <issue_id>]
+
+  minerva --poll-consus [--run <run_id>]
+          One poll pass over every parked run-question mapping (or just <run_id>): queries Consus
+          for each's latest status and extracts any answered ones. Read-only -- run this on your
+          own interval (cron/launchd/etc); it does not resume anything itself.
 `;
 
 main();

@@ -8,6 +8,7 @@ export interface ConsusDecisionPostResult {
   url: string;
   status?: number;
   error?: string;
+  consus_question_id?: string;
 }
 
 function postTimeoutMs(): number {
@@ -76,7 +77,18 @@ export async function postQuestionToConsusDecisionApi(
       signal: controller.signal,
     });
     if (!res.ok) return { posted: false, url, status: res.status, error: `HTTP ${res.status}` };
-    return { posted: true, url, status: res.status };
+    
+    let consus_question_id: string | undefined;
+    try {
+      const data = await res.json() as any;
+      if (data && typeof data.id === "string") {
+        consus_question_id = data.id;
+      }
+    } catch {
+      // ignore
+    }
+    return { posted: true, url, status: res.status, consus_question_id };
+
   } catch (e) {
     return { posted: false, url, error: e instanceof Error ? e.message : String(e) };
   } finally {

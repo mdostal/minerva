@@ -1,3 +1,4 @@
+import { createSeedRepo } from "./test-cli.ts";
 // output-emitter.test.ts — output-emitter story (REQ-04)
 // Spawns real bin/minerva.ts subprocesses, which spawn real `claude -p` subprocesses. Confirms
 // completion is detected as a FILESYSTEM fact (an epic.yaml appearing under the workspace's

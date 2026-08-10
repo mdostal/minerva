@@ -123,7 +123,15 @@ export async function recordTurn(runId: string, rawResult: string): Promise<void
 
   const posted = await postQuestionToConsusDecisionApi(runId, question);
   if (posted.posted) {
-    updateRunRecord(runId, { status: "awaiting-consus" });
+    const patch: Partial<import("./run-manager.ts").RunRecord> = { status: "awaiting-consus" };
+    if (posted.consus_question_id) {
+      const current = readRunRecord(runId);
+      const updatedQuestions = current.questions.map((q) =>
+        q.id === question.id ? { ...q, consus_question_id: posted.consus_question_id } : q
+      );
+      patch.questions = updatedQuestions;
+    }
+    updateRunRecord(runId, patch);
   }
 }
 

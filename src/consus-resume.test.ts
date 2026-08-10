@@ -10,14 +10,14 @@ import {
 } from "./consus-resume.ts";
 import type { CompletedEpic } from "./output-emitter.ts";
 
-const epic: CompletedEpic = {
+const epic = {
   epic_id: "routing",
   epic_yaml: "name: routing\n",
   stories: [
     { id: "story-1", content: "id: story-1\ntitle: Build answered decision resume\n" },
     { id: "story-2", content: "id: story-2\ntitle: File completed stories\n" },
   ],
-};
+} as CompletedEpic;
 
 test("resumeFromConsusAnswer resumes a waiting run and files stories after completion", async () => {
   const submitted: any[] = [];

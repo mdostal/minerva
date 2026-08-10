@@ -1,0 +1,73 @@
+graph TB
+    Start[Agent Spawn Request] --> Hook1[Before-Spawn Hook Triggered]
+    Hook1 --> Phase{Which Phase?}
+
+    Phase -->|Phase 1 MVP| LoadFile[Load File-Based Memory<br/>Hive + SQLite]
+    Phase -->|Phase 2+| LoadMulti[Load Multi-Backend Memory]
+
+    LoadMulti --> LoadFile
+    LoadMulti --> LoadQdrant[Load Qdrant Semantic Search]
+    LoadMulti --> LoadCodeGraph[Load CodeGraph AST/Deps]
+    LoadMulti --> LoadDocSections[Load Document Sections<br/>lines 100-120 of X]
+
+    LoadFile --> Filter[Filter by Brand/Persona + Role]
+    LoadQdrant --> Filter
+    LoadCodeGraph --> Filter
+    LoadDocSections --> Filter
+
+    Filter --> InjectStrategy{Injection Strategy}
+    InjectStrategy --> DirectInject[Direct Context Injection]
+    InjectStrategy --> ToolAccess[Tool-Accessible Lookup]
+
+    DirectInject --> Cache[Cache in Memory]
+    ToolAccess --> Cache
+    Cache --> Execute[Agent Executes Task]
+
+    Execute --> AgentRequest{Agent Requests More Context?}
+    AgentRequest -->|Yes| ToolLookup[Tool-Based Memory Lookup]
+    ToolLookup --> BubbleUp{Needs Orchestrator Layer?}
+    BubbleUp -->|Yes| EscalateContext[Bubble Up to Orchestrator]
+    BubbleUp -->|No| Execute
+    EscalateContext --> Execute
+    AgentRequest -->|No| Complete
+
+    Complete --> Decision{New Memories Created?}
+    Decision -->|No| Cleanup[Agent Cleanup]
+    Decision -->|Yes| Hook2[After-Task Hook Triggered]
+
+    Hook2 --> ClassifyStatus[Classify Memory Status]
+    ClassifyStatus --> ShortTerm{Short-Term or Long-Term?}
+
+    ShortTerm -->|Short-Term| WriteShort[Write to Short-Term Memory<br/>status: in-progress]
+    ShortTerm -->|Long-Term| WriteLong[Write to Long-Term Memory<br/>status: full-send]
+
+    WriteShort --> Backend{Which Backend?}
+    WriteLong --> Backend
+
+    Backend --> FileWrite[File-Based: .pHive/memory/]
+    Backend --> QdrantWrite[Qdrant Embedding Store]
+    Backend --> CodeGraphWrite[CodeGraph SQLite Index]
+
+    FileWrite --> CheckPR{PR Approved?}
+    QdrantWrite --> CheckPR
+    CodeGraphWrite --> CheckPR
+
+    CheckPR -->|Yes, Phase 3+| PromoteHook[Post-PR Promotion Hook]
+    CheckPR -->|No| Cleanup
+
+    PromoteHook --> PromoteToLong[Promote Short-Term → Long-Term]
+    PromoteToLong --> Cleanup
+
+    Cleanup --> SandmanCheck{Sandman Scheduled?}
+    SandmanCheck -->|Yes, Phase 5| SandmanCurate[Sandman Nightly Cleanup<br/>Archive/Delete Stale Memories]
+    SandmanCheck -->|No| End
+    SandmanCurate --> End[Agent Complete]
+
+    style Start fill:#2a4a7c,stroke:#4a9eff,color:#fff
+    style End fill:#2a4a7c,stroke:#4a9eff,color:#fff
+    style Hook1 fill:#1a3a2a,stroke:#4a9e7f,color:#fff
+    style Hook2 fill:#1a3a2a,stroke:#4a9e7f,color:#fff
+    style Filter fill:#3a2a1a,stroke:#f59e0b,color:#fff
+    style Execute fill:#2a1a3a,stroke:#a78bfa,color:#fff
+    style PromoteHook fill:#1a3a2a,stroke:#4a9e7f,color:#fff
+    style SandmanCurate fill:#3a1a2a,stroke:#ff6b9d,color:#fff

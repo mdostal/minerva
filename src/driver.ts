@@ -41,7 +41,7 @@ import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassifi
 import { listEnvelopes } from "./envelope-detection.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
-const DEFAULT_HEIMDALL_URL = "http://127.0.0.1:8787";
+const DEFAULT_HEIMDALL_URL = "http://127.0.0.1:4870";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
 
 // Production finding (2026-07-26): a real kickoff->planning transition turn legitimately runs
@@ -95,7 +95,7 @@ function availableRouteUrl(): string {
   const exact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
   if (exact) return exact;
   const base = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? DEFAULT_HEIMDALL_URL;
-  return new URL("/available-route", base.endsWith("/") ? base : `${base}/`).toString();
+  return new URL("/available-route?task-type=planning", base.endsWith("/") ? base : `${base}/`).toString();
 }
 
 export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {

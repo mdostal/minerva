@@ -59,6 +59,13 @@ test("parseAvailableRoutePayload rejects routes without both CLI and model", () 
   assert.throws(() => parseAvailableRoutePayload({ model: "gemini-2.5-pro" }), /cli and model/);
 });
 
+test("parseAvailableRoutePayload rejects empty, missing-runtime, and non-object payloads", () => {
+  assert.throws(() => parseAvailableRoutePayload({}), /cli and model/);
+  assert.throws(() => parseAvailableRoutePayload(null), /cli and model/);
+  assert.throws(() => parseAvailableRoutePayload(undefined), /cli and model/);
+  assert.throws(() => parseAvailableRoutePayload({ runtime: "   ", model: "gemini-2.5-pro" }), /cli and model/);
+});
+
 test("resolveRuntimeRoute GETs /available-route and returns the routed CLI/model", async () => {
   const previous = process.env.MINERVA_HEIMDALL_URL;
   const previousExact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;

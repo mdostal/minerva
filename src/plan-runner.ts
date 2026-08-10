@@ -29,6 +29,7 @@ export interface PlanRequest {
   mode?: PlanDefaultsMode; // default "auto" -- fully unattended; the whole point of this entry
   defaults?: Record<string, unknown>; // extra per-run plan-defaults overrides (merged over mode)
   ticketId?: string; // origin Multica ticket, for linkage when filing stories back
+  pollConsusForAnswers?: boolean; // poll Consus for answers to parked questions
 }
 
 export interface PlanResult {
@@ -53,8 +54,73 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
     defaults,
   })) as { run_id: string };
 
-  const status = (getRunStatus({ run_id }) as { status: string }).status;
-  const record = readRunRecord(run_id);
+  let status = (getRunStatus({ run_id }) as { status: string }).status;
+  let record = readRunRecord(run_id);
+  const consusUrl = process.env.CONSUS_URL || "http://localhost:8722";
+  const consusMap = new Map<string, number>();
+
+  while (status === "waiting_on_human" && req.pollConsusForAnswers) {
+    const pending = record.questions.filter((q) => q.status === "pending");
+    for (const q of pending) {
+      if (consusMap.has(q.id)) continue;
+      try {
+        const res = await fetch(`${consusUrl}/api/questions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            item_id: req.ticketId || `run-${run_id}`,
+            minerva_question_id: q.id,
+            text: q.text,
+            channel: q.channel,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          consusMap.set(q.id, data.id);
+          console.error(`[headless] Posted question ${q.id} to Consus (human_request: ${data.id})`);
+        } else {
+          console.error(`[headless] Failed to post question ${q.id}: HTTP ${res.status}`);
+        }
+      } catch (e) {
+        console.error(`[headless] Consus unreachable: ${(e as Error).message}`);
+      }
+    }
+
+    let answeredQ: { id: string; answer: string; channel: string } | null = null;
+    await new Promise((r) => setTimeout(r, 5000));
+
+    for (const [qid, cid] of consusMap.entries()) {
+      try {
+        const res = await fetch(`${consusUrl}/api/workflows/pw-${cid}/status`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "resumed" && data.answer) {
+            const q = pending.find((q) => q.id === qid);
+            if (q) {
+              answeredQ = { id: qid, answer: data.answer, channel: q.channel };
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        // ignore fetch errors on poll
+      }
+    }
+
+    if (answeredQ) {
+      console.error(`[headless] Answer received for ${answeredQ.id}, resuming run...`);
+      const { submitAnswers } = await import("./kickoff-engine.ts");
+      await submitAnswers({
+        run_id,
+        channel: answeredQ.channel,
+        answers: [{ question_id: answeredQ.id, answer: answeredQ.answer }],
+      });
+      consusMap.delete(answeredQ.id);
+    }
+
+    status = (getRunStatus({ run_id }) as { status: string }).status;
+    record = readRunRecord(run_id);
+  }
 
   let epic: CompletedEpic | null = null;
   let epics: CompletedEpic[] = [];

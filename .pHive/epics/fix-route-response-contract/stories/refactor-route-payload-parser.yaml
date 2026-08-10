@@ -1,0 +1,47 @@
+id: refactor-route-payload-parser
+epic: fix-route-response-contract
+title: Map Heimdall runtime to Minerva CLI in payload parser
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Modify `parseAvailableRoutePayload` (around driver.ts ~114) to stop requiring a 'cli' field directly from Heimdall.
+  Instead, read the 'runtime' field and map it to a spawnable cli (e.g., gemini -> opencode, claude -> claude, codex -> codex).
+  Ensure the final parsed structure returns the `cli`, `model`, and `env` needed by Minerva's runner.
+
+acceptance_criteria:
+  - "Given a route payload with {runtime: 'gemini'}, when parsed, then the resulting object has {cli: 'opencode'}."
+  - "Given a route payload missing 'cli' but having 'runtime', when parsed, then no validation error is thrown."
+
+metric:
+  applies: false
+  justification: This is a strict contract compatibility fix where boolean correctness is required, not a quantifiable performance improvement.
+
+steps:
+  - id: step-1
+    description: Locate `parseAvailableRoutePayload` in the codebase (likely in driver.ts).
+    agent: developer
+  - id: step-2
+    description: Implement the runtime-to-cli mapping logic in ONE central place (e.g. gemini -> opencode).
+    agent: developer
+  - id: step-3
+    description: Update the payload validation to check for 'runtime' instead of strictly 'cli' and construct the final required interface (cli, model, env).
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/1956b8aa-4d02-4901-977a-0e3fedac37b1/workspace
+  tech_stack: {}
+  key_files:
+    - path: src/driver.ts
+      purpose: Contains the parseAvailableRoutePayload function to be updated.
+
+design_decisions:
+  - decision: Map gemini to opencode
+    rationale: Minerva uses the opencode CLI for the Gemini runtime, whereas Heimdall returns the runtime name.
+
+risks:
+  - severity: medium
+    description: Other parts of the system might still be sending 'cli' directly.
+    mitigation: Support both 'cli' (as a fallback) and 'runtime' during parsing to remain backwards compatible.

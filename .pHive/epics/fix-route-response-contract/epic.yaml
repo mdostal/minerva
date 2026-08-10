@@ -1,0 +1,19 @@
+name: fix-route-response-contract
+title: Fix Heimdall route-response contract mismatch and enable mode=off Consus PARK
+description: Resolves a contract mismatch where Heimdall returns runtime but Minerva expects cli, maps runtimes to appropriate CLIs, and ensures the mode=off plan flow correctly PARKS and POSTs to Consus.
+target_codebase: /Users/dostal/.minerva/runs/1956b8aa-4d02-4901-977a-0e3fedac37b1/workspace
+methodology: classic
+version_bump: minor
+stories:
+  - id: refactor-route-payload-parser
+    title: Map Heimdall runtime to Minerva CLI in payload parser
+    complexity: medium
+    depends_on: []
+  - id: add-route-parser-tests
+    title: Add unit tests for route payload runtime mapping
+    complexity: low
+    depends_on: [refactor-route-payload-parser]
+  - id: verify-mode-off-consus-post
+    title: Ensure mode=off triggers PARK and POST to Consus
+    complexity: medium
+    depends_on: [refactor-route-payload-parser]

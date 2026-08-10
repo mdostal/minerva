@@ -347,13 +347,14 @@ export class ClaudeAdapter implements RuntimeAdapter {
 }
 
 export class OpencodeAdapter implements RuntimeAdapter {
-  formatTurnArgs(model: string, sessionId: string | null, prompt: string, extraArgs: string[] = []): string[] {
-    const sessionArgs = sessionId ? ["--resume", sessionId] : [];
+  formatTurnArgs(model: string, sessionId: string | null, prompt: string, _extraArgs: string[] = []): string[] {
+    const sessionArgs = sessionId ? ["--session", sessionId] : [];
     return [
+      "run",
       "--model",
       model,
       ...sessionArgs,
-      ...extraArgs,
+      "--auto",
       prompt,
     ];
   }
@@ -388,10 +389,54 @@ export class OpencodeAdapter implements RuntimeAdapter {
   }
 }
 
+export class CodexAdapter implements RuntimeAdapter {
+  formatTurnArgs(model: string, sessionId: string | null, prompt: string, _extraArgs: string[] = []): string[] {
+    const sharedArgs = [
+      "--model",
+      model,
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+    ];
+    return sessionId
+      ? ["exec", "resume", ...sharedArgs, sessionId, prompt]
+      : ["exec", ...sharedArgs, prompt];
+  }
+
+  parseTurnResult(stdout: string): TurnResult {
+    return {
+      is_error: false,
+      stop_reason: "end_turn",
+      session_id: randomUUID(),
+      result: stdout,
+    };
+  }
+
+  formatBackgroundArgs(model: string, sessionId: string | null, prompt: string): string[] {
+    throw new Error("Background agents not supported");
+  }
+
+  parseBackgroundDispatch(stdout: string): string {
+    throw new Error("Background agents not supported");
+  }
+
+  formatListAgentsArgs(): string[] {
+    throw new Error("Background agents not supported");
+  }
+
+  parseListAgents(stdout: string): BackgroundAgentEntry[] {
+    throw new Error("Background agents not supported");
+  }
+
+  formatStopAgentArgs(shortId: string): string[] {
+    throw new Error("Background agents not supported");
+  }
+}
+
 export function getAdapter(cli: string): RuntimeAdapter {
-  if (cli === "opencode" || cli === "codex") {
+  if (cli === "opencode") {
     return new OpencodeAdapter();
   }
+  if (cli === "codex") return new CodexAdapter();
   return new ClaudeAdapter();
 }
 

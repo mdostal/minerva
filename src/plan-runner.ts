@@ -57,7 +57,7 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
   let status = (getRunStatus({ run_id }) as { status: string }).status;
   let record = readRunRecord(run_id);
   const consusUrl = process.env.CONSUS_URL || "http://localhost:8722";
-  const consusMap = new Map<string, number>();
+  const consusMap = new Map<string, string>();
 
   while (status === "waiting_on_human" && req.pollConsusForAnswers) {
     const pending = record.questions.filter((q) => q.status === "pending");
@@ -75,9 +75,12 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
           }),
         });
         if (res.ok) {
-          const data = await res.json();
-          consusMap.set(q.id, data.id);
-          console.error(`[headless] Posted question ${q.id} to Consus (human_request: ${data.id})`);
+          const data = (await res.json()) as { id?: unknown };
+          if (typeof data.id === "string" || typeof data.id === "number") {
+            const consusId = String(data.id);
+            consusMap.set(q.id, consusId);
+            console.error(`[headless] Posted question ${q.id} to Consus (human_request: ${consusId})`);
+          }
         } else {
           console.error(`[headless] Failed to post question ${q.id}: HTTP ${res.status}`);
         }
@@ -93,8 +96,8 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
       try {
         const res = await fetch(`${consusUrl}/api/workflows/pw-${cid}/status`);
         if (res.ok) {
-          const data = await res.json();
-          if (data.status === "resumed" && data.answer) {
+          const data = (await res.json()) as { status?: unknown; answer?: unknown };
+          if (data.status === "resumed" && typeof data.answer === "string" && data.answer.length > 0) {
             const q = pending.find((q) => q.id === qid);
             if (q) {
               answeredQ = { id: qid, answer: data.answer, channel: q.channel };

@@ -180,7 +180,7 @@ export interface Driver {
   runTurn(input: DriverInput): Promise<DriverResult>;
 }
 
-interface ClaudePResult {
+export interface TurnResult {
   is_error: boolean;
   stop_reason: string;
   session_id: string;
@@ -232,7 +232,7 @@ export function resolveClaudeSpawnEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.Proc
   return env;
 }
 
-function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<ClaudePResult> {
+function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], parseOutput: (stdout: string) => TurnResult, extraEnv?: NodeJS.ProcessEnv): Promise<TurnResult> {
   return new Promise((resolve, reject) => {
     const env = resolveClaudeSpawnEnv(extraEnv);
     const child = spawn(route.cli, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
@@ -269,31 +269,138 @@ function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], extraEnv
         return;
       }
       try {
-        resolve(JSON.parse(stdout) as ClaudePResult);
+        resolve(parseOutput(stdout));
       } catch (e) {
-        reject(new Error(`${route.cli} produced non-JSON output: ${e instanceof Error ? e.message : String(e)}`));
+        reject(new Error(`Failed to parse output from ${route.cli}: ${e instanceof Error ? e.message : String(e)}`));
       }
     });
   });
 }
 
-export class SpawnDriver implements Driver {
-  async runTurn(input: DriverInput): Promise<DriverResult> {
-    const route = await resolveRuntimeRoute();
-    const sessionArgs = input.sessionId ? ["--resume", input.sessionId] : ["--session-id", randomUUID()];
-    const args = [
+
+export interface RuntimeAdapter {
+  formatTurnArgs(model: string, sessionId: string | null, prompt: string, extraArgs?: string[]): string[];
+  parseTurnResult(stdout: string): TurnResult;
+  formatBackgroundArgs(model: string, sessionId: string | null, prompt: string): string[];
+  parseBackgroundDispatch(stdout: string): string;
+  formatListAgentsArgs(): string[];
+  parseListAgents(stdout: string): BackgroundAgentEntry[];
+  formatStopAgentArgs(shortId: string): string[];
+}
+
+export class ClaudeAdapter implements RuntimeAdapter {
+  formatTurnArgs(model: string, sessionId: string | null, prompt: string, extraArgs: string[] = []): string[] {
+    const sessionArgs = sessionId ? ["--resume", sessionId] : ["--session-id", randomUUID()];
+    return [
       "-p",
       "--model",
-      route.model,
+      model,
       "--output-format",
       "json",
       "--permission-mode",
       "bypassPermissions",
       ...sessionArgs,
-      ...classificationSchemaArgs(),
-      input.prompt,
+      ...extraArgs,
+      prompt,
     ];
-    const result = await spawnRuntime(route, input.cwd, args);
+  }
+
+  parseTurnResult(stdout: string): TurnResult {
+    try {
+      return JSON.parse(stdout) as TurnResult;
+    } catch (e) {
+      throw new Error(`Claude produced non-JSON output: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  formatBackgroundArgs(model: string, sessionId: string | null, prompt: string): string[] {
+    return [
+      "--bg",
+      "--model",
+      model,
+      "--permission-mode",
+      "bypassPermissions",
+      ...(sessionId ? ["--resume", sessionId] : []),
+      prompt,
+    ];
+  }
+
+  parseBackgroundDispatch(stdout: string): string {
+    const match = stdout.match(/backgrounded\s*[·:]\s*(\S+)/);
+    if (!match || !match[1]) {
+      throw new Error(`could not parse a background session id from Claude --bg output: ${stdout}`);
+    }
+    return match[1];
+  }
+
+  formatListAgentsArgs(): string[] {
+    return ["agents", "--json"];
+  }
+
+  parseListAgents(stdout: string): BackgroundAgentEntry[] {
+    return JSON.parse(stdout) as BackgroundAgentEntry[];
+  }
+
+  formatStopAgentArgs(shortId: string): string[] {
+    return ["stop", shortId];
+  }
+}
+
+export class OpencodeAdapter implements RuntimeAdapter {
+  formatTurnArgs(model: string, sessionId: string | null, prompt: string, extraArgs: string[] = []): string[] {
+    const sessionArgs = sessionId ? ["--resume", sessionId] : [];
+    return [
+      "--model",
+      model,
+      ...sessionArgs,
+      ...extraArgs,
+      prompt,
+    ];
+  }
+
+  parseTurnResult(stdout: string): TurnResult {
+    return {
+      is_error: false,
+      stop_reason: "end_turn",
+      session_id: randomUUID(),
+      result: stdout,
+    };
+  }
+
+  formatBackgroundArgs(model: string, sessionId: string | null, prompt: string): string[] {
+    throw new Error("Background agents not supported");
+  }
+
+  parseBackgroundDispatch(stdout: string): string {
+    throw new Error("Background agents not supported");
+  }
+
+  formatListAgentsArgs(): string[] {
+    throw new Error("Background agents not supported");
+  }
+
+  parseListAgents(stdout: string): BackgroundAgentEntry[] {
+    throw new Error("Background agents not supported");
+  }
+
+  formatStopAgentArgs(shortId: string): string[] {
+    throw new Error("Background agents not supported");
+  }
+}
+
+export function getAdapter(cli: string): RuntimeAdapter {
+  if (cli === "opencode" || cli === "codex") {
+    return new OpencodeAdapter();
+  }
+  return new ClaudeAdapter();
+}
+
+export class SpawnDriver implements Driver {
+  async runTurn(input: DriverInput): Promise<DriverResult> {
+    const route = await resolveRuntimeRoute();
+    const adapter = getAdapter(route.cli);
+    const args = adapter.formatTurnArgs(route.model, input.sessionId, input.prompt, classificationSchemaArgs());
+    const result = await spawnRuntime(route, input.cwd, args, adapter.parseTurnResult.bind(adapter));
     return { session_id: result.session_id, raw_result: result.result };
   }
 }
@@ -303,7 +410,7 @@ const POLL_CEILING_MS = CLAUDE_TIMEOUT_MS; // same budget as SpawnDriver's own t
 const UTILITY_CMD_TIMEOUT_MS = 15_000; // --bg dispatch / agents --json / stop are fast, bounded ops
 const EXTRACTION_INSTRUCTION = "Structure your prior question into the required schema.";
 
-interface BackgroundAgentEntry {
+export interface BackgroundAgentEntry {
   id?: string;
   sessionId?: string;
   kind?: string;
@@ -319,28 +426,15 @@ function runRuntimeUtility(route: RuntimeRoute, args: string[], cwd?: string): s
   });
 }
 
-function dispatchBackground(route: RuntimeRoute, cwd: string, sessionId: string | null, prompt: string): string {
-  const args = [
-    "--bg",
-    "--model",
-    route.model,
-    "--permission-mode",
-    "bypassPermissions",
-    ...(sessionId ? ["--resume", sessionId] : []),
-    prompt,
-  ];
+function dispatchBackground(route: RuntimeRoute, adapter: RuntimeAdapter, cwd: string, sessionId: string | null, prompt: string): string {
+  const args = adapter.formatBackgroundArgs(route.model, sessionId, prompt);
   const out = runRuntimeUtility(route, args, cwd);
-  const match = out.match(/backgrounded\s*[·:]\s*(\S+)/);
-  if (!match || !match[1]) {
-    throw new Error(`could not parse a background session id from ${route.cli} --bg output: ${out}`);
-  }
-  return match[1];
+  return adapter.parseBackgroundDispatch(out);
 }
 
-function listBackgroundAgents(route: RuntimeRoute): BackgroundAgentEntry[] {
-  const out = runRuntimeUtility(route, ["agents", "--json"]);
-  const parsed = JSON.parse(out) as BackgroundAgentEntry[];
-  return parsed.filter((a) => a.kind === "background");
+function listBackgroundAgents(route: RuntimeRoute, adapter: RuntimeAdapter): BackgroundAgentEntry[] {
+  const out = runRuntimeUtility(route, adapter.formatListAgentsArgs());
+  return adapter.parseListAgents(out).filter((a) => a.kind === "background");
 }
 
 function sleep(ms: number): Promise<void> {
@@ -350,10 +444,10 @@ function sleep(ms: number): Promise<void> {
 // Polls until the dispatched session's state is done OR blocked -- both represent "the turn
 // produced a response and stopped" from Minerva's perspective (confirmed empirically: a --bg
 // session that asks a question and waits for input shows state: blocked, not done).
-async function pollUntilTerminal(route: RuntimeRoute, shortId: string): Promise<BackgroundAgentEntry> {
+async function pollUntilTerminal(route: RuntimeRoute, adapter: RuntimeAdapter, shortId: string): Promise<BackgroundAgentEntry> {
   const deadline = Date.now() + POLL_CEILING_MS;
   while (Date.now() < deadline) {
-    const entry = listBackgroundAgents(route).find((a) => a.id === shortId);
+    const entry = listBackgroundAgents(route, adapter).find((a) => a.id === shortId);
     if (entry && (entry.state === "done" || entry.state === "blocked")) {
       return entry;
     }
@@ -362,15 +456,15 @@ async function pollUntilTerminal(route: RuntimeRoute, shortId: string): Promise<
   throw new Error(`background session ${shortId} did not reach done/blocked within ${POLL_CEILING_MS}ms`);
 }
 
-function stopBackground(route: RuntimeRoute, shortId: string): void {
-  runRuntimeUtility(route, ["stop", shortId]);
+function stopBackground(route: RuntimeRoute, adapter: RuntimeAdapter, shortId: string): void {
+  runRuntimeUtility(route, adapter.formatStopAgentArgs(shortId));
 }
 
 // Best-effort reap used on failure paths -- a failure to stop an already-gone/already-stopped
 // session must not mask the original error being propagated up to the caller.
-function reapBackground(route: RuntimeRoute, shortId: string): void {
+function reapBackground(route: RuntimeRoute, adapter: RuntimeAdapter, shortId: string): void {
   try {
-    stopBackground(route, shortId);
+    stopBackground(route, adapter, shortId);
   } catch {
     // already stopped/finished/gone -- fine, this is best-effort cleanup on a failure path
   }
@@ -379,41 +473,30 @@ function reapBackground(route: RuntimeRoute, shortId: string): void {
 export class SubagentDriver implements Driver {
   async runTurn(input: DriverInput): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
-    const shortId = dispatchBackground(route, input.cwd, input.sessionId, input.prompt);
+    const adapter = getAdapter(route.cli);
+    const shortId = dispatchBackground(route, adapter, input.cwd, input.sessionId, input.prompt);
 
     let entry: BackgroundAgentEntry;
     try {
-      entry = await pollUntilTerminal(route, shortId);
+      entry = await pollUntilTerminal(route, adapter, shortId);
     } catch (e) {
       // Production finding (2026-07-26): a poll timeout previously left the underlying --bg
       // session running and untracked -- never stopped, accumulating and burning tokens until
       // manually reaped. Reap it here even though we're giving up on this turn; the original
       // timeout error still propagates to the caller.
-      reapBackground(route, shortId);
+      reapBackground(route, adapter, shortId);
       throw e;
     }
 
     const fullSessionId = entry.sessionId;
     if (!fullSessionId) {
-      reapBackground(route, shortId);
+      reapBackground(route, adapter, shortId);
       throw new Error(`background session ${shortId} reached a terminal state with no sessionId`);
     }
-    stopBackground(route, shortId);
+    stopBackground(route, adapter, shortId);
 
-    const args = [
-      "-p",
-      "--model",
-      route.model,
-      "--output-format",
-      "json",
-      "--permission-mode",
-      "bypassPermissions",
-      "--resume",
-      fullSessionId,
-      ...classificationSchemaArgs(),
-      EXTRACTION_INSTRUCTION,
-    ];
-    const result = await spawnRuntime(route, input.cwd, args);
+    const args = adapter.formatTurnArgs(route.model, fullSessionId, EXTRACTION_INSTRUCTION, classificationSchemaArgs());
+    const result = await spawnRuntime(route, input.cwd, args, adapter.parseTurnResult.bind(adapter));
     return { session_id: result.session_id, raw_result: result.result };
   }
 }
@@ -591,20 +674,14 @@ export class ForkedHiveDriver implements Driver {
 
   private async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
-    const args = [
-      "-p",
-      "--model",
+    const adapter = getAdapter(route.cli);
+    const args = adapter.formatTurnArgs(
       route.model,
-      "--output-format",
-      "json",
-      "--permission-mode",
-      "bypassPermissions",
-      ...pluginDirArgs(),
-      "--session-id",
-      randomUUID(),
+      null,
       skillPrompt + EXPLICIT_STOP_INSTRUCTION,
-    ];
-    await spawnRuntime(route, cwd, args, { HIVE_HEADLESS: "1" });
+      pluginDirArgs()
+    );
+    await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter), { HIVE_HEADLESS: "1" });
     return this.surfaceNextQuestion(cwd, skillPrompt);
   }
 
@@ -675,18 +752,14 @@ export class ForkedHiveDriver implements Driver {
 
   private async classify(cwd: string, questionText: string) {
     const route = await resolveRuntimeRoute();
-    const args = [
-      "-p",
-      "--model",
+    const adapter = getAdapter(route.cli);
+    const args = adapter.formatTurnArgs(
       route.model,
-      "--output-format",
-      "json",
-      "--permission-mode",
-      "bypassPermissions",
-      ...classificationOnlySchemaArgs(),
+      null,
       `Classify this question, which will be asked on Minerva's behalf: ${questionText}`,
-    ];
-    const result = await spawnRuntime(route, cwd, args);
+      classificationOnlySchemaArgs()
+    );
+    const result = await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter));
     return extractClassification(result.result);
   }
 }

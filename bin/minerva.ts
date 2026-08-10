@@ -6,6 +6,7 @@
 import { dispatch } from "../src/dispatch.ts";
 import { resumeFromConsusAnswer, resumeAnsweredConsusDecision } from "../src/consus-resume.ts";
 import { pollConsusAnswers } from "../src/consus-poller.ts";
+import { pollAndResumeConsusAnswers } from "../src/consus-auto-resume.ts";
 import { readFileSync } from "node:fs";
 
 function readStdin(): Promise<string> {
@@ -59,12 +60,16 @@ async function mainArgs(argv: string[]): Promise<void> {
   const params: Record<string, unknown> = {};
   let consusItemFile: string | undefined;
   let pollConsus = false;
+  let pollAndResume = false;
 
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     switch (flag) {
       case "--poll-consus":
         pollConsus = true;
+        break;
+      case "--poll-and-resume":
+        pollAndResume = true;
         break;
       case "--run":
         params.run_id = nextValue(argv, i, flag);
@@ -120,7 +125,9 @@ async function mainArgs(argv: string[]): Promise<void> {
 
   if (!params.channel) params.channel = "human";
 
-  const result = pollConsus
+  const result = pollAndResume
+    ? await pollAndResumeConsusAnswers(params)
+    : pollConsus
     ? await pollConsusAnswers(params)
     : consusItemFile
       ? await resumeAnsweredConsusDecision({
@@ -147,6 +154,12 @@ const ARG_HELP = `minerva — JSON-over-stdio by default, plus Consus resume sho
           One poll pass over every parked run-question mapping (or just <run_id>): queries Consus
           for each's latest status and extracts any answered ones. Read-only -- run this on your
           own interval (cron/launchd/etc); it does not resume anything itself.
+
+  minerva --poll-and-resume [--run <run_id>] [--file-to-multica --parent <issue_id>]
+          Same poll pass as --poll-consus, then immediately resumes every parked run it found
+          answered (feeds each answer into resumeFromConsusAnswer). Run this on your own interval
+          instead of --poll-consus when you want parked runs to advance automatically as soon as
+          Consus reports an answer.
 `;
 
 main();

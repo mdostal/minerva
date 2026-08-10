@@ -3,7 +3,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runCli } from "../src/test-cli.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { runCli, call } from "../src/test-cli.ts";
 
 test("capabilities returns abi_version and exits 0", () => {
   const { stdout, status } = runCli(JSON.stringify({ method: "capabilities", params: {} }));
@@ -38,4 +41,16 @@ test("error envelope always uses the closed 5-code enum, never a custom code", (
   const { stdout } = runCli("not json{{{");
   const parsed = JSON.parse(stdout);
   assert.ok(CLOSED_ENUM.has(parsed.error.code), `${parsed.error.code} must be one of the closed enum`);
+});
+
+test("pollAndResumeConsusAnswers is registered as a real ABI method and no-ops with nothing parked", () => {
+  const minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-poll-resume-cli-"));
+  try {
+    const { result, error, status } = call("pollAndResumeConsusAnswers", {}, { MINERVA_HOME: minervaHome });
+    assert.equal(status, 0);
+    assert.equal(error, undefined);
+    assert.deepEqual(result, { polled: 0, resumed: [], poll_errors: [], resume_errors: [] });
+  } finally {
+    rmSync(minervaHome, { recursive: true, force: true });
+  }
 });

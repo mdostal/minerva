@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { startRun } from "./kickoff-engine.ts";
-import { getRunStatus, readRunRecord, type Question } from "./run-manager.ts";
+import { getRunStatus, readRunRecord, updateRunRecord, type Question } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
 import type { CompletedEpic } from "./output-emitter.ts";
 import type { PlanDefaultsMode } from "./plan-defaults.ts";
@@ -72,7 +72,7 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
     for (const q of pending) {
       const qq = q as unknown as { id?: string; text?: string; suggested_channel?: string; confidence?: number; reason?: string };
       try {
-        await fetch(`${consusUrl}/api/questions`, {
+        const res = await fetch(`${consusUrl}/api/questions`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -86,6 +86,16 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
             reason: qq.reason,
           }),
         });
+        if (res.ok) {
+          const data = (await res.json().catch(() => null)) as any;
+          if (data && typeof data.id === "string") {
+            const current = readRunRecord(run_id);
+            const updated = current.questions.map((qu) => 
+              qu.id === qq.id ? { ...qu, consus_question_id: data.id } : qu
+            );
+            updateRunRecord(run_id, { questions: updated });
+          }
+        }
       } catch { /* Consus unreachable — question remains parked in Minerva; no data lost */ }
     }
   }

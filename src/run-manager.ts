@@ -51,6 +51,7 @@ export interface Question {
   // answer-write-back step can address the correct question within a multi-question envelope
   // without re-deriving the mapping.
   qid?: string;
+  consus_question_id?: string;
 }
 
 export interface RunRecord {

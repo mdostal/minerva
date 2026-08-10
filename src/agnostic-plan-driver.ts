@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 
-const HEIMDALL_URL = process.env.HEIMDALL_URL ?? "http://localhost:4870";
+const HEIMDALL_URL = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? "http://localhost:4870";
 const ROUTE_TIMEOUT_MS = Number(process.env.MINERVA_PLAN_ROUTE_TIMEOUT_MS ?? 2000);
 const TURN_TIMEOUT_MS = Number(process.env.MINERVA_TURN_TIMEOUT_MS ?? 600_000);
 

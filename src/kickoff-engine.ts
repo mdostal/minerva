@@ -4,11 +4,12 @@
 // "No Autonomous Progress" and AD-2.
 
 import { MinervaError } from "./errors.ts";
-import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
+import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel, type RunRecord } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
 import { postQuestionToConsusDecisionApi } from "./consus-decisions.ts";
+import { AgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord } from "./agnostic-plan-driver.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
@@ -28,7 +29,13 @@ function selectDriver(): Driver {
   );
 }
 
-const driver: Driver = selectDriver();
+function driverForRecord(record: RunRecord): Driver {
+  if (record.plan_runtime && record.plan_runtime !== 'claude') {
+    const agnostic = agnosticPlanDriverFromRecord(record.plan_runtime, record.plan_model || "");
+    if (agnostic) return agnostic;
+  }
+  return selectDriver();
+}
 
 // Test seam: swap the real `/plugin-hive:kickoff {idea}` prompt for a cheap synthetic one so
 // the automated suite doesn't drive a full real kickoff (slow, costly, many gates) on every
@@ -83,7 +90,17 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   const targetRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
 
   const { run_id: runId } = allocateRun(idea, targetRepo);
+
+  const planRoute = await resolvePlanningRoute();
+  if (planRoute && planRoute.runtime !== 'claude') {
+    updateRunRecord(runId, {
+      plan_runtime: planRoute.runtime,
+      plan_model: planRoute.model,
+    });
+  }
+
   const record = readRunRecord(runId);
+  const driver = driverForRecord(record);
 
   const drivePrompt = buildDrivePrompt(idea);
   const { session_id: sessionId, raw_result: rawResult } = await driver.runTurn({
@@ -176,6 +193,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
+  const driver = driverForRecord(record);
   const { session_id: newSessionId, raw_result: rawResult } = await driver.runTurn({
     cwd: record.workspace_path,
     sessionId: record.session_id,

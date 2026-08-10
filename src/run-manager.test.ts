@@ -37,14 +37,20 @@ before(() => {
 
   existingRepo = mkdtempSync(join(tmpdir(), "minerva-target-repo-"));
   execFileSync("git", ["init", "-q", "-b", "dev", existingRepo]);
+  execFileSync("git", ["-C", existingRepo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", existingRepo, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", existingRepo, "commit", "-q", "--allow-empty", "-m", "init"]);
 
   seedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-"));
   execFileSync("git", ["init", "-q", "-b", "dev", seedRepo]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", seedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
 
   noDevRepo = mkdtempSync(join(tmpdir(), "minerva-nodev-repo-"));
   execFileSync("git", ["init", "-q", "-b", "main", noDevRepo]);
+  execFileSync("git", ["-C", noDevRepo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", noDevRepo, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", noDevRepo, "commit", "-q", "--allow-empty", "-m", "init"]);
 });
 
@@ -153,6 +159,8 @@ test("listRuns returns all allocated runs with correct status", () => {
   const localSeedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-listruns-"));
   try {
     execFileSync("git", ["init", "-q", "-b", "dev", localSeedRepo]);
+    execFileSync("git", ["-C", localSeedRepo, "config", "user.name", "Test User"]);
+    execFileSync("git", ["-C", localSeedRepo, "config", "user.email", "test@example.com"]);
     execFileSync("git", ["-C", localSeedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
     const localEnv = { MINERVA_HOME: localHome, MINERVA_SEED_REPO: localSeedRepo };
     const ids = [

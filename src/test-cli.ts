@@ -58,6 +58,8 @@ export function call(
 export function createSeedRepo(prefix = "minerva-seed-repo-"): string {
   const repo = mkdtempSync(join(tmpdir(), prefix));
   execFileSync("git", ["init", "-q", "-b", "dev", repo]);
+  execFileSync("git", ["-C", repo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   return repo;
 }

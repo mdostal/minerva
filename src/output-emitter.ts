@@ -329,9 +329,6 @@ export function commitAndPushPlan(
   return { committed: true, pushed: true, branch, reason: `plan committed + pushed to origin/${branch}${devNote}` };
 }
 
-export function findCompletedEpic(workspacePath: string): CompletedEpic | null {
-  return findCompletedEpicWithRoot(workspacePath)?.epic ?? null;
-}
 
 function epicRelPath(epicId: string): string {
   return join(".pHive", "epics", epicId);

@@ -39,6 +39,7 @@ export interface Question {
   reason: string;
   channel: Channel;
   status: "pending" | "answered";
+  consus_question_id?: number;
   // Optional -- only present for Driver implementations whose upstream source carries this
   // shape (currently: ForkedHiveDriver's envelope-sourced questions, per the
   // headless-question-protocol's question-envelope-schema.md). SpawnDriver/SubagentDriver never

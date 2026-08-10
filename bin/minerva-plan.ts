@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   const result = await runHeadlessPlan({
     idea,
     ...(targetRepoPath ? { targetRepo: targetRepoPath } : {}),
-    mode: args.mode,
+    mode: args.mode, pollConsusForAnswers: true,
     ...(args.ticket ? { ticketId: args.ticket } : {}),
   });
 

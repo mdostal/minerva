@@ -277,7 +277,10 @@ function extractThreadAnswer(item: any, questionId: string): string | null {
   return null;
 }
 
-function extractAnswerFromItem(item: any, questionId: string): string | string[] | null {
+// Exported so consus-poller.ts's poll path can parse the same Consus item shape a pushed webhook
+// item carries (a poll and a push both fetch/receive the identical shape) without duplicating
+// this parsing logic.
+export function extractAnswerFromItem(item: any, questionId: string): string | string[] | null {
   const direct = readPath(item, ["answer", "value"]);
   if (typeof direct === "string" || Array.isArray(direct)) return direct as string | string[];
 

@@ -26,7 +26,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { SubagentDriver } from "./driver.ts";
-import { call } from "./test-cli.ts";
+import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
@@ -42,14 +42,24 @@ const TSX_BIN = join(__dirname, "..", "node_modules", ".bin", "tsx");
 // about "the swappable driver feature" back instead). The SIGKILL test below already creates
 // its own per-test scratch dir; this one is shared by the other three tests.
 let scratchCwd: string;
+let previousRouteUrl: string | undefined;
 
 before(() => {
+  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
   scratchCwd = mkdtempSync(join(tmpdir(), "minerva-subagent-driver-test-"));
   execFileSync("git", ["init", "-q", scratchCwd]);
+  execFileSync("git", ["-C", scratchCwd, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", scratchCwd, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", scratchCwd, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
 });
 
 after(() => {
+  if (previousRouteUrl === undefined) {
+    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  } else {
+    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+  }
   rmSync(scratchCwd, { recursive: true, force: true });
 });
 
@@ -151,9 +161,11 @@ test("a --bg turn that completes a task rather than asking a question reaches st
 // full CLI instead, a fresh process per call (AD-1), which naturally picks up a fresh env.
 test("SubagentDriver poll timeout reaps the underlying --bg session instead of leaving it running", async () => {
   const minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-reap-"));
+  const seedRepo = createSeedRepo();
   try {
     const env = {
       MINERVA_HOME: minervaHome,
+      MINERVA_SEED_REPO: seedRepo,
       MINERVA_DRIVER: "subagent",
       MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
       MINERVA_TURN_TIMEOUT_MS: "3000", // deliberately tiny -- forces a poll timeout fast
@@ -193,6 +205,7 @@ test("SubagentDriver poll timeout reaps the underlying --bg session instead of l
     );
   } finally {
     rmSync(minervaHome, { recursive: true, force: true });
+    rmSync(seedRepo, { recursive: true, force: true });
   }
 });
 

@@ -4,26 +4,38 @@
 // "No Autonomous Progress" and AD-2.
 
 import { MinervaError } from "./errors.ts";
-import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel } from "./run-manager.ts";
+import { allocateRun, readRunRecord, updateRunRecord, type Question, type Channel, type RunRecord } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, type Driver } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
+import { postQuestionToConsusDecisionApi } from "./consus-decisions.ts";
+import { AgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord } from "./agnostic-plan-driver.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
 // already proven in production. Operators opt into "subagent" where orphaning is the active
-// pain; an unrecognized value fails loudly at startup rather than silently falling back.
+// pain, or "forked" (forked-driver-integration epic) where even the question-wait step should
+// carry zero orphan risk (no live process at all while waiting on a human -- state lives on
+// disk as a question envelope); an unrecognized value fails loudly at startup rather than
+// silently falling back.
 function selectDriver(): Driver {
   const value = process.env.MINERVA_DRIVER ?? "spawn";
   if (value === "spawn") return new SpawnDriver();
   if (value === "subagent") return new SubagentDriver();
+  if (value === "forked") return new ForkedHiveDriver();
   throw new MinervaError(
     "VALIDATION_FAILED",
-    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn" or "subagent"`,
+    `Unrecognized MINERVA_DRIVER value "${value}" -- expected "spawn", "subagent", or "forked"`,
   );
 }
 
-const driver: Driver = selectDriver();
+function driverForRecord(record: RunRecord): Driver {
+  if (record.plan_runtime && record.plan_runtime !== 'claude') {
+    const agnostic = agnosticPlanDriverFromRecord(record.plan_runtime, record.plan_model || "");
+    if (agnostic) return agnostic;
+  }
+  return selectDriver();
+}
 
 // Test seam: swap the real `/plugin-hive:kickoff {idea}` prompt for a cheap synthetic one so
 // the automated suite doesn't drive a full real kickoff (slow, costly, many gates) on every
@@ -42,7 +54,7 @@ function buildDrivePrompt(idea: string): string {
 // skill has actually finished and written its epic.yaml would otherwise still be forced to
 // emit SOME filler question text -- the filesystem check routes around that entirely, ignoring
 // whatever the schema-forced response said once completion is detected.
-function recordTurn(runId: string, rawResult: string): void {
+export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
     return; // run is complete -- no pending question to append, ever
   }
@@ -63,6 +75,11 @@ function recordTurn(runId: string, rawResult: string): void {
     status: "waiting_on_human",
     questions: [...record.questions, question],
   });
+
+  const posted = await postQuestionToConsusDecisionApi(runId, question);
+  if (posted.posted) {
+    updateRunRecord(runId, { status: "awaiting-consus" });
+  }
 }
 
 export async function startRun(params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -73,7 +90,17 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   const targetRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
 
   const { run_id: runId } = allocateRun(idea, targetRepo);
+
+  const planRoute = await resolvePlanningRoute();
+  if (planRoute && planRoute.runtime !== 'claude') {
+    updateRunRecord(runId, {
+      plan_runtime: planRoute.runtime,
+      plan_model: planRoute.model,
+    });
+  }
+
   const record = readRunRecord(runId);
+  const driver = driverForRecord(record);
 
   const drivePrompt = buildDrivePrompt(idea);
   const { session_id: sessionId, raw_result: rawResult } = await driver.runTurn({
@@ -84,7 +111,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   return { run_id: runId };
 }
@@ -105,14 +132,20 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
 
 interface Answer {
   question_id: string;
-  answer: string;
+  // string for single-select/free-text; string[] for multi-select (question-envelope-schema.md
+  // §"Question object fields" -- "Array for multi-select, string otherwise").
+  answer: string | string[];
+}
+
+function isValidAnswerValue(value: unknown): value is string | string[] {
+  return typeof value === "string" || (Array.isArray(value) && value.every((v) => typeof v === "string"));
 }
 
 function isAnswerArray(value: unknown): value is Answer[] {
   return (
     Array.isArray(value) &&
     value.every(
-      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && typeof (a as any).answer === "string",
+      (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && isValidAnswerValue((a as any).answer),
     )
   );
 }
@@ -156,15 +189,20 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   const updatedQuestions = record.questions.map((q) => (q.id === questionId ? { ...q, status: "answered" as const } : q));
   updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
+  // Driver.runTurn's prompt is always a plain string -- a multi-select answer (string[]) is
+  // joined into readable prose for the driven turn, matching how a human would phrase multiple
+  // selections in a chat message.
+  const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
+  const driver = driverForRecord(record);
   const { session_id: newSessionId, raw_result: rawResult } = await driver.runTurn({
     cwd: record.workspace_path,
     sessionId: record.session_id,
-    prompt: answer,
+    prompt: answerPrompt,
   });
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   return { result: {} };
 }

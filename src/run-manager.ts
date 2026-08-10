@@ -10,8 +10,25 @@ import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
-export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
+export type RunStatus = "in_progress" | "waiting_on_human" | "awaiting-consus" | "complete" | "aborted";
 export type Channel = "agent" | "human";
+
+// Closed to exactly the three values the headless-question-protocol's envelope schema
+// documents (forked-driver-integration epic). The gateway itself does not enforce this enum in
+// code -- normalizeQuestionKind() below is the defensive boundary that guarantees Minerva's own
+// internal Question type never carries anything outside this set.
+export type QuestionKind = "single-select" | "multi-select" | "free-text";
+
+// Never throws, never guesses a channel-like value -- any value outside the three documented
+// kinds defaults to "free-text" (the least-structured, always-safe interpretation). Confirmed
+// necessary empirically: the gateway's own code does not validate `kind`, so a malformed or
+// unexpected value reaching this boundary is a real, expected input shape, not a hypothetical.
+export function normalizeQuestionKind(raw: unknown): QuestionKind {
+  if (raw === "single-select" || raw === "multi-select" || raw === "free-text") {
+    return raw;
+  }
+  return "free-text";
+}
 
 export interface Question {
   id: string;
@@ -21,6 +38,18 @@ export interface Question {
   reason: string;
   channel: Channel;
   status: "pending" | "answered";
+  // Optional -- only present for Driver implementations whose upstream source carries this
+  // shape (currently: ForkedHiveDriver's envelope-sourced questions, per the
+  // headless-question-protocol's question-envelope-schema.md). SpawnDriver/SubagentDriver never
+  // set these fields; every existing code path that constructs a Question without them is
+  // unaffected -- this extension is strictly additive.
+  kind?: QuestionKind;
+  options?: string[] | null;
+  // The envelope's own qid (question-envelope-schema.md), distinct from this Question's own
+  // `id` (Minerva's internally-generated id, e.g. "q-1"). Carried through so ForkedHiveDriver's
+  // answer-write-back step can address the correct question within a multi-question envelope
+  // without re-deriving the mapping.
+  qid?: string;
 }
 
 export interface RunRecord {
@@ -35,6 +64,11 @@ export interface RunRecord {
   // Opaque from run-manager's perspective -- output-emitter.ts owns the actual shape
   // (CompletedEpic: plugin-hive's own epic.yaml + story YAML content, passed through as-is).
   output: unknown | null;
+  // Runner-agnostic planning (agnostic-plan-driver.ts). When present, these identify the
+  // runtime + model chosen for the run's planning turns. Absent keeps the existing claude
+  // driver behavior.
+  plan_runtime?: string;
+  plan_model?: string;
 }
 
 function minervaHome(): string {
@@ -51,6 +85,21 @@ function runDir(runId: string): string {
 
 function runRecordPath(runId: string): string {
   return join(runDir(runId), "run.yaml");
+}
+
+export function defaultSeedRepoPath(): string {
+  return join(homedir(), "repos", "consus-seeds");
+}
+
+function resolveSeedRepo(): string {
+  const seedRepo = process.env.MINERVA_SEED_REPO || defaultSeedRepoPath();
+  if (!existsSync(seedRepo)) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Seed repo does not exist: ${seedRepo}. Set MINERVA_SEED_REPO to a local git repo path, or set up the default with: git clone git@github.com:mdostal/consus-seeds.git ${defaultSeedRepoPath()}`,
+    );
+  }
+  return seedRepo;
 }
 
 function writeRunRecord(record: RunRecord): void {
@@ -114,8 +163,8 @@ export function allocateRun(idea: string, targetRepo: string | undefined): { run
     allocateWorktreeWorkspace(targetRepo, runId, workspacePath);
     workspaceKind = "worktree";
   } else {
-    allocateFreshInitWorkspace(runId, workspacePath);
-    workspaceKind = "fresh_init";
+    allocateWorktreeWorkspace(resolveSeedRepo(), runId, workspacePath);
+    workspaceKind = "worktree";
   }
 
   const statePath = join(workspacePath, ".pHive");

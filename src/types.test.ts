@@ -12,26 +12,46 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { MinervaError, type ErrorCode } from "./errors.ts";
 import { dispatch } from "./dispatch.ts";
-import { allocateRun, updateRunRecord, readRunRecord, type Channel, type RunStatus } from "./run-manager.ts";
+import {
+  allocateRun,
+  defaultSeedRepoPath,
+  updateRunRecord,
+  readRunRecord,
+  normalizeQuestionKind,
+  type Channel,
+  type RunStatus,
+  type Question,
+  type QuestionKind,
+} from "./run-manager.ts";
 import { getQuestions, submitAnswers } from "./kickoff-engine.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { abortRun, type CleanupLedgerRecord } from "./cleanup-ledger.ts";
 
 let minervaHome: string;
+let seedRepo: string;
 
 before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-types-"));
+  seedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-types-"));
+  execFileSync("git", ["init", "-q", "-b", "dev", seedRepo]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", seedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   process.env.MINERVA_HOME = minervaHome;
+  process.env.MINERVA_SEED_REPO = seedRepo;
 });
 
 after(() => {
   delete process.env.MINERVA_HOME;
+  delete process.env.MINERVA_SEED_REPO;
   rmSync(minervaHome, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
 });
 
 function ledgerLines(): CleanupLedgerRecord[] {
@@ -132,11 +152,12 @@ test("submitAnswers accepts the correctly-keyed question_id shape past the shape
 
 // --- Status transitions + stall invariant -------------------------------------------------
 
-test("Status is closed to exactly in_progress|waiting_on_human|complete|aborted -- exhaustive switch compiles", () => {
+test("Status is closed to exactly in_progress|waiting_on_human|awaiting-consus|complete|aborted -- exhaustive switch compiles", () => {
   function assertExhaustive(s: RunStatus): RunStatus {
     switch (s) {
       case "in_progress":
       case "waiting_on_human":
+      case "awaiting-consus":
       case "complete":
       case "aborted":
         return s;
@@ -146,7 +167,7 @@ test("Status is closed to exactly in_progress|waiting_on_human|complete|aborted 
       }
     }
   }
-  for (const s of ["in_progress", "waiting_on_human", "complete", "aborted"] as const) {
+  for (const s of ["in_progress", "waiting_on_human", "awaiting-consus", "complete", "aborted"] as const) {
     assert.equal(assertExhaustive(s), s);
   }
 });
@@ -156,6 +177,44 @@ test("allocateRun starts a run in_progress with no pending questions", () => {
   const record = readRunRecord(runId);
   assert.equal(record.status, "in_progress");
   assert.deepEqual(record.questions, []);
+});
+
+test("defaultSeedRepoPath uses ~/repos/consus-seeds when MINERVA_SEED_REPO is unset", () => {
+  assert.equal(defaultSeedRepoPath(), join(homedir(), "repos", "consus-seeds"));
+});
+
+test("allocateRun with no target_repo uses MINERVA_SEED_REPO as a worktree source", () => {
+  const { run_id: runId } = allocateRun("seeded greenfield run", undefined);
+  const record = readRunRecord(runId);
+  assert.equal(record.workspace_kind, "worktree");
+  assert.ok(existsSync(record.workspace_path));
+
+  const worktrees = execFileSync("git", ["-C", seedRepo, "worktree", "list", "--porcelain"], {
+    encoding: "utf8",
+  });
+  assert.match(worktrees, new RegExp(`branch refs/heads/run/${runId}`));
+});
+
+test("allocateRun with no target_repo fails with setup instructions when the seed repo is missing", () => {
+  const previousSeedRepo = process.env.MINERVA_SEED_REPO;
+  process.env.MINERVA_SEED_REPO = join(tmpdir(), `minerva-missing-seed-repo-${Date.now()}`);
+  try {
+    assert.throws(
+      () => allocateRun("missing seed repo", undefined),
+      (e) =>
+        e instanceof MinervaError &&
+        e.code === "VALIDATION_FAILED" &&
+        /Seed repo does not exist/.test(e.message) &&
+        /MINERVA_SEED_REPO/.test(e.message) &&
+        /git clone/.test(e.message),
+    );
+  } finally {
+    if (previousSeedRepo) {
+      process.env.MINERVA_SEED_REPO = previousSeedRepo;
+    } else {
+      delete process.env.MINERVA_SEED_REPO;
+    }
+  }
 });
 
 test("stall invariant: a rejected submitAnswers call (wrong channel) never advances status or answers the question", async () => {
@@ -284,4 +343,105 @@ test("abortRun is idempotent on an already-terminal run -- no double ledger reco
 
   const entries = ledgerLines().filter((l) => l.run_id === runId);
   assert.equal(entries.length, 0); // already-terminal short-circuits before recordCleanup ever runs
+});
+
+// --- Question/Answer type extension (forked-driver-integration epic) ----------------------
+// Additive fields for ForkedHiveDriver's structured envelope questions -- kind/options/qid are
+// all optional, so SpawnDriver/SubagentDriver's existing free-text-only Question construction
+// (which never sets them) remains valid and unaffected. See
+// .pHive/epics/forked-driver-integration/stories/question-answer-type-extension.yaml.
+
+test("Question accepts the optional kind/options/qid fields without requiring them", () => {
+  // Existing free-text-only shape (SpawnDriver/SubagentDriver's actual usage) -- must still
+  // compile and construct with none of the new fields present.
+  const plain: Question = {
+    id: "q-1",
+    text: "What's your favorite fruit?",
+    suggested_channel: "human",
+    confidence: 0.9,
+    reason: "test",
+    channel: "human",
+    status: "pending",
+  };
+  assert.equal(plain.kind, undefined);
+
+  // Extended shape (ForkedHiveDriver's envelope-sourced questions).
+  const extended: Question = {
+    ...plain,
+    kind: "single-select",
+    options: ["yes", "no"],
+    qid: "enable_metrics",
+  };
+  assert.equal(extended.kind, "single-select");
+  assert.deepEqual(extended.options, ["yes", "no"]);
+  assert.equal(extended.qid, "enable_metrics");
+});
+
+test("QuestionKind is closed to exactly single-select|multi-select|free-text -- exhaustive switch compiles", () => {
+  function assertExhaustive(k: QuestionKind): QuestionKind {
+    switch (k) {
+      case "single-select":
+      case "multi-select":
+      case "free-text":
+        return k;
+      default: {
+        const _exhaustive: never = k;
+        throw new Error(`unreachable kind: ${_exhaustive}`);
+      }
+    }
+  }
+  for (const k of ["single-select", "multi-select", "free-text"] as const) {
+    assert.equal(assertExhaustive(k), k);
+  }
+});
+
+test("normalizeQuestionKind passes through the three documented values unchanged", () => {
+  assert.equal(normalizeQuestionKind("single-select"), "single-select");
+  assert.equal(normalizeQuestionKind("multi-select"), "multi-select");
+  assert.equal(normalizeQuestionKind("free-text"), "free-text");
+});
+
+test("normalizeQuestionKind defaults any unrecognized value to free-text, never throws", () => {
+  // The empirically-observed (pre-fix, self-simulation-artifact) yes-no value, kept as a
+  // regression case even though it's no longer expected from a genuine gateway run -- the
+  // defensive requirement stands regardless of whether this exact value recurs.
+  assert.equal(normalizeQuestionKind("yes-no"), "free-text");
+  assert.equal(normalizeQuestionKind(undefined), "free-text");
+  assert.equal(normalizeQuestionKind(null), "free-text");
+  assert.equal(normalizeQuestionKind(""), "free-text");
+  assert.equal(normalizeQuestionKind(42), "free-text");
+  assert.equal(normalizeQuestionKind({}), "free-text");
+});
+
+test("submitAnswers' Answer type accepts a string[] answer (multi-select), not just a bare string", async () => {
+  const { run_id: runId } = allocateRun("multi-select answer check", undefined);
+  updateRunRecord(runId, {
+    status: "waiting_on_human",
+    questions: [
+      {
+        id: "q-1",
+        text: "Pick your favorite fruits",
+        suggested_channel: "human",
+        confidence: 0.9,
+        reason: "test",
+        channel: "human",
+        status: "pending",
+        kind: "multi-select",
+        options: ["apple", "mango", "kiwi"],
+        qid: "favorite_fruits",
+      },
+    ],
+  });
+
+  // A string[] answer must pass the answers[]-shape check specifically -- confirmed by asserting
+  // the rejection is NOT the shape-check's own error message, even though the call still fails
+  // downstream (no active drive session in this fast, live-API-free test) for an unrelated
+  // reason. This confirms the type extension is honored at the runtime validation layer, not
+  // just the TypeScript type declaration.
+  await assert.rejects(
+    () => submitAnswers({ run_id: runId, channel: "human", answers: [{ question_id: "q-1", answer: ["apple", "mango"] }] }),
+    (e) =>
+      e instanceof MinervaError &&
+      !/non-empty answers array/.test(e.message),
+  );
 });

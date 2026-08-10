@@ -1,0 +1,90 @@
+id: envelope-detection-parsing
+epic: forked-driver-integration
+title: Envelope detection + parsing (.pHive/questions/*.yaml -> typed shape)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [spike-stateless-model-tier, question-answer-type-extension]
+
+description: |
+  Detect and parse `.pHive/questions/<skill>-<invocation-id>.yaml` envelope files appearing in a
+  run's workspace after a driven turn -- mirrors the existing `findCompletedEpic` pattern in
+  `src/output-emitter.ts` (which already scans `.pHive/epics/*/epic.yaml` for completion), but
+  watching `.pHive/questions/` for pending envelopes instead.
+
+  Full schema: `hive/references/question-envelope-schema.md` in plugin-hive-fork (see the
+  "Deletion on consume" and "Phase-id scoping" sections). Parse into a typed shape covering the
+  envelope's top-level fields (id, skill, phase, status, provenance, deadline, renewal_count) and
+  each question object (qid, text, kind, options, required, answer).
+
+  LOAD-BEARING: envelopes are DELETED once the gateway consumes them -- they are not left on
+  disk as a record. Detection logic must treat "envelope present" and "envelope absent" as both
+  legitimate states, not treat absence-after-a-previous-detection as an error. For design's
+  multi-round flows specifically, any round-probing this detection does must be READ-ONLY (never
+  delete/consume) -- consuming is a separate, one-time act owned by the real driver
+  implementation's answer-submission step, not this detection/parsing step.
+
+acceptance_criteria:
+  - "Given a directory containing zero or more .pHive/questions/*.yaml files, when parsed, then each is returned as a typed envelope object with every documented top-level field, or the absence of any files returns an empty result (never throws)"
+  - "Given an envelope whose questions[] entries carry a kind value outside single-select|multi-select|free-text (e.g. the empirically-observed yes-no), when parsed, then the parser normalizes or flags it defensively rather than throwing or silently misparsing"
+  - "Given this module's read operations, when exercised, then none of them ever delete, mutate, or write to any envelope file -- detection/parsing is strictly read-only"
+  - "Given design's topic+round-scoped phase ids (touchpoint-1-round-1-<topic>, etc.), when multiple candidate envelopes exist for the same skill, then the parser can enumerate/filter by phase id without assuming kickoff/plan's simpler single-envelope-per-skill convention"
+
+scope_boundaries:
+  do:
+    - "Parse envelope files into a typed shape, defensively"
+    - "Support enumerating multiple envelopes (design's multi-round case)"
+  do_not:
+    - "Do not write, delete, or mutate any envelope file from this module"
+    - "Do not implement the answer-submission/consume step here -- that's the real driver implementation's job"
+
+steps:
+  - id: research
+    description: Read hive/references/question-envelope-schema.md and hive/lib/question_gateway.py's find_envelope_for_phase in the local plugin-hive-fork checkout to confirm the exact read-only lookup semantics before writing the parser.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests covering envelope presence/absence, the defensive kind-normalization case, and multi-envelope enumeration for design's topic-scoped phase ids. Use real fixture YAML files, not mocks.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the envelope detection/parsing module. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the module is genuinely read-only (no delete/write path reachable) and that kind-normalization doesn't silently drop information the type-extension story needs.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+  key_files:
+    - path: src/output-emitter.ts
+      purpose: "findCompletedEpic's existing directory-scan-for-completion pattern this module mirrors"
+
+files_to_modify:
+  - file: src/envelope-detection.ts
+    change: "Create -- envelope detection/parsing module"
+
+design_decisions:
+  - decision: "Depends on the type-extension decision (story question-answer-type-extension) rather than defining its own ad-hoc typed shape"
+    rationale: "Avoids two competing type definitions for the same envelope question object -- coordinate scheduling if the type-extension story lands later."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Real envelope fixtures may need updating if the fork's schema evolves before this epic finishes"
+    mitigation: "Use fixtures captured from real fork-driven runs (per the spike story), not hand-authored guesses"
+
+references:
+  - path: docs/scope/forked-driver-integration-next-phase.md
+    relevant_excerpt: |
+      envelopes are DELETED once the gateway consumes them -- they are not left on disk as a
+      record. Detection logic must treat "envelope present" and "envelope absent" as both
+      legitimate states.

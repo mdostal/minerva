@@ -1,0 +1,122 @@
+id: real-forked-hive-driver
+epic: forked-driver-integration
+title: Real ForkedHiveDriver.runTurn() implementation
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [envelope-detection-parsing, escalation-classification-envelope]
+
+description: |
+  Implement the real `ForkedHiveDriver.runTurn()` in `src/driver.ts`, replacing the current
+  `NotImplemented`-throwing stub. Composes: dispatch (HIVE_HEADLESS=1 + whichever invocation
+  shape the spike story settled on -- stateless or session-tracked), envelope detection (via the
+  envelope-detection-parsing module), classification (via the escalation-classification-envelope
+  addition), answer-write-back (write `answer:` + `status: answered` directly onto the envelope
+  per the schema's single-writer field-group rules -- ForkedHiveDriver never writes
+  `id`/`skill`/`phase`/`provenance`/question text/options, only `answer`/`status`/
+  deadline-renewal fields), and re-invocation to continue the skill.
+
+  LOAD-BEARING (from PR #341's review rounds 3-4):
+  - DELETE-ON-CONSUME: once the driver writes answer:+status:answered and re-invokes the skill,
+    the skill's gateway call deletes that envelope file the moment it successfully extracts the
+    answers. The driver must NEVER attempt to re-read that envelope afterward to confirm the
+    answer landed -- it will be gone. The correct confirmation signal is the skill's own next
+    output (a new phase's envelope appearing, or the run reaching completion).
+  - READ-VS-CONSUME SEPARATION: for design's multi-round flows, determining which round is
+    current requires probing multiple candidate phase ids via a READ-ONLY lookup before the
+    actual one-time consume happens. The driver's dispatch/detect step must stay strictly
+    read-only (delegated to envelope-detection-parsing); only this story's answer-submission
+    step ever triggers the delete-on-consume side effect, and it must trigger it at most once
+    per envelope.
+
+  Validate against the same driver-independent contract every other Driver implementation is
+  validated against (`src/types.test.ts`) -- this is the epic's own stated principle carried
+  forward from `swappable-driver`: "tests are the fixed contract; driver swaps SpawnDriver ->
+  SubagentDriver -> ForkedHiveDriver, each validated against the same type tests."
+
+  ALL testing uses `claude --plugin-dir /Users/dostal/Documents/work/dostal/code/plugin-hive-fork`
+  against the local fork checkout -- not the marketplace-installed plugin-hive, and not waiting
+  on PR #341 to merge upstream.
+
+  LOAD-BEARING, confirmed by story spike-stateless-model-tier: the bare drive prompt
+  (`/plugin-hive:kickoff <idea>` alone) is NOT sufficient -- without an explicit, forceful
+  stop-after-writing-envelope instruction, the model fills the ambiguity with its own initiative
+  (self-answering inline, or building/running a self-authored wrapper script that simulates the
+  entire protocol end-to-end in one turn), regardless of model tier. Every prompt this driver
+  sends MUST append an explicit stop instruction (see the spike's findings doc for the exact,
+  verified wording) -- this is required implementation behavior, not optional hardening. Model
+  tier stays at the existing MINERVA_DRIVE_MODEL default (no tier change needed, per the spike).
+
+acceptance_criteria:
+  - "Given any prompt ForkedHiveDriver sends to claude -p/--bg, when inspected, then it always includes an explicit, forceful stop-after-writing-envelope instruction -- never the bare skill-invocation prompt alone"
+  - "Given ForkedHiveDriver.runTurn(), when called against a fresh headless kickoff via --plugin-dir, then it correctly dispatches, detects the resulting envelope(s), classifies each question, and returns a result shaped like every other Driver's DriverResult"
+  - "Given a multi-question envelope, when answered, then EVERY required question in it receives an answer before the write-back+consume step fires -- a partial batch answer must not prematurely trigger consumption (the closure invariant: an envelope is only consumable once every required question has a non-null answer)"
+  - "Given a consumed envelope, when the driver's own code is inspected, then there is no code path that attempts to read that envelope again -- confirmed by a real live test where re-invocation correctly reports the skill's NEXT phase/output, not a stale reference to the answered one"
+  - "Given the same src/types.test.ts driver-independent contract SpawnDriver and SubagentDriver satisfy, when ForkedHiveDriver is run against it, then it passes identically"
+  - "Given a design-skill multi-round flow (touchpoint-1-round-1-<topic>, round-2, etc.), when the driver probes for the current round, then probing goes through the read-only detection path exclusively -- the one-time consume happens exactly once, via the answer-submission step, never during probing"
+
+scope_boundaries:
+  do:
+    - "Implement the real ForkedHiveDriver.runTurn(), composing the prior stories' pieces"
+    - "Test exclusively against the local plugin-hive-fork checkout via --plugin-dir"
+  do_not:
+    - "Do not re-implement envelope parsing or classification inline -- reuse the dedicated modules from the prior stories"
+    - "Do not wait for or depend on PR #341 merging upstream"
+
+steps:
+  - id: research
+    description: Re-confirm the spike's stateless-turn and model-tier findings, and re-read the envelope-detection and classification modules' exact interfaces before composing them.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the composed runTurn() -- fresh dispatch, multi-question batch completion, consumed-envelope non-re-read, and the design multi-round read-vs-consume separation. Real live claude calls via --plugin-dir, no mocking the CLI boundary (AD-1 precedent). Do NOT read the implementation.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement ForkedHiveDriver.runTurn() in src/driver.ts. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review specifically for the delete-on-consume/never-re-read invariant and the read-vs-consume separation -- these are the two most likely places a subtle bug would hide.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/Documents/work/dostal/code/minerva
+  tech_stack:
+    languages: [typescript]
+    runtime: "node >=20.19, claude --plugin-dir, claude --bg (if the spike concludes session-tracking is still needed)"
+  key_files:
+    - path: src/driver.ts
+      purpose: "The Driver interface and existing SpawnDriver/SubagentDriver/ForkedHiveDriver-stub this story replaces the stub within"
+
+files_to_modify:
+  - file: src/driver.ts
+    change: "Replace the ForkedHiveDriver stub with a real implementation"
+
+design_decisions:
+  - decision: "Compose the prior stories' modules rather than inlining envelope parsing/classification into this story"
+    rationale: "Matches this codebase's established pattern (SubagentDriver reuses SpawnDriver's spawnClaude and escalation-classification.ts's schema unchanged) -- keeps each concern independently testable."
+  - decision: "RESULT (live-integration debugging, 3 real findings beyond the spike): (1) read MINERVA_HIVE_PLUGIN_DIR lazily inside pluginDirArgs(), never as a module-level const -- a module-level capture reads process.env at import time, which in a test file setting the var inside before() is BEFORE the hook runs (ESM import evaluation precedes test-runner hooks), silently producing NO --plugin-dir flag and a silent fallback to the marketplace-installed plugin-hive. (2) EXPLICIT_STOP_INSTRUCTION must tell the model to invoke the Python gateway via `PYTHONPATH=\"$CLAUDE_PLUGIN_ROOT\" python3 -c ...` from the project's own unchanged cwd, never by `cd`-ing into the plugin dir first to resolve the `hive` package import -- cd-ing changes process.cwd(), and ask_or_emit()'s default base_dir is Path.cwd() at call time, so a cd-first invocation writes the envelope under the PLUGIN's own .pHive/questions/ instead of the project's. (3) EXPLICIT_STOP_INSTRUCTION must also tell the model to NEVER pass an explicit base_dir kwarg to ask_or_emit()/askOrEmit() -- a supplied base_dir IS the exact questions directory itself (Path(base_dir), not Path(base_dir)/\"questions\"), so a well-intentioned base_dir=\".pHive\" silently writes to .pHive/kickoff-*.yaml instead of .pHive/questions/kickoff-*.yaml, which listEnvelopes() never finds."
+    rationale: "Each was confirmed by direct transcript inspection of a live failing run, not guessed -- (1) via a manual claude -p replay showing the marketplace plugin-hive 2.15.1's SKILL.md being read instead of the fork's; (2)+(3) via inspecting the actual envelope file each failing run produced (correct schema/content, wrong path) and its full tool-call transcript."
+  - decision: "kickoff-protocol.md's phase-id table is not a strict execution ORDER, and not every qid name is literally pinned by the doc -- confirmed empirically: a fresh greenfield kickoff's real second phase was project-classification, not 1b, and the 1a metrics qid came back as \"metrics_enabled\" one live run and \"enable_metrics\" another. The real-forked-hive-driver.test.ts multi-turn test was rewritten to walk generically (no hardcoded phase/qid names, answers driven by each question's own returned `options` list) rather than assume a fixed phase graph."
+    rationale: "The original test hardcoded phase '1b' and qid 'ship_kind' immediately after 1a, and fed a non-schema-valid free-text answer ('placeholder') to real single-select questions -- both wrong assumptions, not implementation bugs. The placeholder answer also triggered the skill's own validation-retry mechanism (a '-round-2' re-emitted envelope), which looks identical to a real phase transition from the driver's perspective -- correctly so, since the driver has no way (and no need) to distinguish the two. Discovered via direct inspection of the real envelope files the live run produced."
+
+cross_cutting:
+  - concern: documentation
+    action: "Update docs/architecture.md's Kickoff+Plan Engine component note (already covering SpawnDriver/SubagentDriver/the ForkedHiveDriver stub) to describe the real implementation, matching the as-built documentation pattern established for every prior driver story."
+
+risks:
+  - severity: high
+    description: "This is the largest, most composed story in the epic -- a bug in any of the four composed pieces (dispatch, detect, classify, consume) could manifest here first"
+    mitigation: "Each piece already has its own dedicated test suite from its own story; this story's tests focus on composition/integration behavior, not re-testing each piece's internals"
+
+references:
+  - path: .pHive/epics/swappable-driver/stories/subagent-driver.yaml
+    relevant_excerpt: |
+      Validate against the SAME §1 type-level tests (lock-core-types) run against SubagentDriver
+      instead of SpawnDriver, then they pass identically -- proving the driver swap doesn't
+      change the observable contract.

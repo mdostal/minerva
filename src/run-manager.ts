@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
+import type { PlanDefaults } from "./plan-defaults.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
 export type RunStatus = "in_progress" | "waiting_on_human" | "awaiting-consus" | "complete" | "aborted";
@@ -64,6 +65,44 @@ export interface RunRecord {
   // Opaque from run-manager's perspective -- output-emitter.ts owns the actual shape
   // (CompletedEpic: plugin-hive's own epic.yaml + story YAML content, passed through as-is).
   output: unknown | null;
+  // Bug fix (2026-07-26, real regression): epic ids that already existed under
+  // .pHive/epics/ at workspace-allocation time, BEFORE any kickoff turn ran. A worktree
+  // workspace forks off the target repo's `dev` branch, which can (and, on a mature repo, will)
+  // already have prior, already-shipped epics committed on it -- output-emitter.ts's completion
+  // detection must never mistake one of THOSE for this run's own output. Always [] for
+  // fresh_init workspaces (a brand-new scratch repo has no epics at all yet). See
+  // output-emitter.ts's findCompletedEpic for how this is consumed.
+  baseline_epic_ids: string[];
+  // The original idea brief that started the run. Persisted so the pre-baked-defaults
+  // auto-answer loop (kickoff-engine.ts) can interpolate `{idea}` into a free-text default
+  // answer on any turn, not just at startRun. Optional so run records written before this field
+  // existed still parse.
+  idea?: string;
+  // The effective pre-baked plan-defaults config for this run (prebaked-plan-defaults epic),
+  // resolved once at startRun from built-in + env + per-run layers and frozen for the run's
+  // life, so every subsequent auto-answer turn uses the same config the run started with.
+  // Optional/absent => the auto-answer loop falls back to loadPlanDefaults() (mode: off), i.e.
+  // fully backwards-compatible "park every question" behavior.
+  defaults?: PlanDefaults;
+  // The resolved local target repo this run's worktree was cut from (PAN-6745). Present only for
+  // worktree workspaces (absent for fresh_init). Persisted for logging + so the completion
+  // commit+push step (output-emitter.commitAndPushPlan) has the repo on hand. Optional so records
+  // written before this field existed still parse.
+  target_repo?: string;
+  // How target_repo was resolved (repo-resolution.ts): "explicit" | "god" | "incubator". Absent
+  // for fresh_init (resolution returned "none"). Diagnostic only.
+  repo_source?: string;
+  // Result of the post-planning auto-commit+push of the plan into target_repo (PAN-6745), written
+  // once when the run transitions to complete. Absent until then, and for fresh_init runs where
+  // there is nothing to push. Opaque here; output-emitter owns the shape (PlanPushResult).
+  plan_push?: unknown;
+  // Runner-agnostic planning (agnostic-plan-driver.ts). When Heimdall routes planning to a
+  // non-Claude runtime, these carry the resolved runtime + model so EVERY turn (initial
+  // decompose, auto-answered gates, human-answered resumes) reconstructs the same
+  // AgnosticPlanDriver and continues the same runtime session. Absent => the built-in claude
+  // SpawnDriver drives the run (fully backwards-compatible). Persisted so a run's runtime never
+  // changes mid-flight even across process restarts.
+
   // Runner-agnostic planning (agnostic-plan-driver.ts). When present, these identify the
   // runtime + model chosen for the run's planning turns. Absent keeps the existing claude
   // driver behavior.
@@ -152,9 +191,29 @@ function allocateFreshInitWorkspace(runId: string, workspacePath: string): void 
   );
 }
 
+// Bug fix (2026-07-26, real regression): reads whatever epic ids already exist under
+// .pHive/epics/ in a freshly-allocated workspace, BEFORE any kickoff turn has run. For a
+// worktree workspace this reflects exactly the target repo's `dev` branch state (git worktree
+// add checks out dev's tracked tree regardless of .gitignore, which only affects untracked
+// files) -- for a fresh_init workspace it's always []. See baseline_epic_ids's own doc comment
+// on RunRecord for why this snapshot exists.
+function snapshotEpicIds(workspacePath: string): string[] {
+  const epicsDir = join(workspacePath, ".pHive", "epics");
+  if (!existsSync(epicsDir)) return [];
+  return readdirSync(epicsDir);
+}
+
 // Workspace + record allocation only -- does NOT drive kickoff+plan. kickoff-engine.ts's
 // startRun composes this with driveStart() to produce the full API-contract startRun method.
-export function allocateRun(idea: string, targetRepo: string | undefined): { run_id: string } {
+// `defaults` (prebaked-plan-defaults epic) is the resolved plan-defaults config to freeze onto
+// the record; optional so existing callers (and the test suite) that don't pass it are
+// unaffected -- an absent defaults means the auto-answer loop stays "off".
+export function allocateRun(
+  idea: string,
+  targetRepo: string | undefined,
+  defaults?: PlanDefaults,
+  repoSource?: string,
+): { run_id: string } {
   const runId = randomUUID();
   const workspacePath = join(runDir(runId), "workspace");
   let workspaceKind: WorkspaceKind;
@@ -170,6 +229,8 @@ export function allocateRun(idea: string, targetRepo: string | undefined): { run
   const statePath = join(workspacePath, ".pHive");
   mkdirSync(statePath, { recursive: true });
 
+  const baselineEpicIds = snapshotEpicIds(workspacePath);
+
   writeRunRecord({
     run_id: runId,
     workspace_path: workspacePath,
@@ -180,6 +241,12 @@ export function allocateRun(idea: string, targetRepo: string | undefined): { run
     session_id: null,
     questions: [],
     output: null,
+    baseline_epic_ids: baselineEpicIds,
+    idea,
+    defaults,
+    // Persist the resolved repo only for worktree workspaces -- a fresh_init scratch has no real
+    // repo to record, and its absence is what output-emitter's push step keys off (PAN-6745).
+    ...(workspaceKind === "worktree" && targetRepo ? { target_repo: targetRepo, repo_source: repoSource } : {}),
   });
 
   return { run_id: runId };

@@ -65,6 +65,31 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
   }
   const pending = record.questions.filter((q) => q.status === "pending");
 
+  // Surface parked questions to Consus (the human inbox at /api/questions). Best-effort:
+  // never block or fail the plan if Consus is unreachable — the question stays parked in Minerva.
+  if (pending.length > 0) {
+    const consusUrl = process.env.CONSUS_URL || "http://localhost:8722";
+    for (const q of pending) {
+      const qq = q as unknown as { id?: string; text?: string; suggested_channel?: string; confidence?: number; reason?: string };
+      try {
+        await fetch(`${consusUrl}/api/questions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            item_id: run_id,
+            item_title: req.idea,
+            minerva_question_id: qq.id,
+            text: qq.text,
+            channel: "consus",
+            suggested_channel: qq.suggested_channel,
+            confidence: qq.confidence,
+            reason: qq.reason,
+          }),
+        });
+      } catch { /* Consus unreachable — question remains parked in Minerva; no data lost */ }
+    }
+  }
+
   return { run_id, status, epic, epics, pending_questions: pending, workspace_path: record.workspace_path };
 }
 

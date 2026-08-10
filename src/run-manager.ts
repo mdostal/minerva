@@ -64,8 +64,9 @@ export interface RunRecord {
   // Opaque from run-manager's perspective -- output-emitter.ts owns the actual shape
   // (CompletedEpic: plugin-hive's own epic.yaml + story YAML content, passed through as-is).
   output: unknown | null;
-  // Runner-agnostic planning (agnostic-plan-driver.ts). Absent means the existing claude driver
-  // remains the run's implicit/default planning path.
+  // Runner-agnostic planning (agnostic-plan-driver.ts). When present, these identify the
+  // runtime + model chosen for the run's planning turns. Absent keeps the existing claude
+  // driver behavior.
   plan_runtime?: string;
   plan_model?: string;
 }

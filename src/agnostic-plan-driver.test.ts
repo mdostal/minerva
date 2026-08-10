@@ -8,7 +8,14 @@ import assert from "node:assert/strict";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { AgnosticPlanDriver, resolveAgnosticPlanDriver } from "./agnostic-plan-driver.ts";
+import {
+  AgnosticPlanDriver,
+  agnosticPlanCliPath,
+  agnosticPlanDriverFromRecord,
+  resolveAgnosticPlanDriver,
+  resolvePlanningRoute,
+  type PlanningRoute,
+} from "./agnostic-plan-driver.ts";
 
 // A fake plan-agnostic CLI: writes its argv to $FAKE_ARGV_OUT, prints the canned result line.
 function writeFakeCli(): { cliPath: string; argvOut: string } {
@@ -28,8 +35,13 @@ function writeFakeCli(): { cliPath: string; argvOut: string } {
 }
 
 test("AgnosticPlanDriver initial turn passes --idea and parses {session_id, result}", async () => {
+  assert.equal(typeof resolvePlanningRoute, "function");
+  assert.equal(typeof resolveAgnosticPlanDriver, "function");
+  assert.equal(typeof agnosticPlanDriverFromRecord, "function");
+  assert.equal(typeof agnosticPlanCliPath, "function");
+  const route: PlanningRoute = { runtime: "gemini", model: "google/gemini-3.1-pro-preview" };
   const { cliPath, argvOut } = writeFakeCli();
-  const d = new AgnosticPlanDriver("gemini", "google/gemini-3.1-pro-preview", cliPath);
+  const d = new AgnosticPlanDriver(route.runtime, route.model, cliPath);
   const res = await d.runTurn({ cwd: tmpdir(), sessionId: null, prompt: "Add CSV export" });
   assert.equal(res.session_id, "ses_fake");
   assert.match(res.raw_result, /PLAN_WRITTEN epic=x stories=3/);

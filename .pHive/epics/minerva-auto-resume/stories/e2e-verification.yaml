@@ -1,0 +1,46 @@
+id: e2e-verification
+epic: minerva-auto-resume
+title: End-to-end integration and verification
+status: pending
+complexity: medium
+methodology: classic
+depends_on:
+  - resume-run-execution
+
+description: |
+  Verify the full auto-resume workflow with a real `mode=off` run.
+  Ensure that parking, posting to Consus, polling, receiving the answer, and executing the resumed plan all work cohesively.
+  This ties up PAN-7520.
+
+acceptance_criteria:
+  - "Given a real `mode=off` run, when it encounters a situation requiring human input, then it successfully parks without silent failures."
+  - "Given the parked run, when the human answers via Consus, then the Minerva run automatically resumes and uses the answer in its execution."
+
+metric:
+  applies: false
+  justification: Verification and validation step focused on correctness and workflow completion, not a distinct metric.
+
+steps:
+  - id: step-1
+    description: Set up a local test environment with `mode=off` and simulate a required human intervention.
+    agent: tester
+  - id: step-2
+    description: Run the full integration test and verify no silent parking occurs and auto-resume triggers successfully.
+    agent: tester
+  - id: step-3
+    description: Fix any bugs or regressions found during E2E testing.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/07f8d897-ee95-4ee7-bd9b-f1796cfc8d8f/workspace
+  tech_stack: {}
+  key_files: []
+
+design_decisions:
+  - decision: Verify in `mode=off`
+    rationale: As specified in the requirements, to ensure it works correctly under the specific agnostic driver constraint.
+
+risks:
+  - severity: medium
+    description: E2E tests might be flaky if Consus sandbox API has high latency.
+    mitigation: Ensure test timeouts are generous enough to handle typical sandbox network delays.

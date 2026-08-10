@@ -1,0 +1,40 @@
+id: store-parked-mapping
+epic: minerva-auto-resume
+title: Store mapping between Consus question ID and Minerva run ID
+status: pending
+complexity: low
+methodology: classic
+depends_on: []
+
+description: |
+  Modify the run parking mechanism to capture and persist the Consus question ID.
+  When a run parks and posts a question to Consus, it must save the mapping of the generated `consus_question_id` to the current `run_id` in the run's state or local database.
+
+acceptance_criteria:
+  - "Given a headless run needing human input, when it parks and posts a question to Consus, then the Consus question ID is saved alongside the run ID."
+
+metric:
+  applies: false
+  justification: This story focuses purely on state persistence for an internal ID mapping, making statistical metrics inapplicable.
+
+steps:
+  - id: step-1
+    description: Identify where `runHeadlessPlan` (or similar component) currently parks the run and posts to Consus.
+    agent: researcher
+  - id: step-2
+    description: Extend the run's state management to persist the returned `consus_question_id` tied to the `run_id`.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/07f8d897-ee95-4ee7-bd9b-f1796cfc8d8f/workspace
+  tech_stack: {}
+  key_files: []
+
+design_decisions:
+  - decision: Store mapping in existing run state
+    rationale: Keeps run-related metadata centralized and easily accessible to the poller logic.
+
+risks:
+  - severity: low
+    description: Run state might not persist properly if the process exits before flush.
+    mitigation: Ensure persistence is synchronously flushed before the parking routine completely exits.

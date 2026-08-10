@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call, createSeedRepo } from "./test-cli.ts";
+import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
 
 let minervaHome: string;
 let seedRepo: string;
@@ -154,4 +154,110 @@ test("submitAnswers validation: missing/invalid params return VALIDATION_FAILED 
   );
   assert.equal(unknownQuestion.status, 1);
   assert.equal(unknownQuestion.error.code, "NOT_FOUND");
+});
+
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+
+import { spawn } from "node:child_process";
+
+function createMockHeimdall(responseBody: any, statusCode = 200) {
+  return new Promise<{ server: any, url: string }>((resolve) => {
+    const child = spawn("node", ["-e", `
+      const http = require("http");
+      const server = http.createServer((req, res) => {
+        res.writeHead(${statusCode}, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(${JSON.stringify(responseBody)}));
+      });
+      server.listen(0, "127.0.0.1", () => console.log("PORT:" + server.address().port));
+    `]);
+    child.stdout.on("data", (data) => {
+      const match = data.toString().match(/PORT:(\d+)/);
+      if (match) {
+        resolve({ server: { close: () => child.kill() }, url: "http://127.0.0.1:" + match[1] });
+      }
+    });
+  });
+}
+
+function readRecord(runId: string) {
+  return JSON.parse(readFileSync(join(minervaHome, "runs", runId, "run.yaml"), "utf8"));
+}
+
+test("planning route freezes on run record when Heimdall returns a non-claude runtime", async () => {
+  const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
+  try {
+    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
+    const started = call("startRun", { idea: "freeze test" }, customEnv);
+    assert.equal(started.status, 0);
+    const runId = started.result.run_id;
+    
+    const record = readRecord(runId);
+    assert.equal(record.plan_runtime, "gemini");
+    assert.equal(record.plan_model, "gemini-2.0-flash-exp");
+  } finally {
+    mock.server.close();
+  }
+});
+
+test("planning route falls back to claude (absent fields) when Heimdall is unreachable or returns 500", async () => {
+  const mock = await createMockHeimdall({}, 500);
+  try {
+    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
+    const started = call("startRun", { idea: "fallback test" }, customEnv);
+    assert.equal(started.status, 0);
+    const runId = started.result.run_id;
+    
+    const record = readRecord(runId);
+    assert.equal(record.plan_runtime, undefined);
+    assert.equal(record.plan_model, undefined);
+  } finally {
+    mock.server.close();
+  }
+});
+
+test("planning route stays absent when Heimdall explicitly returns claude", async () => {
+  const mock = await createMockHeimdall({ runtime: "claude", model: "claude-3-5-sonnet" });
+  try {
+    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
+    const started = call("startRun", { idea: "claude explicit test" }, customEnv);
+    assert.equal(started.status, 0);
+    const runId = started.result.run_id;
+    
+    const record = readRecord(runId);
+    assert.equal(record.plan_runtime, undefined);
+    assert.equal(record.plan_model, undefined);
+  } finally {
+    mock.server.close();
+  }
+});
+
+test("submitAnswers keeps the frozen plan_runtime (no drift) and falls back correctly if CLI is missing", async () => {
+  const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
+  try {
+    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl(), HIVE_PLAN_AGNOSTIC_CLI: "/does/not/exist" };
+    const started = call("startRun", { idea: "continuation test" }, customEnv);
+    assert.equal(started.status, 0);
+    const runId = started.result.run_id;
+    
+    const record1 = readRecord(runId);
+    assert.equal(record1.plan_runtime, "gemini"); // Frozen properly
+
+    const q1 = call("getQuestions", { run_id: runId, channel: "human" }, customEnv).result.questions[0];
+    
+    // During submitAnswers, if CLI is missing, driverForRecord falls back to claude gracefully.
+    // So the run progresses successfully instead of throwing.
+    const submitted = call(
+      "submitAnswers",
+      { run_id: runId, channel: "human", answers: [{ question_id: q1.id, answer: "mango" }] },
+      customEnv,
+    );
+    assert.equal(submitted.status, 0);
+    
+    const record2 = readRecord(runId);
+    // plan_runtime should not change during submitAnswers
+    assert.equal(record2.plan_runtime, "gemini");
+  } finally {
+    mock.server.close();
+  }
 });

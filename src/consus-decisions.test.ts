@@ -16,6 +16,8 @@ before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-consus-decisions-"));
   seedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-consus-decisions-"));
   execFileSync("git", ["init", "-q", "-b", "dev", seedRepo]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", seedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   process.env.MINERVA_HOME = minervaHome;
   process.env.MINERVA_SEED_REPO = seedRepo;

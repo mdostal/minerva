@@ -34,6 +34,8 @@ before(() => {
   process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
   scratchCwd = mkdtempSync(join(tmpdir(), "minerva-driver-test-"));
   execFileSync("git", ["init", "-q", scratchCwd]);
+  execFileSync("git", ["-C", scratchCwd, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", scratchCwd, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", scratchCwd, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
 });
 

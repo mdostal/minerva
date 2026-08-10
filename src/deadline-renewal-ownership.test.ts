@@ -58,6 +58,8 @@ after(() => {
 function newScratchWorkspaceWithShortDeadline(): string {
   const dir = mkdtempSync(join(tmpdir(), "minerva-deadline-test-"));
   execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", dir, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
   // A 1s deadline (vs the upstream default of 1800s) lets this test prove the real behavior in
   // seconds instead of half an hour, without touching any Minerva code -- purely a fork-side

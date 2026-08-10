@@ -346,25 +346,185 @@ export class ClaudeAdapter implements RuntimeAdapter {
   }
 }
 
+function schemaPrompt(prompt: string, extraArgs: string[] = []): string {
+  const schemaFlag = extraArgs.indexOf("--json-schema");
+  const schema = schemaFlag >= 0 ? extraArgs[schemaFlag + 1] : undefined;
+  if (!schema) return prompt;
+  return `${prompt}\n\nRespond with exactly one JSON object matching this JSON Schema, with no markdown or prose outside the JSON object:\n${schema}`;
+}
+
+function parseJsonLines(stdout: string): unknown[] {
+  const values: unknown[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      values.push(JSON.parse(trimmed));
+    } catch {
+      // Formatted/prose output is allowed; callers fall back to raw stdout when no JSON events parse.
+    }
+  }
+  return values;
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function findStringByKey(value: unknown, keys: readonly string[]): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findStringByKey(item, keys);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  for (const nested of Object.values(record)) {
+    const found = findStringByKey(nested, keys);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findAssistantText(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    const parts = value.map((item) => findAssistantText(item)).filter((item): item is string => Boolean(item));
+    return parts.length > 0 ? parts.join("") : undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const role = record.role;
+  const type = typeof record.type === "string" ? record.type : "";
+  const looksAssistant =
+    role === "assistant" ||
+    type.includes("assistant") ||
+    type.includes("message") ||
+    type.includes("text") ||
+    type.includes("response") ||
+    type.includes("output");
+
+  if (looksAssistant) {
+    for (const key of ["result", "message", "content", "text", "delta"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate;
+      const nested = findAssistantText(candidate);
+      if (nested) return nested;
+    }
+  }
+
+  if (hasOwn(record, "message") || hasOwn(record, "content") || hasOwn(record, "text")) {
+    for (const key of ["message", "content", "text"]) {
+      const nested = findAssistantText(record[key]);
+      if (nested) return nested;
+    }
+  }
+
+  return undefined;
+}
+
+function parseJsonEventTurnResult(stdout: string, fallbackSessionId = randomUUID()): TurnResult {
+  const trimmed = stdout.trim();
+  if (trimmed) {
+    try {
+      const parsed = JSON.parse(trimmed) as Partial<TurnResult>;
+      if (
+        typeof parsed.session_id === "string" &&
+        typeof parsed.result === "string" &&
+        typeof parsed.stop_reason === "string" &&
+        typeof parsed.is_error === "boolean"
+      ) {
+        return parsed as TurnResult;
+      }
+    } catch {
+      // Not a single JSON object; try JSONL events below.
+    }
+  }
+
+  const events = parseJsonLines(stdout);
+  const sessionId =
+    [...events]
+      .reverse()
+      .map((event) => findStringByKey(event, ["session_id", "sessionId", "sessionID", "thread_id"]))
+      .find((id): id is string => Boolean(id)) ?? fallbackSessionId;
+  const result = events
+    .map((event) => findAssistantText(event))
+    .filter((text): text is string => Boolean(text))
+    .join("")
+    .trim();
+
+  return {
+    is_error: false,
+    stop_reason: "end_turn",
+    session_id: sessionId,
+    result: result || stdout,
+  };
+}
+
 export class OpencodeAdapter implements RuntimeAdapter {
   formatTurnArgs(model: string, sessionId: string | null, prompt: string, extraArgs: string[] = []): string[] {
-    const sessionArgs = sessionId ? ["--resume", sessionId] : [];
+    const sessionArgs = sessionId ? ["--session", sessionId] : [];
     return [
+      "run",
       "--model",
       model,
+      "--format",
+      "json",
+      "--auto",
       ...sessionArgs,
-      ...extraArgs,
-      prompt,
+      schemaPrompt(prompt, extraArgs),
     ];
   }
 
   parseTurnResult(stdout: string): TurnResult {
-    return {
-      is_error: false,
-      stop_reason: "end_turn",
-      session_id: randomUUID(),
-      result: stdout,
-    };
+    return parseJsonEventTurnResult(stdout);
+  }
+
+  formatBackgroundArgs(model: string, sessionId: string | null, prompt: string): string[] {
+    throw new Error("Background agents not supported");
+  }
+
+  parseBackgroundDispatch(stdout: string): string {
+    throw new Error("Background agents not supported");
+  }
+
+  formatListAgentsArgs(): string[] {
+    throw new Error("Background agents not supported");
+  }
+
+  parseListAgents(stdout: string): BackgroundAgentEntry[] {
+    throw new Error("Background agents not supported");
+  }
+
+  formatStopAgentArgs(shortId: string): string[] {
+    throw new Error("Background agents not supported");
+  }
+}
+
+export class CodexAdapter implements RuntimeAdapter {
+  formatTurnArgs(model: string, sessionId: string | null, prompt: string, extraArgs: string[] = []): string[] {
+    const commonArgs = [
+      "--json",
+      "--model",
+      model,
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+    ];
+    const finalPrompt = schemaPrompt(prompt, extraArgs);
+    if (sessionId) {
+      return ["exec", "resume", ...commonArgs, sessionId, finalPrompt];
+    }
+    return ["exec", ...commonArgs, finalPrompt];
+  }
+
+  parseTurnResult(stdout: string): TurnResult {
+    return parseJsonEventTurnResult(stdout);
   }
 
   formatBackgroundArgs(model: string, sessionId: string | null, prompt: string): string[] {
@@ -389,8 +549,11 @@ export class OpencodeAdapter implements RuntimeAdapter {
 }
 
 export function getAdapter(cli: string): RuntimeAdapter {
-  if (cli === "opencode" || cli === "codex") {
+  if (cli === "opencode") {
     return new OpencodeAdapter();
+  }
+  if (cli === "codex") {
+    return new CodexAdapter();
   }
   return new ClaudeAdapter();
 }

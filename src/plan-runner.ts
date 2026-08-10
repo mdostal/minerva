@@ -75,9 +75,12 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
           }),
         });
         if (res.ok) {
-          const data = await res.json();
-          consusMap.set(q.id, data.id);
-          console.error(`[headless] Posted question ${q.id} to Consus (human_request: ${data.id})`);
+          const data = (await res.json()) as Record<string, unknown>;
+          const id = typeof data.id === "number" ? data.id : Number(data.id);
+          if (Number.isFinite(id)) {
+            consusMap.set(q.id, id);
+            console.error(`[headless] Posted question ${q.id} to Consus (human_request: ${id})`);
+          }
         } else {
           console.error(`[headless] Failed to post question ${q.id}: HTTP ${res.status}`);
         }
@@ -93,8 +96,8 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
       try {
         const res = await fetch(`${consusUrl}/api/workflows/pw-${cid}/status`);
         if (res.ok) {
-          const data = await res.json();
-          if (data.status === "resumed" && data.answer) {
+          const data = (await res.json()) as Record<string, unknown>;
+          if (data.status === "resumed" && typeof data.answer === "string" && data.answer.length > 0) {
             const q = pending.find((q) => q.id === qid);
             if (q) {
               answeredQ = { id: qid, answer: data.answer, channel: q.channel };

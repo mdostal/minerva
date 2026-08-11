@@ -107,10 +107,28 @@ test("loadPlanDefaults: reads a YAML config file via MINERVA_PLAN_DEFAULTS, per-
   }
 });
 
-test("loadPlanDefaults: unreadable config file fails loudly", () => {
+test("loadPlanDefaults: unreadable config file logs a warning but proceeds safely (no crash)", () => {
   withEnv({ MINERVA_PLAN_DEFAULTS: "/no/such/plan-defaults-file.yaml" }, () => {
-    assert.throws(() => loadPlanDefaults(), MinervaError);
+    // Should not throw, should just return built-in defaults
+    const cfg = loadPlanDefaults();
+    assert.equal(cfg.mode, "off");
   });
+});
+
+test("loadPlanDefaults: invalid config file schema logs a warning but proceeds safely (no crash)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "minerva-test-"));
+  const yamlPath = join(dir, "invalid-plan-defaults.yaml");
+  writeFileSync(yamlPath, "mode: invalid-mode-not-in-enum\n", "utf8");
+
+  try {
+    withEnv({ MINERVA_PLAN_DEFAULTS: yamlPath }, () => {
+      // Should not throw, should just return built-in defaults
+      const cfg = loadPlanDefaults();
+      assert.equal(cfg.mode, "off");
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("loadPlanDefaults: an answer rule with neither qid nor match is rejected", () => {

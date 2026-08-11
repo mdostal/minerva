@@ -199,19 +199,15 @@ function readConfigFile(path: string): unknown {
   try {
     raw = readFileSync(path, "utf8");
   } catch (e) {
-    throw new MinervaError(
-      "VALIDATION_FAILED",
-      `Could not read MINERVA_PLAN_DEFAULTS file ${path}: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    console.warn(`Could not read MINERVA_PLAN_DEFAULTS file ${path}: ${e instanceof Error ? e.message : String(e)}`);
+    return {};
   }
   try {
     // parseYaml handles JSON too (JSON is a subset of YAML), so one path covers both file forms.
-    return parseYaml(raw);
+    return parseYaml(raw) || {};
   } catch (e) {
-    throw new MinervaError(
-      "VALIDATION_FAILED",
-      `Could not parse MINERVA_PLAN_DEFAULTS file ${path}: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    console.warn(`Could not parse MINERVA_PLAN_DEFAULTS file ${path}: ${e instanceof Error ? e.message : String(e)}`);
+    return {};
   }
 }
 
@@ -227,7 +223,13 @@ export function loadPlanDefaults(perRun?: unknown): PlanDefaults {
   let cfg = { ...BUILTIN_PLAN_DEFAULTS };
 
   const filePath = process.env.MINERVA_PLAN_DEFAULTS;
-  if (filePath) cfg = mergeLayer(cfg, readConfigFile(filePath), `MINERVA_PLAN_DEFAULTS (${filePath})`);
+  if (filePath) {
+    try {
+      cfg = mergeLayer(cfg, readConfigFile(filePath), `MINERVA_PLAN_DEFAULTS (${filePath})`);
+    } catch (e) {
+      console.warn(`Warning: MINERVA_PLAN_DEFAULTS file ${filePath} is invalid. ${e instanceof Error ? e.message : String(e)}. Proceeding without it.`);
+    }
+  }
 
   const modeEnv = process.env.MINERVA_PLAN_DEFAULTS_MODE;
   if (modeEnv) cfg = mergeLayer(cfg, { mode: modeEnv }, "MINERVA_PLAN_DEFAULTS_MODE");

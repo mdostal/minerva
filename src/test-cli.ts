@@ -66,9 +66,6 @@ export function createSeedRepo(prefix = "minerva-seed-repo-"): string {
 import { createServer, Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { createServer, Server } from "node:http";
-import type { AddressInfo } from "node:net";
-
 export async function mockHeimdallServer(routes: { kickoff?: any; planning?: any }) {
   const server = createServer((req, res) => {
     if (req.url === "/available-route?task-type=kickoff") {

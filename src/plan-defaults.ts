@@ -215,19 +215,34 @@ function readConfigFile(path: string): unknown {
   }
 }
 
+function warningMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function warnInvalidConfigFile(path: string, e: unknown): void {
+  console.warn(`[minerva] Ignoring plan-defaults config file ${path}: ${warningMessage(e)}`);
+}
+
 // Resolve the effective config from three layers, lowest-to-highest priority:
 //   1. built-in defaults (mode: off)
 //   2. MINERVA_PLAN_DEFAULTS  — path to a YAML/JSON config file (per-deployment)
 //   3. MINERVA_PLAN_DEFAULTS_MODE — a bare mode override (per-deployment quick switch)
 //   4. perRun — the `defaults` object passed to startRun (per-run, highest priority)
 // Later layers override earlier ones field-by-field; `answers` accumulate (higher priority
-// first). Any invalid value fails loudly rather than being silently dropped, matching this
-// project's "never guess" discipline (cf. MINERVA_TURN_TIMEOUT_MS in driver.ts).
+// first). The optional file layer is best-effort: missing, unreadable, unparsable, or schema-
+// invalid files warn and are ignored so Minerva can initialize safely with the built-in empty
+// defaults. Direct env/per-run overrides still fail loudly because they are explicit inputs.
 export function loadPlanDefaults(perRun?: unknown): PlanDefaults {
   let cfg = { ...BUILTIN_PLAN_DEFAULTS };
 
   const filePath = process.env.MINERVA_PLAN_DEFAULTS;
-  if (filePath) cfg = mergeLayer(cfg, readConfigFile(filePath), `MINERVA_PLAN_DEFAULTS (${filePath})`);
+  if (filePath) {
+    try {
+      cfg = mergeLayer(cfg, readConfigFile(filePath), `MINERVA_PLAN_DEFAULTS (${filePath})`);
+    } catch (e) {
+      warnInvalidConfigFile(filePath, e);
+    }
+  }
 
   const modeEnv = process.env.MINERVA_PLAN_DEFAULTS_MODE;
   if (modeEnv) cfg = mergeLayer(cfg, { mode: modeEnv }, "MINERVA_PLAN_DEFAULTS_MODE");

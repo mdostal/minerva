@@ -455,5 +455,5 @@ export function getOutput(params: Record<string, unknown>): Record<string, unkno
     throw new MinervaError("NOT_READY", `Run ${runId} has not reached completion yet (status: ${record.status})`);
   }
   const { epic, epics } = normalizeOutput(record.output);
-  return { epic, epics };
+  return { epic, epics, metrics: record.metrics ?? null };
 }

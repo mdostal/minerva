@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { abortRun } from "./cleanup-ledger.ts";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 import { getQuestions, startRun, __setDriverForTest } from "./kickoff-engine.ts";
-import { readRunRecord } from "./run-manager.ts";
+import { readRunRecord, getRunStatus, type RunMetrics } from "./run-manager.ts";
+import { getOutput } from "./output-emitter.ts";
 import { createSeedRepo } from "./test-cli.ts";
 
 let minervaHome: string;
@@ -125,3 +126,27 @@ test("aborted runs finalize elapsed metrics", async () => {
   assert.ok(record.metrics!.elapsed_ms! >= 0);
   assert.equal(typeof record.metrics?.finalized_at, "string");
 });
+
+test("getRunStatus surfaces the persisted metrics via the ABI", async () => {
+  const { run_id: runId } = (await startRun({ idea: "metrics ABI test" })) as { run_id: string };
+
+  const res = getRunStatus({ run_id: runId }) as { status: string; metrics: RunMetrics };
+  assert.equal(res.status, "waiting_on_human");
+  assert.ok(res.metrics);
+  assert.equal(res.metrics.turns, 1);
+  assert.equal(res.metrics.escalations, 0);
+  assert.equal(res.metrics.driver, "spawn");
+  assert.ok(res.metrics.started_at);
+});
+
+test("getOutput surfaces the finalized metrics via the ABI", async () => {
+  __setDriverForTest(new MetricsDriver("complete"));
+  const { run_id: runId } = (await startRun({ idea: "metrics ABI test complete" })) as { run_id: string };
+
+  const res = getOutput({ run_id: runId }) as { metrics: RunMetrics };
+  assert.ok(res.metrics);
+  assert.equal(res.metrics.turns, 1);
+  assert.equal(typeof res.metrics.elapsed_ms, "number");
+  assert.ok(res.metrics.finalized_at);
+});
+

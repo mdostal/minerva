@@ -11,7 +11,19 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
-import { encodeEnvelopePointer, decodeEnvelopePointer, writeAnswerOntoEnvelope, NO_PENDING_SENTINEL } from "./driver.ts";
+import {
+  ForkedHiveDriver,
+  encodeEnvelopePointer,
+  decodeEnvelopePointer,
+  writeAnswerOntoEnvelope,
+  NO_PENDING_SENTINEL,
+  type Driver,
+} from "./driver.ts";
+
+test("ForkedHiveDriver instantiates cleanly as a Driver implementation", () => {
+  const driver: Driver = new ForkedHiveDriver();
+  assert.equal(typeof driver.runTurn, "function");
+});
 
 // --- Pointer encode/decode ------------------------------------------------------------------
 // ForkedHiveDriver is confirmed stateless (the epic's own spike) -- session_id is never used

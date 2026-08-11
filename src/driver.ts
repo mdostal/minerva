@@ -103,7 +103,7 @@ function availableRouteUrl(): string {
   const exact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
   if (exact) return exact;
   const base = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? DEFAULT_HEIMDALL_URL;
-  return new URL("/available-route?task-type=planning", base.endsWith("/") ? base : `${base}/`).toString();
+  return new URL("/available-route?task-type=kickoff", base.endsWith("/") ? base : `${base}/`).toString();
 }
 
 export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {

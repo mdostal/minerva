@@ -63,3 +63,62 @@ export function createSeedRepo(prefix = "minerva-seed-repo-"): string {
   execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   return repo;
 }
+import { createServer, Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
+import { createServer, Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
+export async function mockHeimdallServer(routes: { kickoff?: any; planning?: any }) {
+  const server = createServer((req, res) => {
+    if (req.url === "/available-route?task-type=kickoff") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(routes.kickoff || { cli: "claude", model: "claude-haiku-4-5" }));
+      return;
+    }
+    if (req.url === "/available-route?task-type=planning") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(routes.planning || { runtime: "gemini", model: "gemini-2.5-pro" }));
+      return;
+    }
+    res.writeHead(503);
+    res.end();
+  });
+  await new Promise(r => server.listen(0, "127.0.0.1", r as any));
+  return {
+    server,
+    get url() {
+      const addr = server.address() as AddressInfo;
+      return `http://127.0.0.1:${addr.port}`;
+    }
+  };
+}
+
+export async function mockConsusServer() {
+  const posts: any[] = [];
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/") {
+      let body = "";
+      req.on("data", chunk => body += chunk);
+      req.on("end", () => {
+        try {
+          posts.push(JSON.parse(body));
+        } catch(e) {}
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ id: "mock-decision-id" }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise(r => server.listen(0, "127.0.0.1", r as any));
+  return {
+    server,
+    posts,
+    get url() {
+      const addr = server.address() as AddressInfo;
+      return `http://127.0.0.1:${addr.port}`;
+    }
+  };
+}

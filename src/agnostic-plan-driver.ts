@@ -21,7 +21,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 
-const HEIMDALL_URL = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? "http://localhost:4870";
+function getHeimdallUrl() {
+  return process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? "http://localhost:4870";
+}
 const ROUTE_TIMEOUT_MS = Number(process.env.MINERVA_PLAN_ROUTE_TIMEOUT_MS ?? 2000);
 const TURN_TIMEOUT_MS = Number(process.env.MINERVA_TURN_TIMEOUT_MS ?? 600_000);
 
@@ -60,7 +62,7 @@ export async function resolvePlanningRoute(): Promise<PlanningRoute | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ROUTE_TIMEOUT_MS);
   try {
-    const res = await fetch(`${HEIMDALL_URL}/available-route?task-type=planning`, {
+    const res = await fetch(`${getHeimdallUrl()}/available-route?task-type=planning`, {
       signal: controller.signal,
     });
     if (!res.ok) return null;

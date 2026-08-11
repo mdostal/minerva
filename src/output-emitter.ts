@@ -28,7 +28,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { MinervaError } from "./errors.ts";
-import { readRunRecord, updateRunRecord, type RunRecord } from "./run-manager.ts";
+import { finalizeRunMetrics, readRunRecord, updateRunRecord, type RunRecord } from "./run-manager.ts";
 import { recordCleanup } from "./cleanup-ledger.ts";
 
 export interface CompletedEpic {
@@ -416,6 +416,7 @@ export function checkAndMarkComplete(runId: string): boolean {
   }
   const output: CompletionOutput = { epic: epics[0]!, epics }; // length checked non-empty above
   updateRunRecord(runId, { status: "complete", output, plan_push: planPush });
+  finalizeRunMetrics(runId);
 
   // AD-4: exactly one ledger record + one cleanup_needed event per run, at the moment it
   // transitions to a terminal state. This branch only runs once per run (guarded by the

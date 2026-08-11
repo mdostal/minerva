@@ -15,6 +15,6 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["bin/**/*.ts", "src/**/*.ts"],
+  "include": ["bin/**/*.ts", "src/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules"]
 }

@@ -337,3 +337,42 @@ PRD GAP-04.
 - GAP-02 (escalation threshold mechanics) — **resolved**, see AD-2.
 - GAP-03 (cleanup/retention policy) — **resolved**, see AD-4.
 - GAP-04 (stall-wait duration) — **resolved**, see AD-5.
+
+## High-Level Flow
+
+```mermaid
+flowchart TB
+    idea["idea"] --> auriga
+
+    subgraph pantheon["Pantheon"]
+        auriga["Auriga\n(routing / hand-off)"]
+        minerva["Minerva\n(planner)"]
+        surface["Delphi / Consus\n(human decision surface)"]
+        vulcan["Vulcan\n(repo provisioning)"]
+        swarm["execution swarm\n(execute -> review -> test -> ship)"]
+    end
+
+    auriga --> minerva
+    minerva -->|questions| surface
+    surface -->|answers| minerva
+    minerva -->|approved epic + stories| vulcan
+    minerva -->|hand to swarm| auriga --> swarm
+
+    subgraph internals["Minerva internals"]
+        direction TB
+        cli["bin/minerva.ts — JSON-over-stdio ABI\n(fresh process per call)"]
+        dispatch["dispatch — capabilities · startRun\ngetQuestions · submitAnswers · getOutput\ngetRunStatus · listRuns · abortRun"]
+        engine["Kickoff+Plan engine\n(drives plugin-hive kickoff + plan)"]
+        driver{"Driver\n(swappable via MINERVA_DRIVER)"}
+        spawn["SpawnDriver — claude -p / --resume (default)"]
+        subagent["SubagentDriver — claude --bg (orphan-resistant)"]
+        forked["ForkedHiveDriver (stub — not implemented)"]
+        rm["Run Manager — per-run isolated git workspace\n(~/.minerva/runs, filesystem only)"]
+
+        cli --> dispatch --> engine --> driver
+        driver --> spawn & subagent & forked
+        engine --> rm
+    end
+
+    minerva -.runs.-> cli
+```

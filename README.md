@@ -1,7 +1,12 @@
 # Minerva
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Open Source](https://badges.frapsoft.com/os/v1/open-source.svg?v=103)](https://opensource.org/)
+
 **The Pantheon's Planner.** Minerva turns a raw **idea** into an **approved, planned spec** — an
 epic with dependency-tracked stories — autonomously and headlessly.
+
+[**Read the Documentation**](https://mdostal.github.io/minerva/)
 
 Named for the Roman goddess of wisdom and strategic planning, Minerva runs the *front half* of
 the hive flow (`kickoff` + `plan`), extracts the human-gate questions along the way, routes them
@@ -122,7 +127,13 @@ npm run ci        # test + typecheck (local CI — no GitHub Actions)
 **Working (wip).** The subprocess ABI, the kickoff+plan engine, per-run isolated workspaces, and
 the default `SpawnDriver` + opt-in orphan-resistant `SubagentDriver` are real and covered by a TDD
 suite; `ForkedHiveDriver` is an intentional stub that throws until plugin-hive-fork exists. See
-[VISION.md](./VISION.md) for the trajectory.
+[VISION.md](./docs/vision.md) for the trajectory.
+
+## Support
+
+If you find this project helpful, consider supporting its development:
+- [GitHub Sponsors](https://github.com/sponsors/mdostal)
+- [Buy Me a Coffee](https://buymeacoffee.com/mdostal)
 
 ---
 

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minerva — The Pantheon's Planner</title>
+  <style>
+    :root {
+      --bg: #0d0d0d;
+      --bg-panel: #1a1a1a;
+      --text-main: #f0f0f0;
+      --text-muted: #888888;
+      --accent: #d4af37; /* Gold/Amber */
+      --accent-hover: #f1c40f;
+      --border: #333333;
+      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    a:hover {
+      color: var(--accent-hover);
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(13,13,13,0.9);
+      backdrop-filter: blur(10px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    nav .brand {
+      font-weight: 700;
+      font-size: 1.2rem;
+      letter-spacing: 0.05em;
+    }
+    nav .links a {
+      margin-left: 1.5rem;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    nav .links a:hover {
+      color: var(--text-main);
+    }
+    header.hero {
+      text-align: center;
+      padding: 6rem 1rem;
+      background: radial-gradient(circle at center, #2a2a2a 0%, var(--bg) 70%);
+      border-bottom: 1px solid var(--border);
+    }
+    header.hero h1 {
+      font-size: 4rem;
+      margin: 0 0 1rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    header.hero p.subtitle {
+      font-size: 1.5rem;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto 2rem;
+    }
+    .cta-buttons a {
+      display: inline-block;
+      padding: 0.8rem 1.5rem;
+      border-radius: 4px;
+      font-weight: 600;
+      margin: 0 0.5rem;
+      border: 1px solid var(--accent);
+    }
+    .cta-buttons a.primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    .cta-buttons a.secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+    .cta-buttons a.primary:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+    .cta-buttons a.secondary:hover {
+      background: rgba(212, 175, 55, 0.1);
+    }
+    section {
+      padding: 4rem 2rem;
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+    section h2 {
+      font-size: 2rem;
+      margin-top: 0;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.5rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2rem;
+    }
+    @media (min-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+    .card {
+      background: var(--bg-panel);
+      padding: 2rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .card h3 {
+      margin-top: 0;
+      color: var(--accent);
+      font-size: 1.25rem;
+    }
+    pre {
+      background: #000;
+      padding: 1.5rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      color: #ccc;
+    }
+    code {
+      font-family: var(--font-mono);
+      background: rgba(255,255,255,0.1);
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    .mermaid {
+      background: var(--bg-panel);
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      text-align: center;
+      margin-top: 2rem;
+    }
+    footer {
+      text-align: center;
+      padding: 3rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+    .badges {
+      margin-bottom: 2rem;
+    }
+    .badges img {
+      margin: 0 0.5rem;
+    }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="brand">MINERVA</div>
+    <div class="links">
+      <a href="#architecture">Architecture</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#support">Support</a>
+      <a href="https://github.com/mdostal/minerva">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="badges">
+      <a href="https://github.com/mdostal/minerva/actions"><img src="https://img.shields.io/github/actions/workflow/status/mdostal/minerva/ci.yml?branch=dev" alt="Build Status"></a>
+      <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+      <a href="https://opensource.org/"><img src="https://badges.frapsoft.com/os/v1/open-source.svg?v=103" alt="Open Source"></a>
+    </div>
+    <h1>The Pantheon's Planner</h1>
+    <p class="subtitle">Agent-drivable idea-to-spec engine. Turn a raw idea into an approved, dependency-tracked epic.</p>
+    <div class="cta-buttons">
+      <a href="#quickstart" class="primary">Get Started</a>
+      <a href="https://github.com/mdostal/minerva" class="secondary">View Source</a>
+    </div>
+  </header>
+
+  <section id="role">
+    <h2>Where it fits in Pantheon</h2>
+    <p>Minerva runs the <em>front half</em> of the agentic SDLC loop (<code>kickoff</code> + <code>plan</code>), autonomously building specs while routing human-gate questions to the decision surface. Splitting the planner out of a single terminal window allows Pantheon to process many ideas in parallel.</p>
+    
+    <div class="grid">
+      <div class="card">
+        <h3>1. Receive (Auriga)</h3>
+        <p>Auriga acts as the router. When an idea arrives, Auriga spawns a Minerva subprocess to handle the planning phase, passing off the raw idea.</p>
+      </div>
+      <div class="card">
+        <h3>2. Plan & Ask (Minerva)</h3>
+        <p>Minerva drives <code>plugin-hive</code> planning skills, hitting human-in-the-loop gates. Instead of halting in a terminal, it delegates questions to the decision surface.</p>
+      </div>
+      <div class="card">
+        <h3>3. Decide (Surface)</h3>
+        <p>Humans answer strategy and design questions on the Delphi/Consus decision surface. When answered, Minerva resumes the run.</p>
+      </div>
+      <div class="card">
+        <h3>4. Provision & Build (Vulcan & Swarm)</h3>
+        <p>With an approved epic, Vulcan provisions repositories and Auriga dispatches the execution swarm to write the code.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="architecture">
+    <h2>Architecture & Flow</h2>
+    <p>Minerva's public interface is a JSON-over-stdio Subprocess ABI. Every call is a fresh process. Run state persists on the filesystem under <code>~/.minerva/runs</code>. There is no daemon — a run only advances when a caller invokes <code>submitAnswers</code>.</p>
+    
+    <div class="mermaid">
+      flowchart TB
+          idea["idea"] --> auriga
+
+          subgraph pantheon["Pantheon"]
+              auriga["Auriga\n(routing / hand-off)"]
+              minerva["Minerva\n(planner)"]
+              surface["Delphi / Consus\n(human decision surface)"]
+              vulcan["Vulcan\n(repo provisioning)"]
+              swarm["execution swarm\n(execute -> review -> test -> ship)"]
+          end
+
+          auriga --> minerva
+          minerva -->|questions| surface
+          surface -->|answers| minerva
+          minerva -->|approved epic + stories| vulcan
+          minerva -->|hand to swarm| auriga --> swarm
+
+          subgraph internals["Minerva internals"]
+              direction TB
+              cli["bin/minerva.ts — JSON-over-stdio ABI\n(fresh process per call)"]
+              dispatch["dispatch — capabilities · startRun\ngetQuestions · submitAnswers · getOutput\ngetRunStatus · listRuns · abortRun"]
+              engine["Kickoff+Plan engine\n(drives plugin-hive kickoff + plan)"]
+              driver{"Driver\n(swappable via MINERVA_DRIVER)"}
+              spawn["SpawnDriver — claude -p / --resume (default)"]
+              subagent["SubagentDriver — claude --bg (orphan-resistant)"]
+              forked["ForkedHiveDriver (stub — not implemented)"]
+              rm["Run Manager — per-run isolated git workspace\n(~/.minerva/runs, filesystem only)"]
+
+              cli --> dispatch --> engine --> driver
+              driver --> spawn & subagent & forked
+              engine --> rm
+          end
+
+          minerva -.runs.-> cli
+    </div>
+  </section>
+
+  <section id="quickstart">
+    <h2>Quickstart</h2>
+    <p>Minerva requires Node.js >=20.19. One JSON request in on <code>stdin</code>, one JSON response out on <code>stdout</code>. No server to start.</p>
+    <pre><code>npm install
+
+# Discover the ABI version
+echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
+
+# Start a run from an idea (returns a run_id)
+echo '{"method":"startRun","params":{"idea":"add SSO to billing"}}' | npx tsx bin/minerva.ts
+
+# Pull the pending questions for a run
+echo '{"method":"getQuestions","params":{"run_id":"&lt;run_id&gt;"}}' | npx tsx bin/minerva.ts
+
+# Answer them (advances the run)
+echo '{"method":"submitAnswers","params":{"run_id":"&lt;run_id&gt;","answers":[...]}}' | npx tsx bin/minerva.ts
+
+# Fetch the approved epic + stories
+echo '{"method":"getOutput","params":{"run_id":"&lt;run_id&gt;"}}' | npx tsx bin/minerva.ts</code></pre>
+  </section>
+
+  <section id="support">
+    <h2>OSS & Support</h2>
+    <p>Minerva is fully open source under the <strong>MIT License</strong>. We welcome contributions to help shape the future of agentic planning.</p>
+    <div class="cta-buttons" style="margin-top: 1rem;">
+      <a href="https://github.com/mdostal/minerva/blob/main/CONTRIBUTING.md" class="secondary">Read CONTRIBUTING.md</a>
+      <a href="https://github.com/mdostal/minerva/issues" class="secondary">Open an Issue</a>
+    </div>
+    
+    <div style="margin-top: 3rem;">
+      <h3>Support the Project</h3>
+      <p>If you find this project helpful, consider supporting its development:</p>
+      <div class="cta-buttons">
+        <a href="https://github.com/sponsors/mdostal" class="secondary">GitHub Sponsors</a>
+        <a href="https://buymeacoffee.com/mdostal" class="secondary">Buy Me a Coffee</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>&copy; 2026 Pantheon Contributors. Open source under the MIT License.</p>
+    <p>Consistent Pantheon branding — Built for the Agentic SDLC.</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+      flowchart: {
+        curve: 'basis'
+      }
+    });
+  </script>
+</body>
+</html>

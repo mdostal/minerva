@@ -37,6 +37,20 @@ function withEnv(vars: Record<string, string | undefined>, body: () => void): vo
   }
 }
 
+function captureWarnings(body: () => void): string[] {
+  const savedWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  try {
+    body();
+  } finally {
+    console.warn = savedWarn;
+  }
+  return warnings;
+}
+
 function q(overrides: Partial<ResolvableQuestion>): ResolvableQuestion {
   return { text: "some question", channel: "agent", ...overrides };
 }
@@ -107,10 +121,48 @@ test("loadPlanDefaults: reads a YAML config file via MINERVA_PLAN_DEFAULTS, per-
   }
 });
 
-test("loadPlanDefaults: unreadable config file fails loudly", () => {
+test("loadPlanDefaults: missing config file warns and falls back to empty built-in defaults", () => {
   withEnv({ MINERVA_PLAN_DEFAULTS: "/no/such/plan-defaults-file.yaml" }, () => {
-    assert.throws(() => loadPlanDefaults(), MinervaError);
+    const warnings = captureWarnings(() => {
+      assert.deepEqual(loadPlanDefaults(), BUILTIN_PLAN_DEFAULTS);
+    });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /Ignoring plan-defaults config file/);
   });
+});
+
+test("loadPlanDefaults: unparsable config file warns and falls back to empty built-in defaults", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-defaults-bad-yaml-"));
+  const file = join(dir, "defaults.yaml");
+  writeFileSync(file, "mode: [\n");
+  try {
+    withEnv({ MINERVA_PLAN_DEFAULTS: file }, () => {
+      const warnings = captureWarnings(() => {
+        assert.deepEqual(loadPlanDefaults(), BUILTIN_PLAN_DEFAULTS);
+      });
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!, /Ignoring plan-defaults config file/);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadPlanDefaults: schema-invalid config file warns and falls back to empty built-in defaults", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-defaults-bad-schema-"));
+  const file = join(dir, "defaults.yaml");
+  writeFileSync(file, "mode: banana\nanswers:\n  - answer: x\n");
+  try {
+    withEnv({ MINERVA_PLAN_DEFAULTS: file }, () => {
+      const warnings = captureWarnings(() => {
+        assert.deepEqual(loadPlanDefaults(), BUILTIN_PLAN_DEFAULTS);
+      });
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!, /Invalid plan-defaults mode/);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("loadPlanDefaults: an answer rule with neither qid nor match is rejected", () => {

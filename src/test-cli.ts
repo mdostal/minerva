@@ -3,6 +3,8 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
+import { createServer, Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -63,11 +65,6 @@ export function createSeedRepo(prefix = "minerva-seed-repo-"): string {
   execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   return repo;
 }
-import { createServer, Server } from "node:http";
-import type { AddressInfo } from "node:net";
-
-import { createServer, Server } from "node:http";
-import type { AddressInfo } from "node:net";
 
 export async function mockHeimdallServer(routes: { kickoff?: any; planning?: any }) {
   const server = createServer((req, res) => {

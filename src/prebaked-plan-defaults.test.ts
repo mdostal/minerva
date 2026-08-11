@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { startRun, __setDriverForTest } from "./kickoff-engine.ts";
-import { getRunStatus } from "./run-manager.ts";
+import { startRun, getQuestions, __setDriverForTest } from "./kickoff-engine.ts";
+import { getRunStatus, readRunRecord } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 
@@ -75,6 +75,18 @@ function humanStrategicQuestion(): object {
   };
 }
 
+function unmatchedAgentQuestion(): object {
+  return {
+    question: "Which proprietary deployment target should this use?",
+    suggested_channel: "agent",
+    confidence: 0.75,
+    reason: "initially considered agent-routine",
+    kind: "free-text",
+    options: null,
+    qid: "deployment_target",
+  };
+}
+
 beforeEach(() => {
   // Capture whatever driver is currently installed the first time, so `after` can restore it.
   savedDriver = savedDriver ?? __setDriverForTest(new ScriptedDriver(0, () => ({})));
@@ -88,6 +100,7 @@ test("agent mode: a fresh run auto-answers routine gates and drives to completio
 
   // The run must NOT be parked -- it drove itself to completion.
   assert.equal((getRunStatus({ run_id }) as { status: string }).status, "complete");
+  assert.equal(readRunRecord(run_id).metrics?.auto_resolutions, 3);
 
   const out = getOutput({ run_id }) as { epic: { epic_id: string; stories: unknown[] } };
   assert.equal(out.epic.epic_id, "demo");
@@ -110,6 +123,45 @@ test("agent mode: parks on a genuine human strategic gate (AD-5 preserved), does
 
   assert.equal((getRunStatus({ run_id }) as { status: string }).status, "waiting_on_human");
   assert.equal(driver.turns, 1); // stopped at the human gate, no auto-answer attempted past it
+});
+
+test("agent mode: an agent-channel question without a matching default is escalated to human", async () => {
+  const driver = new ScriptedDriver(3, unmatchedAgentQuestion);
+  __setDriverForTest(driver);
+  const { run_id } = (await startRun({
+    idea: "a deployment planner",
+    defaults: { mode: "agent", free_text_default: null },
+  })) as { run_id: string };
+
+  assert.equal((getRunStatus({ run_id }) as { status: string }).status, "waiting_on_human");
+  assert.equal(driver.turns, 1);
+  assert.equal((getQuestions({ run_id, channel: "agent" }) as { questions: unknown[] }).questions.length, 0);
+
+  const human = getQuestions({ run_id, channel: "human" }) as { questions: Array<{ channel: string; suggested_channel: string; qid: string }> };
+  assert.equal(human.questions.length, 1);
+  assert.equal(human.questions[0]!.channel, "human");
+  assert.equal(human.questions[0]!.suggested_channel, "agent");
+  assert.equal(human.questions[0]!.qid, "deployment_target");
+  assert.equal(readRunRecord(run_id).metrics?.auto_resolutions, 0);
+});
+
+test("agent mode: a human-channel question ignores matching defaults and remains human-visible", async () => {
+  const driver = new ScriptedDriver(2, humanStrategicQuestion);
+  __setDriverForTest(driver);
+  const { run_id } = (await startRun({
+    idea: "a marketplace",
+    defaults: { mode: "agent", answers: [{ qid: "strategy", answer: "choose B2B" }] },
+  })) as { run_id: string };
+
+  assert.equal((getRunStatus({ run_id }) as { status: string }).status, "waiting_on_human");
+  assert.equal(driver.turns, 1);
+  assert.equal((getQuestions({ run_id, channel: "agent" }) as { questions: unknown[] }).questions.length, 0);
+
+  const human = getQuestions({ run_id, channel: "human" }) as { questions: Array<{ channel: string; qid: string }> };
+  assert.equal(human.questions.length, 1);
+  assert.equal(human.questions[0]!.channel, "human");
+  assert.equal(human.questions[0]!.qid, "strategy");
+  assert.equal(readRunRecord(run_id).metrics?.auto_resolutions, 0);
 });
 
 test("auto mode: answers even the human-channel gate (via free-text default) and completes", async () => {

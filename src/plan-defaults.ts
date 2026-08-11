@@ -327,16 +327,17 @@ export function resolveDefaultAnswer(
   const text = q.text ?? "";
   const lower = text.toLowerCase();
 
-  // 1. Explicit operator-pre-decided answers win over everything, regardless of channel or mode
-  //    -- this is the "I already decided this" override the whole feature exists to serve.
+  // 1. In "agent" mode, only agent-channel questions are eligible for auto-resolution. A
+  //    human-channel question is already a strategic/ambiguous gate, so matching defaults are
+  //    ignored and the run remains parked for a human. "auto" mode intentionally continues past
+  //    this check and may answer human-channel questions.
+  if (d.mode === "agent" && q.channel === "human") return null;
+
+  // 2. Explicit operator-pre-decided answers win over all remaining defaults.
   for (const rule of d.answers) {
     if (rule.qid !== undefined && q.qid !== undefined && rule.qid === q.qid) return rule.answer;
     if (rule.match !== undefined && lower.includes(rule.match.toLowerCase())) return rule.answer;
   }
-
-  // 2. In "agent" mode, a human-channel question with no explicit answer is a genuine strategic
-  //    gate -- park it (AD-5). "auto" mode intentionally continues past this to answer everything.
-  if (d.mode === "agent" && q.channel === "human") return null;
 
   // 3. Sign-off / approval gate -> affirm.
   if (d.skip_sign_off && isSignOffQuestion(text)) {

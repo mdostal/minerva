@@ -320,7 +320,7 @@ export function getRunStatus(params: Record<string, unknown>): Record<string, un
     throw new MinervaError("VALIDATION_FAILED", "getRunStatus requires a string run_id");
   }
   const record = readRunRecord(runId);
-  return { status: record.status };
+  return { status: record.status, metrics: record.metrics ?? null };
 }
 
 export function listRuns(_params: Record<string, unknown>): Record<string, unknown> {

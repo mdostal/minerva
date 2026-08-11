@@ -103,7 +103,7 @@ test("a run that writes epic.yaml + story files is detected as complete and serv
     ["-C", runRecord.workspace_path, "log", "--oneline", "-1", "--", ".pHive/epics/recipe-organizer"],
     { encoding: "utf8" },
   );
-  assert.match(log, /chore\(plan\): commit epic plan for recipe-organizer/);
+  assert.match(log, /plan\(.*?\): commit planned work so build agents can execute/);
   const statusAfter = execFileSync(
     "git",
     ["-C", runRecord.workspace_path, "status", "--porcelain", "--", ".pHive/epics/recipe-organizer"],

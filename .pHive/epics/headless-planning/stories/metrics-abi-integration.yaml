@@ -1,0 +1,23 @@
+id: metrics-abi-integration
+epic: headless-planning
+title: Surface metrics summary in getRunStatus and getOutput ABI responses
+status: open
+complexity: low
+methodology: tdd
+depends_on: [emit-planning-metrics]
+
+description: |
+  Expose the captured planning metrics to the host process via the established 
+  Minerva ABI so Pantheon can log, compare, and act on the performance data of a run.
+
+acceptance_criteria:
+  - "Given an active or completed run, when getRunStatus is called, then the response payload includes a 'metrics' object containing 'turns', 'escalations', 'driver', and 'elapsed_ms' (or null if not yet calculable)."
+  - "Given a completed run, when getOutput is called, then the response payload includes the finalized 'metrics' object alongside the epic/stories."
+  - "Given a run with metrics, when the data is serialized over the ABI, it conforms strictly to a defined JSON schema for RunMetrics."
+
+scope_boundaries:
+  do:
+    - "Update ABI types (RunStatus, RunOutput) to include an optional 'metrics' field."
+    - "Wire the RunManager's persisted metrics into the dispatch.ts responses."
+  do_not:
+    - "Do not introduce a new standalone ABI method for metrics."

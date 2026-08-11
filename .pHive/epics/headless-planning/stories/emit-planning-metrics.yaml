@@ -1,0 +1,27 @@
+id: emit-planning-metrics
+epic: headless-planning
+title: Capture and emit core planning metrics per run (turns, escalations, driver, elapsed)
+status: open
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Track the performance and characteristics of a Minerva planning run. We need to 
+  capture turns (number of driver invocations), escalations (number of human questions 
+  surfaced), time-to-spec (elapsed ms), and the active driver used. This data will be 
+  used to A/B test planning methodologies in the future.
+
+acceptance_criteria:
+  - "Given a new run, when startRun is called, then a metrics object is initialized with 0 turns, 0 escalations, the current driver name, and a start timestamp."
+  - "Given an active run, when a driver turn completes, then the 'turns' metric increments by 1."
+  - "Given an active run, when a question is surfaced via getQuestions (human escalation), then the 'escalations' metric increments by 1."
+  - "Given an active run, when it reaches a terminal state (complete/aborted), then the 'time-to-spec' (elapsed ms) is calculated and finalized."
+  - "Given an active run, when metrics are updated, then they are persisted alongside the run state in MINERVA_HOME so they survive process restarts."
+
+scope_boundaries:
+  do:
+    - "Extend the RunManager state schema to store metrics."
+    - "Add tracking hooks into kickoff-engine.ts for turns and escalations."
+  do_not:
+    - "Do not expose the metrics to the outside world yet (handled in metrics-abi-integration)."

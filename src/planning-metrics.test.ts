@@ -82,6 +82,7 @@ test("startRun initializes persisted metrics and records the first completed dri
   const record = readRunRecord(runId);
   assert.equal(record.metrics?.turns, 1);
   assert.equal(record.metrics?.escalations, 0);
+  assert.equal(record.metrics?.auto_resolutions, 0);
   assert.equal(record.metrics?.driver, "spawn");
   assert.equal(typeof record.metrics?.started_at, "string");
   assert.ok(Number.isFinite(Date.parse(record.metrics!.started_at)));
@@ -106,6 +107,7 @@ test("complete runs finalize elapsed metrics", async () => {
   const record = readRunRecord(runId);
   assert.equal(record.status, "complete");
   assert.equal(record.metrics?.turns, 1);
+  assert.equal(record.metrics?.auto_resolutions, 0);
   assert.equal(typeof record.metrics?.elapsed_ms, "number");
   assert.ok(record.metrics!.elapsed_ms! >= 0);
   assert.equal(typeof record.metrics?.finalized_at, "string");

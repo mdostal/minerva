@@ -177,16 +177,22 @@ test("resolve: mode off always parks (returns null)", () => {
   assert.equal(resolveDefaultAnswer(q({}), BUILTIN_PLAN_DEFAULTS, "idea"), null);
 });
 
-test("resolve: explicit qid match wins regardless of channel/mode", () => {
+test("resolve: agent mode ignores explicit qid matches on human-channel questions", () => {
   const d: PlanDefaults = { ...AGENT, answers: [{ qid: "metrics", answer: "yes, enable metrics" }] };
   const got = resolveDefaultAnswer(q({ channel: "human", qid: "metrics", text: "Enable metrics?" }), d, "idea");
-  assert.equal(got, "yes, enable metrics");
+  assert.equal(got, null);
 });
 
-test("resolve: explicit substring match wins even on a human-channel question in agent mode", () => {
+test("resolve: agent mode ignores explicit substring matches on human-channel questions", () => {
   const d: PlanDefaults = { ...AGENT, answers: [{ match: "sign-off", answer: "Approved by operator" }] };
   const got = resolveDefaultAnswer(q({ channel: "human", text: "Ready for sign-off on scope?" }), d, "idea");
-  assert.equal(got, "Approved by operator");
+  assert.equal(got, null);
+});
+
+test("resolve: auto mode allows explicit matches on human-channel questions", () => {
+  const d: PlanDefaults = { ...AUTO, answers: [{ qid: "metrics", answer: "yes, enable metrics" }] };
+  const got = resolveDefaultAnswer(q({ channel: "human", qid: "metrics", text: "Enable metrics?" }), d, "idea");
+  assert.equal(got, "yes, enable metrics");
 });
 
 test("resolve: agent mode parks a human-channel question with no explicit answer (AD-5 preserved)", () => {

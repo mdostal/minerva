@@ -23,6 +23,7 @@ export type QuestionKind = "single-select" | "multi-select" | "free-text";
 export interface RunMetrics {
   turns: number;
   escalations: number;
+  auto_resolutions: number;
   driver: string;
   started_at: string;
   elapsed_ms?: number;
@@ -178,32 +179,45 @@ function fallbackMetrics(record: RunRecord): RunMetrics {
   return {
     turns: 0,
     escalations: 0,
+    auto_resolutions: 0,
     driver: record.plan_runtime ?? "spawn",
     started_at: record.created_at,
   };
 }
 
+function normalizeMetrics(metrics: RunMetrics): RunMetrics {
+  return { ...metrics, auto_resolutions: metrics.auto_resolutions ?? 0 };
+}
+
 export function updateRunMetricsDriver(runId: string, driverName: string): RunRecord {
   const record = readRunRecord(runId);
-  const metrics = record.metrics ?? fallbackMetrics(record);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
   return updateRunRecord(runId, { metrics: { ...metrics, driver: driverName } });
 }
 
 export function recordDriverTurn(runId: string): RunRecord {
   const record = readRunRecord(runId);
-  const metrics = record.metrics ?? fallbackMetrics(record);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
   return updateRunRecord(runId, { metrics: { ...metrics, turns: metrics.turns + 1 } });
 }
 
 export function recordHumanEscalation(runId: string): RunRecord {
   const record = readRunRecord(runId);
-  const metrics = record.metrics ?? fallbackMetrics(record);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
   return updateRunRecord(runId, { metrics: { ...metrics, escalations: metrics.escalations + 1 } });
+}
+
+export function recordAutoResolution(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
+  return updateRunRecord(runId, {
+    metrics: { ...metrics, auto_resolutions: metrics.auto_resolutions + 1 },
+  });
 }
 
 export function finalizeRunMetrics(runId: string): RunRecord {
   const record = readRunRecord(runId);
-  const metrics = record.metrics ?? fallbackMetrics(record);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
   if (metrics.finalized_at !== undefined && metrics.elapsed_ms !== undefined) return record;
 
   const finalizedAt = new Date().toISOString();
@@ -303,6 +317,7 @@ export function allocateRun(
     metrics: {
       turns: 0,
       escalations: 0,
+      auto_resolutions: 0,
       driver: process.env.MINERVA_DRIVER ?? "spawn",
       started_at: new Date().toISOString(),
     },

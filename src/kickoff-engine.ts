@@ -11,6 +11,7 @@ import {
   normalizeQuestionKind,
   recordDriverTurn,
   recordHumanEscalation,
+  recordAutoResolution,
   updateRunMetricsDriver,
   type Question,
   type Channel,
@@ -237,7 +238,17 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     if (!pending) return; // nothing to answer (shouldn't happen while waiting_on_human, but safe)
 
     const answer = resolveDefaultAnswer(pending, defaults, record.idea ?? "");
-    if (answer === null) return; // no pre-baked default -> genuine human gate; leave it parked
+    if (answer === null) {
+      // An agent-routed question without a matching default is no longer useful on the agent
+      // queue: the driver cannot answer it, so escalate it to the human queue and leave it parked.
+      if (pending.channel === "agent") {
+        const escalatedQuestions = record.questions.map((q) =>
+          q.id === pending.id ? { ...q, channel: "human" as const } : q,
+        );
+        updateRunRecord(runId, { questions: escalatedQuestions, status: "waiting_on_human" });
+      }
+      return;
+    }
 
     if (!record.session_id) return; // no live session to resume against -- cannot drive further
 
@@ -255,8 +266,9 @@ async function autoAnswerLoop(runId: string): Promise<void> {
       prompt: answerPrompt,
     });
     recordDriverTurn(runId);
+    recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
-    recordTurn(runId, raw_result);
+    await recordTurn(runId, raw_result);
     answered++;
   }
   // Guardrail tripped: leave whatever recordTurn last set (waiting_on_human or complete). Bounded,

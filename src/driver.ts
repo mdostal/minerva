@@ -72,6 +72,23 @@ function resolveTurnTimeoutMs(): number {
 }
 const CLAUDE_TIMEOUT_MS = resolveTurnTimeoutMs();
 
+// Goblin PAN-7572 (turn-timeout-SIGKILLs-long-plans-loses-work): a turn that legitimately runs
+// past CLAUDE_TIMEOUT_MS was previously indistinguishable, at the call site, from a genuine
+// crash/malformed-output failure -- both surfaced as a plain Error, so kickoff-engine had no
+// way to tell "this turn just needs another attempt" from "this turn is actually broken" and
+// let a single slow architectural-planning turn destroy the whole run with no resume. Thrown
+// ONLY when spawnRuntime's own timer (not an external SIGINT/SIGTERM) killed the child --
+// kickoff-engine's retry wrapper (runTurnResumable) catches exactly this type.
+export class TurnTimeoutError extends Error {
+  constructor(
+    message: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(message);
+    this.name = "TurnTimeoutError";
+  }
+}
+
 export interface RuntimeRoute {
   cli: string;
   model: string;
@@ -240,7 +257,13 @@ function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], parseOut
 
     let stdout = "";
     let stderr = "";
+    // Distinguishes "we killed our own child because it ran too long" from any other kill
+    // (e.g. killInFlightChild()'s SIGINT/SIGTERM propagation) -- only the former is a retryable
+    // TurnTimeoutError; a real external interrupt must keep surfacing as a plain Error so it
+    // isn't mistaken for a resumable slow turn.
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGKILL");
     }, CLAUDE_TIMEOUT_MS);
 
@@ -261,7 +284,16 @@ function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], parseOut
       clearTimeout(timer);
       if (inFlightChild === child) inFlightChild = null;
       if (signal) {
-        reject(new Error(`${route.cli} was killed by signal ${signal}${stderr ? `: ${stderr}` : ""}`));
+        if (timedOut) {
+          reject(
+            new TurnTimeoutError(
+              `${route.cli} did not complete within ${CLAUDE_TIMEOUT_MS}ms and was killed`,
+              CLAUDE_TIMEOUT_MS,
+            ),
+          );
+        } else {
+          reject(new Error(`${route.cli} was killed by signal ${signal}${stderr ? `: ${stderr}` : ""}`));
+        }
         return;
       }
       if (code !== 0) {

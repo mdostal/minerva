@@ -7,7 +7,7 @@ import { MinervaError } from "./errors.ts";
 import { allocateRun, readRunRecord, updateRunRecord, normalizeQuestionKind, type Question, type Channel, type RunRecord } from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 import { postQuestionToConsusDecisionApi } from "./consus-decisions.ts";
 import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
@@ -43,6 +43,49 @@ export function __setDriverForTest(d: Driver): Driver {
   const prev = driver;
   driver = d;
   return prev;
+}
+
+// Goblin PAN-7572 (turn-timeout-SIGKILLs-long-plans-loses-work): a turn that simply ran longer
+// than MINERVA_TURN_TIMEOUT_MS (a large architectural planning turn is the reported case) used
+// to propagate straight out of startRun/submitAnswers as an uncaught rejection -- the whole run
+// died with no resume, even though the run's own session_id was still perfectly valid to
+// --resume against. MINERVA_TURN_RETRY_LIMIT bounds how many additional attempts a genuinely
+// timed-out turn (TurnTimeoutError specifically -- never a different failure) gets before
+// giving up for real; default 2 (never guess/never silently disable, matching MINERVA_DRIVER's
+// own "fail loudly on an invalid value" pattern). 0 disables retrying entirely.
+const DEFAULT_TURN_RETRY_LIMIT = 2;
+function resolveTurnRetryLimit(): number {
+  const raw = process.env.MINERVA_TURN_RETRY_LIMIT;
+  if (raw === undefined) return DEFAULT_TURN_RETRY_LIMIT;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Invalid MINERVA_TURN_RETRY_LIMIT value "${raw}" -- expected a non-negative integer`,
+    );
+  }
+  return parsed;
+}
+const TURN_RETRY_LIMIT = resolveTurnRetryLimit();
+
+// Every driver.runTurn() call in this file goes through here instead of calling it directly.
+// A TurnTimeoutError means the turn was killed only because it ran long, not because it failed
+// -- the SAME input (crucially, the same sessionId) is still a valid thing to try again: for a
+// non-null sessionId that's a real --resume against the live conversation; for the very first
+// turn (sessionId: null) it's a fresh restart, still strictly better than losing the run
+// outright. Any other error (malformed output, non-zero exit, genuine crash) is never retried
+// here -- it propagates immediately, unchanged, exactly as before this fix.
+async function runTurnResumable(d: Driver, input: DriverInput): Promise<DriverResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= TURN_RETRY_LIMIT; attempt++) {
+    try {
+      return await d.runTurn(input);
+    } catch (e) {
+      if (!(e instanceof TurnTimeoutError)) throw e;
+      lastError = e;
+    }
+  }
+  throw lastError;
 }
 
 // Resolve the driver for a given run. When runner-agnostic planning was selected at startRun
@@ -195,7 +238,7 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result } = await driverForRecord(record).runTurn({
+    const { session_id, raw_result } = await runTurnResumable(driverForRecord(record), {
       cwd: record.workspace_path,
       sessionId: record.session_id,
       prompt: answerPrompt,
@@ -249,7 +292,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
   // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
   const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults);
-  const { session_id: sessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
+  const { session_id: sessionId, raw_result: rawResult } = await runTurnResumable(driver, {
     cwd: record.workspace_path,
     sessionId: null,
     prompt: drivePrompt,
@@ -343,8 +386,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
-
+  const { session_id: newSessionId, raw_result: rawResult } = await runTurnResumable(driverForRecord(record), {
     cwd: record.workspace_path,
     sessionId: record.session_id,
     prompt: answerPrompt,

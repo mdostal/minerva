@@ -39,6 +39,7 @@ import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
 import { listEnvelopes } from "./envelope-detection.ts";
+import { emitTelemetryEvent } from "./telemetry.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_HEIMDALL_URL = "http://127.0.0.1:4870";
@@ -876,7 +877,14 @@ export class ForkedHiveDriver implements Driver {
       skillPrompt + EXPLICIT_STOP_INSTRUCTION,
       pluginDirArgs()
     );
-    await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter), { HIVE_HEADLESS: "1" });
+    emitTelemetryEvent("driver_started", { cwd });
+    try {
+      await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter), { HIVE_HEADLESS: "1" });
+      emitTelemetryEvent("driver_succeeded", { cwd });
+    } catch (err: any) {
+      emitTelemetryEvent("driver_failed", { cwd, error: err.message });
+      throw err;
+    }
     return this.surfaceNextQuestion(cwd, skillPrompt);
   }
 

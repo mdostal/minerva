@@ -7,7 +7,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ForkedHiveDriver, decodeEnvelopePointer, NO_PENDING_SENTINEL } from "./driver.ts";
@@ -15,8 +15,11 @@ import { testHeimdallRouteUrl } from "./test-cli.ts";
 
 const FORK_PATH = "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork";
 let previousRouteUrl: string | undefined;
+let minervaHome: string;
 
 before(() => {
+  minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-real-forked-"));
+  process.env.MINERVA_HOME = minervaHome;
   previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
   process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
   process.env.MINERVA_HIVE_PLUGIN_DIR = FORK_PATH;
@@ -29,6 +32,8 @@ after(() => {
     process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
   }
   delete process.env.MINERVA_HIVE_PLUGIN_DIR;
+  rmSync(minervaHome, { recursive: true, force: true });
+  delete process.env.MINERVA_HOME;
 });
 
 function newScratchWorkspace(): string {
@@ -122,6 +127,66 @@ test("ForkedHiveDriver.runTurn walks a real multi-turn kickoff run, surfacing in
     sameEnvelopeObservedAtLeastOnce,
     `expected at least one interim answer within the same envelope (no new dispatch) across a ${MAX_TURNS}-turn real walk`,
   );
+
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("ForkedHiveDriver.runTurn emits driver_started and driver_succeeded events on success", async () => {
+  const cwd = newScratchWorkspace();
+  const driver = new ForkedHiveDriver();
+
+  await driver.runTurn({
+    cwd,
+    sessionId: null,
+    prompt: "/plugin-hive:kickoff a tiny forked-driver test project",
+  });
+
+  const startedEvents = readFileSync(join(minervaHome, "events", "driver_started.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  assert.ok(startedEvents.some((e) => e.cwd === cwd), "expected a driver_started event for this cwd");
+
+  const succeededEvents = readFileSync(join(minervaHome, "events", "driver_succeeded.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  assert.ok(succeededEvents.some((e) => e.cwd === cwd), "expected a driver_succeeded event for this cwd");
+
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("ForkedHiveDriver.runTurn emits driver_failed on execution failure", async () => {
+  const cwd = newScratchWorkspace();
+  const driver = new ForkedHiveDriver();
+
+  // Passing an invalid cli to force an immediate spawn failure.
+  const oldRoute = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl("model", "this-cli-does-not-exist-for-sure");
+
+  try {
+    await driver.runTurn({
+      cwd,
+      sessionId: null,
+      prompt: "/plugin-hive:kickoff",
+    });
+    assert.fail("Expected runTurn to throw");
+  } catch (err: any) {
+    if (err.name === "AssertionError") throw err; // rethrow assert.fail
+    
+    const failedEvents = readFileSync(join(minervaHome, "events", "driver_failed.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    const evt = failedEvents.find((e) => e.cwd === cwd);
+    assert.ok(evt, "expected a driver_failed event for this cwd");
+    assert.ok(evt.error, "expected driver_failed event to contain error context");
+  } finally {
+    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = oldRoute;
+  }
 
   rmSync(cwd, { recursive: true, force: true });
 });

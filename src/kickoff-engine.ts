@@ -4,7 +4,18 @@
 // "No Autonomous Progress" and AD-2.
 
 import { MinervaError } from "./errors.ts";
-import { allocateRun, readRunRecord, updateRunRecord, normalizeQuestionKind, type Question, type Channel, type RunRecord } from "./run-manager.ts";
+import {
+  allocateRun,
+  readRunRecord,
+  updateRunRecord,
+  normalizeQuestionKind,
+  recordDriverTurn,
+  recordHumanEscalation,
+  updateRunMetricsDriver,
+  type Question,
+  type Channel,
+  type RunRecord,
+} from "./run-manager.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
@@ -243,6 +254,7 @@ async function autoAnswerLoop(runId: string): Promise<void> {
       sessionId: record.session_id,
       prompt: answerPrompt,
     });
+    recordDriverTurn(runId);
     updateRunRecord(runId, { session_id });
     recordTurn(runId, raw_result);
     answered++;
@@ -284,6 +296,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   const planDriver = await resolveAgnosticPlanDriver();
   if (planDriver) {
     updateRunRecord(runId, { plan_runtime: planDriver.runtime, plan_model: planDriver.model });
+    updateRunMetricsDriver(runId, planDriver.runtime);
   }
 
   const record = readRunRecord(runId);
@@ -297,6 +310,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     sessionId: null,
     prompt: drivePrompt,
   });
+  recordDriverTurn(runId);
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
@@ -320,6 +334,9 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
   }
   const record = readRunRecord(runId);
   const questions = record.questions.filter((q) => q.status === "pending" && q.channel === channel);
+  if (channel === "human" && questions.length > 0) {
+    recordHumanEscalation(runId);
+  }
   return { questions };
 }
 
@@ -391,6 +408,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
     sessionId: record.session_id,
     prompt: answerPrompt,
   });
+  recordDriverTurn(runId);
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });

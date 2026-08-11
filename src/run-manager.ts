@@ -20,6 +20,15 @@ export type Channel = "agent" | "human";
 // internal Question type never carries anything outside this set.
 export type QuestionKind = "single-select" | "multi-select" | "free-text";
 
+export interface RunMetrics {
+  turns: number;
+  escalations: number;
+  driver: string;
+  started_at: string;
+  elapsed_ms?: number;
+  finalized_at?: string;
+}
+
 // Never throws, never guesses a channel-like value -- any value outside the three documented
 // kinds defaults to "free-text" (the least-structured, always-safe interpretation). Confirmed
 // necessary empirically: the gateway's own code does not validate `kind`, so a malformed or
@@ -109,6 +118,7 @@ export interface RunRecord {
   // driver behavior.
   plan_runtime?: string;
   plan_model?: string;
+  metrics?: RunMetrics;
 }
 
 function minervaHome(): string {
@@ -162,6 +172,51 @@ export function updateRunRecord(runId: string, patch: Partial<RunRecord>): RunRe
   const record = { ...readRunRecord(runId), ...patch };
   writeRunRecord(record);
   return record;
+}
+
+function fallbackMetrics(record: RunRecord): RunMetrics {
+  return {
+    turns: 0,
+    escalations: 0,
+    driver: record.plan_runtime ?? "spawn",
+    started_at: record.created_at,
+  };
+}
+
+export function updateRunMetricsDriver(runId: string, driverName: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = record.metrics ?? fallbackMetrics(record);
+  return updateRunRecord(runId, { metrics: { ...metrics, driver: driverName } });
+}
+
+export function recordDriverTurn(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = record.metrics ?? fallbackMetrics(record);
+  return updateRunRecord(runId, { metrics: { ...metrics, turns: metrics.turns + 1 } });
+}
+
+export function recordHumanEscalation(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = record.metrics ?? fallbackMetrics(record);
+  return updateRunRecord(runId, { metrics: { ...metrics, escalations: metrics.escalations + 1 } });
+}
+
+export function finalizeRunMetrics(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = record.metrics ?? fallbackMetrics(record);
+  if (metrics.finalized_at !== undefined && metrics.elapsed_ms !== undefined) return record;
+
+  const finalizedAt = new Date().toISOString();
+  const startedMs = Date.parse(metrics.started_at);
+  const finalizedMs = Date.parse(finalizedAt);
+  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, finalizedMs - startedMs) : 0;
+  return updateRunRecord(runId, {
+    metrics: {
+      ...metrics,
+      elapsed_ms: elapsedMs,
+      finalized_at: finalizedAt,
+    },
+  });
 }
 
 function allocateWorktreeWorkspace(targetRepo: string, runId: string, workspacePath: string): void {
@@ -245,6 +300,12 @@ export function allocateRun(
     baseline_epic_ids: baselineEpicIds,
     idea,
     defaults,
+    metrics: {
+      turns: 0,
+      escalations: 0,
+      driver: process.env.MINERVA_DRIVER ?? "spawn",
+      started_at: new Date().toISOString(),
+    },
     // Persist the resolved repo only for worktree workspaces -- a fresh_init scratch has no real
     // repo to record, and its absence is what output-emitter's push step keys off (PAN-6745).
     ...(workspaceKind === "worktree" && targetRepo ? { target_repo: targetRepo, repo_source: repoSource } : {}),

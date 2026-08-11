@@ -79,7 +79,7 @@ test("resolveRuntimeRoute GETs /available-route and returns the routed CLI/model
     });
 
     assert.deepEqual(route, { cli: "opencode", model: "gemini-2.5-pro" });
-    assert.deepEqual(calls, ["GET http://heimdall.local:9999/available-route?task-type=planning"]);
+    assert.deepEqual(calls, ["GET http://heimdall.local:9999/available-route?task-type=kickoff"]);
   } finally {
     if (previous === undefined) {
       delete process.env.MINERVA_HEIMDALL_URL;

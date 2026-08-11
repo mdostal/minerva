@@ -16,7 +16,7 @@
 // planning NEVER breaks on an unavailable route or port.
 
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
@@ -32,14 +32,37 @@ export interface PlanningRoute {
 
 /** Candidate locations for the ported CLI; env override wins. First existing path is used. */
 export function agnosticPlanCliPath(): string | null {
+  // Resolve every hit to its REAL path (following symlinks). The ported CLI guards its main()
+  // on `fileURLToPath(import.meta.url) === process.argv[1]`. Node resolves import.meta.url
+  // THROUGH symlinks, but process.argv[1] keeps whatever path we spawn it with, so invoking the
+  // CLI via a symlinked directory (this host's ~/code -> ~/Documents/work/dostal/code) makes
+  // that guard FALSE: main() never runs, the CLI exits 0 with empty stdout, no .pHive plan is
+  // written, and the run parks with 0 stories. Canonicalizing here makes the spawned argv[1] the
+  // realpath, so the guard holds and the planner actually runs.
+  const canon = (p: string): string | null => {
+    if (!existsSync(p)) return null;
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
   const override = process.env.HIVE_PLAN_AGNOSTIC_CLI;
-  if (override) return existsSync(override) ? override : null;
+  if (override) return canon(override);
   const candidates = [
+    // plugin-hive-fork-dev is where the merged agnostic-planning port actually lives on this
+    // host; plugin-hive-fork carries the branch but its working tree has hive/agnostic empty.
+    join(homedir(), "code", "plugin-hive-fork-dev", "hive", "agnostic", "plan-agnostic.mjs"),
+    join(homedir(), "Code", "plugin-hive-fork-dev", "hive", "agnostic", "plan-agnostic.mjs"),
     join(homedir(), "code", "plugin-hive-fork", "hive", "agnostic", "plan-agnostic.mjs"),
     join(homedir(), "Code", "plugin-hive-fork", "hive", "agnostic", "plan-agnostic.mjs"),
     join(homedir(), ".claude", "plugins", "plugin-hive", "hive", "agnostic", "plan-agnostic.mjs"),
   ];
-  return candidates.find((p) => existsSync(p)) ?? null;
+  for (const p of candidates) {
+    const r = canon(p);
+    if (r) return r;
+  }
+  return null;
 }
 
 function opencodeAvailable(): boolean {

@@ -19,7 +19,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { Driver, DriverInput, DriverResult } from "./driver.ts";
+import { TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 
 function getHeimdallUrl() {
   return process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? "http://localhost:4870";
@@ -136,7 +136,14 @@ export class AgnosticPlanDriver implements Driver {
       const child = spawn(process.execPath, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
       let out = "";
       let err = "";
-      const timer = setTimeout(() => child.kill("SIGKILL"), TURN_TIMEOUT_MS);
+      // See driver.ts's TurnTimeoutError -- same "our own timer, not an external signal" flag
+      // so a turn that just ran long (goblin PAN-7572) is retryable, distinct from a genuine
+      // crash.
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, TURN_TIMEOUT_MS);
       child.stdout.on("data", (d) => (out += d));
       child.stderr.on("data", (d) => (err += d));
       child.on("error", (e) => {
@@ -145,7 +152,12 @@ export class AgnosticPlanDriver implements Driver {
       });
       child.on("exit", (code, signal) => {
         clearTimeout(timer);
-        if (signal) return reject(new Error(`plan-agnostic killed by ${signal}${err ? `: ${err.slice(-500)}` : ""}`));
+        if (signal) {
+          if (timedOut) {
+            return reject(new TurnTimeoutError(`plan-agnostic did not complete within ${TURN_TIMEOUT_MS}ms and was killed`, TURN_TIMEOUT_MS));
+          }
+          return reject(new Error(`plan-agnostic killed by ${signal}${err ? `: ${err.slice(-500)}` : ""}`));
+        }
         if (code !== 0) return reject(new Error(`plan-agnostic exited ${code}${err ? `: ${err.slice(-500)}` : ""}`));
         resolve(out);
       });

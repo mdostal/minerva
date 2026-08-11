@@ -19,6 +19,15 @@ test("ClaudeAdapter keeps the claude-native noninteractive JSON schema flags", (
   assert.equal(args.at(-1), "Ask one question");
 });
 
+test("ClaudeAdapter parses Claude JSON stdout into a TurnResult", () => {
+  const result = new ClaudeAdapter().parseTurnResult(
+    JSON.stringify({ session_id: "claude-session", result: "What fruit?" }),
+  );
+
+  assert.equal(result.session_id, "claude-session");
+  assert.equal(result.result, "What fruit?");
+});
+
 test("OpencodeAdapter uses opencode run JSON mode and does not forward claude-only flags", () => {
   const args = new OpencodeAdapter().formatTurnArgs("google/gemini-2.5-pro", "sess-123", "Ask one question", SCHEMA_ARGS);
 

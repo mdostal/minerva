@@ -1,0 +1,76 @@
+name: core-team
+description: >
+  Backend-only team for Minerva -- a headless TypeScript subprocess ABI with no
+  frontend/mobile surface. Single flat src/ module, near-1:1 test coverage,
+  strict TDD discipline.
+lead: team-lead
+methodology: tdd  # from hive.config.yaml -> execution.default_methodology
+
+members:
+  - agent: backend-developer
+    role: Driver/dispatch/plan-runner implementation
+    domain:
+      - path: src/**
+        read: true
+        write: true
+        delete: false
+      - path: bin/**
+        read: true
+        write: true
+        delete: false
+
+  - agent: tester
+    role: Test authoring and execution (co-located node:test suite)
+    domain:
+      - path: "**/*.test.ts"
+        read: true
+        write: true
+        delete: false
+      - path: src/test-cli.ts
+        read: true
+        write: true
+        delete: false
+
+  - agent: reviewer
+    role: Code review
+    tool_access: [codex]
+
+  - agent: architect
+    role: Driver-abstraction and dispatch-contract decisions
+    # no domain override -- read-only everywhere by default
+
+  - agent: technical-writer
+    role: Keep README.md / VISION.md / docs/architecture.md in sync with the ABI
+    domain:
+      - path: docs/**
+        read: true
+        write: true
+        delete: false
+      - path: README.md
+        read: true
+        write: true
+        delete: false
+      - path: VISION.md
+        read: true
+        write: true
+        delete: false
+
+context:
+  tech_stack:
+    language: typescript
+    runtime: "node >=20.19"
+    test_runner: "node:test (via tsx --test)"
+    package_manager: npm
+  lint_commands: []  # no linter/formatter configured yet -- npm run ci (test + typecheck) is the gate
+  commit_granularity: feature-scoped
+  pr_style: single-commit
+  review_depth: thorough
+  notes: |
+    Generated from re-kickoff discovery (2026-08-13).
+    - No daemon: every dispatch is a fresh process; state lives on the filesystem under ~/.minerva/runs.
+    - Fail-loud discipline: invalid config (MINERVA_DRIVER, MINERVA_TURN_TIMEOUT_MS) throws, never silently defaults.
+    - Tests spawn real subprocesses -- run with --test-concurrency=1 --test-force-exit; no mocking library, exercises real subprocess/filesystem behavior via src/test-cli.ts.
+    - No lint/format/pre-commit tooling yet -- tsc --strict + tests are the only quality gate.
+    - ForkedHiveDriver is an intentional stub pending plugin-hive-fork.
+
+team_memory_path: .pHive/team-memories/core-team/

@@ -116,7 +116,7 @@ items:
     state_history:
       - { state: inbox, at: "2026-08-14T04:05:17Z" }
   - id: t-003
-    state: prioritized
+    state: plan-ready
     kind: bug
     title: "startRun (default SpawnDriver) fails end-to-end in a stock environment -- non-fail-open Heimdall call + task-type mismatch"
     description: |
@@ -176,11 +176,16 @@ items:
     priority: p0
     severity: critical
     assignee: null
-    linked_epic: null
-    linked_story: null
+    linked_epic: fix-startrun-heimdall-routing
+    linked_story:
+      - fix-heimdall-route-fail-fast-with-fallback
+      - add-upstream-error-code
+      - auto-cleanup-orphaned-runs-on-first-turn-failure
+      - fix-heimdall-task-type-value
     closed_reason: null
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-14T04:17:00Z" }
       - { state: clarified, at: "2026-08-14T04:33:46Z" }
       - { state: prioritized, at: "2026-08-14T04:33:46Z" }
+      - { state: plan-ready, at: "2026-08-14T05:00:24Z" }

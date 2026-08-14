@@ -1,0 +1,142 @@
+id: add-driver-fallback-observability
+epic: minerva-value-audit
+title: Make Minerva's two silent driver-fallback paths loudly observable
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+parallel_allowed: true
+parallel_rationale: bounded-slice
+files_to_modify:
+  - file: src/agnostic-plan-driver.ts
+    change: "emit a structured WARN-level stderr log line (JSON, one line) whenever agnosticPlanCliPath() resolves to null inside resolveAgnosticPlanDriver(), naming which candidate paths were checked"
+  - file: src/driver.ts
+    change: "emit a structured WARN-level stderr log line whenever ForkedHiveDriver.surfaceNextQuestion() falls through to the NO_PENDING_SENTINEL zero-envelopes case, distinguishing 'run legitimately complete' from 'no envelope was ever written because MINERVA_HIVE_PLUGIN_DIR is unset against a pre-#341 plugin-hive install'"
+  - file: src/agnostic-plan-driver.test.ts
+    change: add a test asserting the WARN log fires when all candidate paths are absent
+  - file: src/driver.test.ts
+    change: add a test asserting the WARN log fires on the zero-envelopes NO_PENDING_SENTINEL path
+
+description: |
+  Two silent-failure paths were found during this epic's research and confirmed by direct source
+  review (design-discussion.md §4, architect collaborative review):
+
+  1. `agnosticPlanCliPath()` in src/agnostic-plan-driver.ts returns `null` when none of its five
+     candidate paths exist, and `resolveAgnosticPlanDriver()` silently falls back to the built-in
+     claude SpawnDriver with no error surfaced. PAN-7734 (already fixed on this branch) confirmed
+     this was a real production bug that starved a build lane before anyone noticed.
+  2. `ForkedHiveDriver.surfaceNextQuestion()` (src/driver.ts) falls through to the
+     `NO_PENDING_SENTINEL` "run may be complete" placeholder both when a run legitimately finished
+     AND when no envelope was ever written because `MINERVA_HIVE_PLUGIN_DIR` is unset against a
+     plugin-hive install that predates PR #341 — these two cases are indistinguishable today.
+
+  Add a single-line, structured (JSON) WARN-level log to stderr for each case, so a real
+  deployment can `grep` or alert on these instead of the failure being invisible. Do NOT change
+  behavior otherwise — both paths must continue to degrade gracefully (fall back / surface the
+  placeholder) exactly as today; this story only adds visibility, not new control flow.
+
+  DO NOT: change the fallback behavior itself, add a new config flag to disable the fallback, or
+  touch any of the three ClaudeAdapter/OpencodeAdapter/CodexAdapter classes (out of scope — this
+  story is observability-only on the two specific silent paths named above).
+
+acceptance_criteria:
+  - "Given all five agnosticPlanCliPath() candidates are absent, when resolveAgnosticPlanDriver() runs, then exactly one WARN-level JSON line is written to stderr naming the checked candidate paths, and the function still returns null (fallback behavior unchanged)"
+  - "Given ForkedHiveDriver.surfaceNextQuestion() finds zero pending envelopes, when it returns the NO_PENDING_SENTINEL result, then exactly one WARN-level JSON line is written to stderr, and the returned DriverResult is unchanged from today's shape"
+  - "Given npm test, when run, then both new tests pass alongside all existing tests (no regressions)"
+  - "Given npm run typecheck, when run, then it passes with zero errors"
+
+metric:
+  applies: true
+  name: driver.fallback_visibility_events_logged
+  direction: up
+  unit: count
+  baseline: 0
+  target: 1
+  window: "story integrate step"
+  source:
+    kind: manual
+    ref: "Run `npm test -- src/agnostic-plan-driver.test.ts src/driver.test.ts` and confirm the two new WARN-log assertions pass (i.e. exactly one structured log line fires per fallback path, where zero fired before this story)"
+  verify_at: "story integrate step"
+  owner: developer
+
+steps:
+  - id: research
+    description: Read agnosticPlanCliPath()/resolveAgnosticPlanDriver() in src/agnostic-plan-driver.ts and surfaceNextQuestion() in src/driver.ts to confirm exact insertion points; check whether any existing logging utility/convention exists elsewhere in src/ to reuse instead of inventing a new one.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests first: (1) in src/agnostic-plan-driver.test.ts, a test that stubs/removes
+      all candidate paths and asserts a WARN log line is captured on stderr; (2) in src/driver.test.ts,
+      a test that drives ForkedHiveDriver to the zero-envelopes NO_PENDING_SENTINEL path and asserts
+      a WARN log line is captured. Do NOT read the implementation to write these — derive expected
+      behavior from the acceptance criteria above.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the two structured WARN-log lines to make the failing tests pass. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the log lines are genuinely structured/greppable (not free-text prose), confirm fallback behavior is byte-identical to before this story, confirm no scope creep into the adapter classes.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  tech_stack:
+    language: typescript
+    test_runner: "node:test via tsx --test"
+  key_files:
+    - path: src/agnostic-plan-driver.ts
+      purpose: "agnosticPlanCliPath() (~line 36) and resolveAgnosticPlanDriver() (~line 108) — the silent-null fallback path"
+    - path: src/driver.ts
+      purpose: "ForkedHiveDriver.surfaceNextQuestion() (~line 890-925) — the NO_PENDING_SENTINEL zero-envelopes path; NO_PENDING_SENTINEL constant at line 803"
+    - path: src/agnostic-plan-driver.test.ts
+      purpose: "Existing hermetic test pattern (fake CLI via mkdtempSync, no network/real runtime) — follow this pattern for the new test"
+
+code_examples:
+  - title: Existing hermetic test pattern to follow (no real subprocess spawning)
+    file: src/agnostic-plan-driver.test.ts
+    snippet: |
+      // A fake plan-agnostic CLI: writes its argv to $FAKE_ARGV_OUT, prints the canned result line.
+      function writeFakeCli(): { cliPath: string; argvOut: string } {
+        const dir = mkdtempSync(join(tmpdir(), "agnostic-cli-"));
+        const cliPath = join(dir, "fake-plan-agnostic.mjs");
+        ...
+      }
+  - title: The exact silent-null site to instrument
+    file: src/agnostic-plan-driver.ts
+    snippet: |
+      export function agnosticPlanCliPath(): string | null {
+        // ... canon() helper checks each candidate ...
+        for (const p of candidates) {
+          const r = canon(p);
+          if (r) return r;
+        }
+        return null;  // <-- WARN log goes here, naming which candidates were checked
+      }
+
+design_decisions:
+  - decision: Log to stderr as a single structured JSON line, not a new metrics-events JSONL file under .pHive/metrics/events/
+    rationale: This project has no existing metrics-events writer in src/ (that's a Hive-plugin-side concept, not wired into Minerva's own runtime); stderr is the lowest-friction, zero-new-dependency way to make these two paths greppable/alertable in whatever harness runs Minerva, consistent with the project's existing "fail loud, never guess" discipline (see .pHive/CONTEXT.md conventions)
+
+cross_cutting:
+  - concern: documentation
+    action: "No doc changes needed — this is pure code observability; the dependency itself is documented separately in document-pr341-production-dependency"
+
+risks:
+  - severity: low
+    description: A poorly-worded log line could be mistaken for an actual error and page someone unnecessarily
+    mitigation: Use WARN level (not ERROR), and word the message to say "falling back" / "no envelope found" rather than implying a crash
+
+references:
+  - path: .pHive/epics/minerva-value-audit/docs/design-discussion.md
+    relevant_excerpt: |
+      §4 (architect-added nuance): "running with MINERVA_HIVE_PLUGIN_DIR unset against a real
+      marketplace-installed plugin-hive that predates #341 doesn't error at all... looks exactly
+      like success while silently never pausing for a single question."

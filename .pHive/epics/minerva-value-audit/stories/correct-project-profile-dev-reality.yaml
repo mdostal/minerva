@@ -1,0 +1,93 @@
+id: correct-project-profile-dev-reality
+epic: minerva-value-audit
+title: Correct project-profile.yaml's stale ForkedHiveDriver/north_star claims to match dev
+status: pending
+complexity: low
+methodology: classic
+depends_on: [document-pr341-production-dependency, add-driver-fallback-observability]
+
+description: |
+  .pHive/project-profile.yaml was written by kickoff against `main`, and still describes
+  ForkedHiveDriver as "an intentional stub, throws until plugin-hive-fork exists" — false as of
+  this epic's research: it's fully implemented on `dev`, e2e-tested (PAN-8613/PAN-8619), and is
+  Minerva's own working client of plugin-hive PR #341's protocol.
+
+  Update project-profile.yaml:
+  1. `code_quality.code_snippets` / wherever ForkedHiveDriver is described as a stub — correct to
+     reflect its real, implemented state, citing PAN-7734 and PAN-8613/8616/8619.
+  2. `north_star.pain_points` / `north_star.goal` — the line referencing "plugin-hive itself is
+     gaining native agnostic pause/resume" should be sharpened per this epic's finding: it's not
+     one unified capability, it's three unrelated efforts at three maturities (per design-
+     discussion.md §2), and Minerva's own ForkedHiveDriver is a working client of one of them
+     (PR #341), not a bystander waiting on all three.
+  3. Add a pointer to `docs/decisions/002-pr341-production-dependency.md` (produced by the
+     document-pr341-production-dependency story this depends on) so future kickoff/plan runs
+     surface the dependency without re-deriving it.
+  4. Reference the new fallback-visibility logging (from add-driver-fallback-observability) in the
+     integrations/code_quality notes, since "silent fallback" language elsewhere in the profile is
+     now stale once that story lands.
+
+  This story depends on both prior stories precisely because it describes their output — if it
+  ran first or in parallel, it would describe a "corrected" state that's still incomplete
+  (flagged by TPM in collaborative review; see design-discussion.md's story sequencing note).
+
+acceptance_criteria:
+  - "Given .pHive/project-profile.yaml, when read after this story, then no text describes ForkedHiveDriver as a stub, an intentional stub, or 'throws until plugin-hive-fork exists'"
+  - "Given .pHive/project-profile.yaml, when read after this story, then the north_star section distinguishes the three separate plugin-hive efforts (PR #341, fork runner-dispatch PRs, DAG-executor pause) rather than referring to a single undifferentiated 'plugin-hive gaining agnostic pause/resume'"
+  - "Given .pHive/project-profile.yaml, when parsed, then it remains valid YAML (python3 -c \"import yaml; yaml.safe_load(open('.pHive/project-profile.yaml'))\" exits 0)"
+  - "Given .pHive/project-profile.yaml, when read, then it references docs/decisions/002-pr341-production-dependency.md"
+
+metric:
+  applies: false
+  justification: "Pure config-correction story; the profile's accuracy isn't independently measurable beyond the acceptance criteria above (a one-time factual correction, not a trend)."
+
+steps:
+  - id: research
+    description: Read the current .pHive/project-profile.yaml sections referencing ForkedHiveDriver/north_star, and the two dependency stories' actual output (docs/decisions/002-pr341-production-dependency.md, the new log messages in src/driver.ts and src/agnostic-plan-driver.ts) to ensure the correction matches what actually shipped, not what was planned.
+    agent: researcher
+  - id: implement
+    description: Edit .pHive/project-profile.yaml per the description above.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Validate YAML parses; grep-confirm the stub language is gone and the new decision-doc reference is present.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm the corrected text accurately reflects dev's actual state (not overclaiming beyond what document-pr341-production-dependency and add-driver-fallback-observability actually shipped).
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  tech_stack:
+    language: yaml
+  key_files:
+    - path: .pHive/project-profile.yaml
+      purpose: "The file being corrected — see north_star block and code_quality.code_snippets sections"
+    - path: docs/decisions/002-pr341-production-dependency.md
+      purpose: "Produced by document-pr341-production-dependency — link to this rather than re-deriving its content"
+
+design_decisions:
+  - decision: Link to the decision doc rather than inlining its full content into project-profile.yaml
+    rationale: project-profile.yaml is meant to be a compact, scannable profile (per kickoff-protocol.md's own template) — the decision doc is the source of truth, the profile just needs to point at it and not describe the dependency as resolved when it isn't
+
+cross_cutting:
+  - concern: documentation
+    action: "This story corrects existing documentation (project-profile.yaml) to match shipped reality — satisfies the concern directly"
+
+risks:
+  - severity: low
+    description: If this story lands before its two dependencies actually merge, it will describe artifacts that don't exist yet
+    mitigation: "depends_on enforces the correct order; do not start this story's implement step until both dependency stories are integrated"
+
+references:
+  - path: .pHive/epics/minerva-value-audit/docs/design-discussion.md
+    relevant_excerpt: |
+      Story sequencing note: "The north_star/project-profile.yaml correction depends on the PR #341
+      production-path dependency being documented first (or in the same story) -- otherwise it
+      ships an incomplete 'corrected' claim and needs immediate rework."

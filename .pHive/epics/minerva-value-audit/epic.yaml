@@ -1,0 +1,46 @@
+name: minerva-value-audit
+title: "Minerva Value Audit vs. plugin-hive's Runner-Agnostic Work"
+description: >
+  Investigate whether plugin-hive's own runner-agnostic / headless pause-resume capabilities
+  (canonical firefly-events/plugin-hive, mdostal's fork, and PRs sent back upstream) already
+  replace Minerva's value, and determine what Minerva's value proposition actually is now.
+  Concludes: don't deprecate, don't broaden -- narrow and get precise. Minerva's runtime-dispatch
+  layer is independent invention; its question/pause/envelope layer (ForkedHiveDriver) is a
+  working, tested client of plugin-hive PR #341's own protocol, not independent of it. Follow-on
+  stories correct stale documentation, add observability for two silent-failure paths, and
+  resolve one remaining open architectural question.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: tdd
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture]
+  roster: [researcher, technical-writer, tpm, architect]
+  per_tag_reasoning:
+    architecture: "Requirement is a cross-system architectural comparison (Minerva vs plugin-hive's own agnostic-driver capabilities) and a decision about Minerva's continued architectural role/value in the agentic pipeline."
+  confidence: matched
+  gate_decisions:
+    architecture: included
+
+stories:
+  - id: document-pr341-production-dependency
+    title: Document ForkedHiveDriver's production dependency on plugin-hive PR #341
+    complexity: low
+    depends_on: []
+  - id: add-driver-fallback-observability
+    title: Make Minerva's two silent driver-fallback paths loudly observable
+    complexity: medium
+    depends_on: []
+  - id: correct-project-profile-dev-reality
+    title: Correct project-profile.yaml's stale ForkedHiveDriver/north_star claims to match dev
+    complexity: low
+    depends_on: [document-pr341-production-dependency, add-driver-fallback-observability]
+  - id: resolve-plan-agnostic-architecture-question
+    title: Resolve whether plan-agnostic.mjs substitutes for Minerva's full plan-flow loop
+    complexity: low
+    depends_on: [document-pr341-production-dependency]

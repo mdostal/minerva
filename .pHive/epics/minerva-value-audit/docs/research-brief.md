@@ -163,6 +163,31 @@ driver code path may not be exercising in practice today.
 - Maintainer sentiment on PR #341 was not checked outside GitHub PR comments (no issue-tracker or
   external discussion channel was consulted).
 
+## Correction (post-draft, before grill) — this research was conducted against a stale branch
+
+This brief and its findings above were produced against Minerva's `main` branch. Mid-draft, during `/plan`'s Phase 0 branch setup, it was
+discovered that `origin/dev` — Minerva's actual working branch per `.pHive/CONTEXT.md`'s explicit convention ("dev = the default working
+branch... never branch off main directly") — is **20 commits ahead of `main`**. Two of those commits materially overturn findings above:
+
+- **`4298ec8` ("PAN-7734: fix agnostic PLAN driver never selected", 2026-08-11)** fixes exactly the reachability gap this brief's Risks
+  section flagged (`agnosticPlanCliPath()` resolving to `null` on all three candidate paths). The commit confirms the bug was real and had
+  real production impact ("delivery epics... never decomposed into child build stories and the build lane starved"), diagnoses two stacked
+  root causes (a missing candidate path for the actual checkout name used on the deployment host, plus a symlink-vs-realpath bug in the
+  ported CLI's `main()` guard), and documents production verification on a "hive" host: a real ticket run routes through Heimdall to Gemini
+  and files child stories to Multica with 0 errors. **This brief's Risk "Minerva's bulletproof claude fallback is likely always triggering
+  silently today" is confirmed-then-resolved, not evergreen** — it was true, it was a real bug, and it's fixed on `dev` (though the fix's
+  candidate-path list still wouldn't resolve on this brief's own research machine, which uses a different local checkout name).
+- **`ForkedHiveDriver` (`src/driver.ts`) is fully implemented on `dev`**, not a stub. It provides `dispatchFresh()` (runtime-agnostic via an
+  adapter pattern), `answerAndContinue()` (writes an answer onto a pending `.pHive/questions/*.yaml` envelope and re-dispatches the original
+  skill prompt), and `surfaceNextQuestion()` (extracts/classifies the next unanswered question) — a working, e2e-tested
+  (`PAN-8613`/`PAN-8619`), cold-start-tolerant pause/resume mechanism whose `session_id` encodes an envelope pointer rather than a live
+  process handle. This was not surfaced in the original research because `main` (where this brief's code reading was done) still has the
+  old stub.
+
+Neither correction was in scope to re-derive the entire brief from `dev` — see the design-discussion document (`design-discussion.md`) for
+how these corrections were folded into the analysis in place. Treat the Summary, Constraints, and Risks sections above as accurate
+descriptions of `main`'s state as of 2026-08-13, not of Minerva's actual current (`dev`) state.
+
 ## Recommendation (synthesis — not sourced from raw findings, interpretation only)
 
 Based strictly on the maturity/scope gaps documented above: none of plugin-hive's three

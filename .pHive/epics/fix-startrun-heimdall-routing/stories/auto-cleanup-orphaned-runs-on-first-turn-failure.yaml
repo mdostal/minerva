@@ -1,0 +1,115 @@
+id: auto-cleanup-orphaned-runs-on-first-turn-failure
+epic: fix-startrun-heimdall-routing
+title: Transition a run to aborted automatically when its first drive turn fails
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [fix-heimdall-route-fail-fast-with-fallback]
+
+description: |
+  `allocateRun()` (src/run-manager.ts:281-330) durably writes the run record (status: "in_progress")
+  and creates the workspace/worktree BEFORE `startRun()` (kickoff-engine.ts:278-336) attempts its
+  first drive turn at line 320. No try/catch wraps that turn call, so when it throws (e.g. the
+  Heimdall routing failure this epic is fixing), the run is left permanently stuck at
+  `status: "in_progress"` with no automatic transition, no ledger entry. Confirmed live: 7 orphaned
+  runs accumulated in one sub-agent's scratch MINERVA_HOME during this epic's own diagnostic testing.
+
+  This story depends on `fix-heimdall-route-fail-fast-with-fallback` because it needs that story's
+  typed error to distinguish "first-turn infra failure" (this story's concern) from other failure
+  shapes cleanly.
+
+  Wrap the first `runTurnResumable()` call in `startRun()` (kickoff-engine.ts:320) in a try/catch.
+  On failure, call the existing `abortRun()`/`recordCleanup()` mechanism (src/cleanup-ledger.ts:43-77)
+  to transition the run to `aborted` and record exactly one `CleanupLedgerRecord` + one
+  `cleanup_needed` event -- this mechanism is idempotent and AD-4-compliant (record + signal only,
+  never deletes `workspace_path`/`state_path`) by construction, so this story does not need to
+  implement any new cleanup mechanism, only wire the existing one in. After marking the run
+  aborted, `startRun()` must still surface the original error to the caller (re-throw or return a
+  structured failure) -- the caller must learn the run failed, not just get silence.
+
+  This is a deliberate, narrow, and explicitly-justified exception to `docs/architecture.md`'s
+  "No Autonomous Progress" principle and the API Contract table's framing of `abortRun` as an
+  "Explicit cleanup trigger": an orphaned run (one whose first turn never got far enough to reach
+  `waiting_on_human` or surface any question) has no human-facing state to preserve, so terminating
+  it is not the kind of autonomous forward-advancement those principles guard against -- it happens
+  synchronously inside the same `startRun()` call that failed, not on a later autonomous tick. This
+  is distinct from AD-5's "stall" invariant, which governs a run that DID reach `waiting_on_human`
+  and must never auto-resolve into a guessed answer -- an orphan never reached that state, so there
+  is no stall being auto-resolved.
+
+  DO NOT: apply this same auto-cleanup logic to a run that reached `waiting_on_human` and is now
+  "stalled" -- that case is explicitly out of scope and protected by AD-5; this story's cleanup
+  hook must only fire for a failure during the FIRST turn, before any question has ever been
+  surfaced. DO NOT: change abortRun()/recordCleanup()'s own implementation -- use them as-is.
+
+acceptance_criteria:
+  - "Given startRun()'s first drive turn throws (any error, not just Heimdall-specific), when the failure occurs, then the run's status transitions to 'aborted' via abortRun()/recordCleanup(), exactly one CleanupLedgerRecord and one cleanup_needed event are written, and the caller still receives an error (not silence)"
+  - "Given a run that successfully reaches waiting_on_human (a real question was surfaced) and later experiences some other failure, when that happens, then this story's new auto-cleanup hook does NOT fire -- only first-turn failures before any question is surfaced are covered"
+  - "Given abortRun()/recordCleanup() is called twice on the same now-aborted run (idempotency), when tested, then it does not double-append the ledger -- confirm existing idempotency behavior still holds through this new call path"
+  - "Given AD-4, when the workspace/worktree created by allocateWorktreeWorkspace() is checked after an auto-cleanup, then it still exists on disk -- nothing was deleted, only recorded and signaled"
+  - "Given npx tsc --noEmit, when run, then it passes with zero errors"
+
+metric:
+  applies: true
+  name: run_manager.orphaned_runs_auto_aborted
+  direction: up
+  unit: bool
+  baseline: 0
+  target: 1
+  window: "story integrate step"
+  source:
+    kind: manual
+    ref: "Trigger a first-turn failure (e.g. via a test double forcing resolveRuntimeRoute() to throw) and confirm getRunStatus reports status: aborted rather than a permanently stuck in_progress"
+  verify_at: "story integrate step"
+  owner: developer
+
+steps:
+  - id: research
+    description: Read src/kickoff-engine.ts's startRun() (278-336, especially the allocateRun() call at 299 and runTurnResumable() call at 320), src/cleanup-ledger.ts's abortRun()/recordCleanup() (1-5, 43-77) and their idempotency guarantee, and docs/architecture.md's "No Autonomous Progress" section and AD-4/AD-5 to confirm the orphan-vs-stall distinction before implementing.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the acceptance criteria above -- first-turn failure triggers auto-abort with exactly one ledger record, a later-stage failure after waiting_on_human does NOT trigger this new path, idempotency holds, workspace is never deleted.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Wrap startRun()'s first runTurnResumable() call in try/catch; on failure, call abortRun()/recordCleanup() then re-surface the original error to the caller. Do not modify cleanup-ledger.ts.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the hook fires ONLY on first-turn failure (not on stalled/waiting_on_human runs), confirm AD-4 compliance (nothing deleted), confirm the caller still receives the original error after cleanup, confirm cleanup-ledger.ts itself was not modified.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/kickoff-engine.ts
+      purpose: "startRun() (278-336) is the fix target -- wrap the first runTurnResumable() call at line 320"
+    - path: src/cleanup-ledger.ts
+      purpose: "abortRun()/recordCleanup() (43-77) is the existing, unmodified mechanism to call -- idempotent, AD-4-compliant by construction"
+    - path: docs/architecture.md
+      purpose: "'No Autonomous Progress' section and the abortRun API Contract table entry ('Explicit cleanup trigger') -- this story's exception must be reasoned against these explicitly, per grill finding C1"
+
+design_decisions:
+  - decision: Auto-invoke abortRun/recordCleanup rather than leaving the orphan for a human to manually call abortRun
+    rationale: "Leaving it for manual cleanup doesn't fix the gap, just documents it -- the mechanism already exists specifically for this kind of situation (design-discussion.md §3d)"
+  - decision: Treat first-turn-failure auto-cleanup as a narrow, explicitly-justified exception to 'No Autonomous Progress' / 'Explicit cleanup trigger', not a violation of it
+    rationale: "An orphan has no human-facing state to preserve and terminating it is not forward-advancement (it happens synchronously inside the same failed call, not an autonomous later tick) -- distinct in kind from AD-5's stall invariant, which governs a run that DID reach waiting_on_human (design-discussion.md §3d, resolving grill findings H2 and C1)"
+
+risks:
+  - severity: medium
+    description: An implementer could accidentally widen the auto-cleanup hook to also fire on later-stage failures (e.g. a submitAnswers failure on an already-stalled run), which WOULD violate AD-5
+    mitigation: Acceptance criteria explicitly test that the hook does NOT fire once a run has reached waiting_on_human; reviewer step must verify this boundary specifically
+
+references:
+  - path: .pHive/epics/fix-startrun-heimdall-routing/docs/design-discussion.md
+    relevant_excerpt: |
+      §3(d): "Transitioning an orphan to aborted doesn't auto-resolve a stall, because there was
+      never a stall to resolve... auto-invoking abortRun/recordCleanup() from inside startRun()
+      looks, on its face, like the internal auto-advancement [No Autonomous Progress] rules out.
+      But... terminating it is not forward motion; it happens synchronously inside the same
+      startRun() call that failed, not on a later autonomous tick."

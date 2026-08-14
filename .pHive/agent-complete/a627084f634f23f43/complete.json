@@ -1,0 +1,16 @@
+{
+  "agent_id": "a627084f634f23f43",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a627084f634f23f43.jsonl",
+  "last_assistant_message": "Grepping docs for dead Consus flags",
+  "prompt_id": "2e893b4a-f732-4c99-a95d-68cf593db868",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T16:08:31Z"
+}

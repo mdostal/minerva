@@ -1,0 +1,16 @@
+{
+  "agent_id": "a169ff4d19be581a8",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a169ff4d19be581a8.jsonl",
+  "last_assistant_message": "Reading grill-record.md for context",
+  "prompt_id": "fdabad16-6b31-447c-94ca-1fd1d0c8b2c9",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T15:08:38Z"
+}

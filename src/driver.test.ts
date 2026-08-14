@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { SpawnDriver } from "./driver.ts";
+import { SpawnDriver, ForkedHiveDriver, NO_PENDING_SENTINEL, type DriverResult } from "./driver.ts";
 import { testHeimdallRouteUrl } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -120,4 +120,48 @@ test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude chi
   await new Promise((resolve) => setTimeout(resolve, 1000));
   const psOut = execFileSync("ps", ["aux"], { encoding: "utf8" });
   assert.doesNotMatch(psOut, new RegExp(marker), "expected no orphaned claude process after SIGINT");
+});
+
+test("ForkedHiveDriver.surfaceNextQuestion logs exactly one structured WARN line to stderr when zero pending envelopes exist, and DriverResult shape is unchanged", async () => {
+  // No .pHive/questions dir at all under this fresh tmp cwd -- listEnvelopes() returns [],
+  // deterministically driving the zero-pending-envelope NO_PENDING_SENTINEL branch without any
+  // CLI spawn or network call (surfaceNextQuestion only reaches the CLI-classification step
+  // once a pending envelope actually exists).
+  const driver = new ForkedHiveDriver();
+  const isolatedCwd = mkdtempSync(join(tmpdir(), "forked-hive-no-envelopes-"));
+
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(typeof chunk === "string" ? chunk : String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+
+  let result: DriverResult;
+  try {
+    // surfaceNextQuestion is private on the class -- called directly (bypassing runTurn's
+    // dispatchFresh, which would spawn a real runtime) to isolate exactly the branch this story
+    // instruments, matching this suite's existing precedent for exercising internals without a
+    // live call (see forked-hive-driver-helpers.test.ts).
+    result = await (driver as unknown as {
+      surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult>;
+    }).surfaceNextQuestion(isolatedCwd, "/plugin-hive:kickoff a tiny project");
+  } finally {
+    process.stderr.write = originalWrite;
+    rmSync(isolatedCwd, { recursive: true, force: true });
+  }
+
+  // Returned DriverResult is unchanged from today's shape.
+  assert.equal(result.session_id, NO_PENDING_SENTINEL);
+  const raw = JSON.parse(result.raw_result);
+  assert.equal(raw.question, "(no pending question -- run may be complete)");
+  assert.equal(raw.suggested_channel, "human");
+  assert.equal(raw.confidence, 0);
+  assert.equal(raw.reason, "no pending envelope found after this turn");
+
+  // Exactly one structured (JSON) WARN line on stderr.
+  const lines = chunks.join("").split("\n").filter((l) => l.trim().length > 0);
+  assert.equal(lines.length, 1, `expected exactly one stderr line, got: ${JSON.stringify(lines)}`);
+  const parsed = JSON.parse(lines[0] as string);
+  assert.equal(String(parsed.level).toLowerCase(), "warn");
 });

@@ -47,7 +47,7 @@ items:
       - { state: prioritized, at: "2026-07-25T19:00:00Z" }
       - { state: plan-ready, at: "2026-07-25T20:00:00Z" }
   - id: t-002
-    state: inbox
+    state: prioritized
     kind: feature
     title: "dev has real Consus integration wired into core code -- violates standalone-god principle, needs rip-out/re-architecture decision"
     description: |
@@ -104,10 +104,18 @@ items:
       This is concrete, reproduced evidence for why the unconditional call (not just the
       dedicated consus-*.ts modules) needs to be part of whatever this item's eventual fix scopes
       in -- test isolation is a real, current casualty of the coupling, not a hypothetical one.
+
+      DECISION (2026-08-14T14:34Z): operator directive is full rip-out, not a design-note flag.
+      "you need to full rip it out and apart -- my real question, what is left of minerva at the
+      end -- do we have a plan, do we have an answer, is there a PoC of minerva acting correctly
+      as the hive planning system to be better?" This is no longer an open architectural question
+      to merely document -- it's prioritized for a real /plan cycle and execution, with a live PoC
+      (re-run the pause/resume test from epic minerva-value-audit, now against a ripped-out
+      Minerva plus the already-shipped fix-startrun-heimdall-routing fixes) as the acceptance bar.
     reporter: "mdostal"
     reported_at: "2026-08-14T04:05:17Z"
-    priority: null
-    severity: null
+    priority: p0
+    severity: critical
     assignee: null
     linked_epic: null
     linked_story: null
@@ -115,6 +123,8 @@ items:
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-14T04:05:17Z" }
+      - { state: clarified, at: "2026-08-14T14:34:36Z" }
+      - { state: prioritized, at: "2026-08-14T14:34:36Z" }
   - id: t-003
     state: plan-ready
     kind: bug

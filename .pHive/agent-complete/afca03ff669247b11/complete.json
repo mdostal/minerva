@@ -1,0 +1,16 @@
+{
+  "agent_id": "afca03ff669247b11",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-afca03ff669247b11.jsonl",
+  "last_assistant_message": "Rewriting §3's positioning and recommendations",
+  "prompt_id": "be0b6bc5-5497-4793-a029-4c34dd55d693",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T00:13:39Z"
+}

@@ -44,3 +44,7 @@ stories:
     title: Resolve whether plan-agnostic.mjs substitutes for Minerva's full plan-flow loop
     complexity: low
     depends_on: [document-pr341-production-dependency]
+  - id: fix-seed-repo-test-hermeticity
+    title: Make full-loop.test.ts and plan-runner.test.ts self-provision their seed repo
+    complexity: low
+    depends_on: []

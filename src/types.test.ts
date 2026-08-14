@@ -271,8 +271,18 @@ test("getQuestions never resurfaces an already-answered question on either chann
 
 // --- Closed error enum ---------------------------------------------------------------------
 
-test("ErrorCode is closed to exactly these five values -- exhaustive switch compiles", () => {
-  const ALL_CODES: ErrorCode[] = ["NOT_FOUND", "VALIDATION_FAILED", "WRONG_CHANNEL", "NOT_READY", "UNKNOWN_METHOD"];
+// add-upstream-error-code: closed to six values now -- UPSTREAM_ERROR added for handler-catch
+// failures against an internal/upstream dependency (e.g. HeimdallRouteError), distinguishable
+// from the genuine "no such method" UNKNOWN_METHOD case. See dispatch.ts.
+test("ErrorCode is closed to exactly these six values -- exhaustive switch compiles", () => {
+  const ALL_CODES: ErrorCode[] = [
+    "NOT_FOUND",
+    "VALIDATION_FAILED",
+    "WRONG_CHANNEL",
+    "NOT_READY",
+    "UNKNOWN_METHOD",
+    "UPSTREAM_ERROR",
+  ];
 
   function assertExhaustive(code: ErrorCode): ErrorCode {
     switch (code) {
@@ -281,6 +291,7 @@ test("ErrorCode is closed to exactly these five values -- exhaustive switch comp
       case "WRONG_CHANNEL":
       case "NOT_READY":
       case "UNKNOWN_METHOD":
+      case "UPSTREAM_ERROR":
         return code;
       default: {
         const _exhaustive: never = code;

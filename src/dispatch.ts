@@ -1,4 +1,5 @@
 import { MinervaError, type ErrorCode } from "./errors.ts";
+import { HeimdallRouteError } from "./driver.ts";
 import { capabilities } from "./capabilities.ts";
 import { getRunStatus, listRuns } from "./run-manager.ts";
 import { startRun, getQuestions, submitAnswers } from "./kickoff-engine.ts";
@@ -74,6 +75,14 @@ export async function dispatch(req: unknown): Promise<Response> {
   } catch (e) {
     if (e instanceof MinervaError) {
       return { error: { code: e.code, message: e.message, retry_after_ms: null } };
+    }
+    // add-upstream-error-code: a HeimdallRouteError means the method WAS correctly dispatched --
+    // its handler failed against an internal/upstream dependency (Heimdall routing), not because
+    // the method doesn't exist. Map it to its own code instead of the blanket UNKNOWN_METHOD
+    // below, which is reserved for genuinely-uncaught, unexpected exceptions (conservative blast
+    // radius -- see the genuine "no such method" branch above, which this does not touch).
+    if (e instanceof HeimdallRouteError) {
+      return { error: { code: "UPSTREAM_ERROR", message: e.message, retry_after_ms: null } };
     }
     return {
       error: {

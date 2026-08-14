@@ -90,6 +90,20 @@ items:
       reference the default seed-repo path (~/repos/consus-seeds) without self-provisioning a
       temp git repo the way 12 other test files correctly do. That's a small, unrelated
       test-hygiene bug already tracked as its own story in the minerva-value-audit epic.
+
+      UPDATE (2026-08-14T05:15Z): live evidence this is already causing real breakage, not just
+      an architectural concern. A full `npm run ci` run on this developer's machine showed 20
+      NEW test failures beyond the epic's own changes, all with the identical pattern -- a run's
+      status came back `awaiting-consus` where the test expected `waiting_on_human`. Root cause,
+      confirmed directly: a real Consus instance happens to be running locally right now
+      (`lsof -i :8722` shows a live node process; `curl localhost:8722/api/decisions` responds).
+      Because `kickoff-engine.ts`'s call to `postQuestionToConsusDecisionApi()` is unconditional
+      (finding 2 above), any test asserting `waiting_on_human` silently breaks the moment a real
+      Consus instance is reachable on this machine -- these tests were never actually hermetic
+      against Consus reachability, they just happened to pass when no local Consus was running.
+      This is concrete, reproduced evidence for why the unconditional call (not just the
+      dedicated consus-*.ts modules) needs to be part of whatever this item's eventual fix scopes
+      in -- test isolation is a real, current casualty of the coupling, not a hypothetical one.
     reporter: "mdostal"
     reported_at: "2026-08-14T04:05:17Z"
     priority: null

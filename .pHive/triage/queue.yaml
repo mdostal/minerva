@@ -271,7 +271,7 @@ items:
       - { state: plan-ready, at: "2026-08-14T18:10:00Z" }
       - { state: closed, at: "2026-08-14T20:00:00Z" }
   - id: t-007
-    state: inbox
+    state: closed
     kind: feature
     title: "No test coverage for resolveAgnosticPlanDriver's actual positive path (picking a non-claude Heimdall-routed runtime) -- only the null-return guards are tested"
     description: |
@@ -292,6 +292,21 @@ items:
 
       Not investigated further -- filed so it surfaces at standup. Needs a /plan cycle to pick the
       approach (DI refactor vs. gated live test) once picked up.
+
+      CORRECTION (2026-08-14T20:15Z): this triage entry was factually wrong. Before starting the
+      DI refactor the operator approved, a final check of src/full-loop.test.ts (a sibling file
+      from the separate minerva-value-audit epic, not cross-referenced when this was filed) showed
+      its "full autonomous loop: claude kickoff + gemini planning" test already exercises exactly
+      this positive path: a mocked Heimdall route returning a non-claude runtime, a real
+      HIVE_PLAN_AGNOSTIC_CLI override pointing at a real executable fake CLI, OPENCODE_BIN=echo
+      satisfying opencodeAvailable(), and an assertion that record.plan_runtime === "gemini" /
+      plan_model === "gemini-2.0-flash-exp". Confirmed passing (npx tsx --test
+      src/full-loop.test.ts, both tests ok) and has been passing all night -- never appeared in
+      any failure list across every test run tonight. agnosticPlanCliPath()/opencodeAvailable()
+      already have working override seams (HIVE_PLAN_AGNOSTIC_CLI, OPENCODE_BIN); no DI refactor
+      is needed or was built. Closing as a filing error, not a shipped fix -- the root mistake was
+      only checking agnostic-plan-driver.test.ts and kickoff-engine.test.ts for coverage during
+      t-004's investigation, not the full test suite.
     reporter: "mdostal"
     reported_at: "2026-08-14T18:10:00Z"
     priority: null
@@ -299,10 +314,11 @@ items:
     assignee: null
     linked_epic: null
     linked_story: null
-    closed_reason: null
-    closed_at: null
+    closed_reason: "filing error -- positive-path coverage already existed in src/full-loop.test.ts, not cross-referenced when this was filed. No fix needed; see CORRECTION note above."
+    closed_at: "2026-08-14T20:15:00Z"
     state_history:
       - { state: inbox, at: "2026-08-14T18:10:00Z" }
+      - { state: closed, at: "2026-08-14T20:15:00Z" }
   - id: t-005
     state: closed
     kind: feature

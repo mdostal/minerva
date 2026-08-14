@@ -204,7 +204,7 @@ items:
       - { state: prioritized, at: "2026-08-14T04:33:46Z" }
       - { state: plan-ready, at: "2026-08-14T05:00:24Z" }
   - id: t-004
-    state: inbox
+    state: plan-ready
     kind: bug
     title: "kickoff-engine.test.ts: two tests expect frozen plan_runtime='gemini' but get undefined -- reproduced twice, independent of the Heimdall startRun fix"
     description: |

@@ -1,4 +1,12 @@
 #!/usr/bin/env node
+// STANDALONE-BOUNDARY NOTE: this file is a separate, optional, Consus/Janus-dependent
+// integration utility. It is NOT part of Minerva's core CLI/subprocess ABI (bin/minerva,
+// bin/minerva-plan) and does NOT participate in, and is explicitly excluded from, Minerva's
+// "genuinely standalone" claim (see docs/architecture.md, VISION.md). Minerva's core has no
+// Consus coupling as of the rip-out in commit 8b450e0 ("core-rip-out-consus-coupling"); this
+// tool intentionally still talks to Consus/Janus and is documented as an opt-in sibling
+// utility, not a dependency of Minerva proper.
+//
 // ideate-to-consus — the MISSING HALF of the Pantheon ideation loop (VISION.md, Consus).
 //
 // An idea must NOT grind straight to code. This tool makes the loop real:

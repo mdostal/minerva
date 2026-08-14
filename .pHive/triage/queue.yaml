@@ -47,7 +47,7 @@ items:
       - { state: prioritized, at: "2026-07-25T19:00:00Z" }
       - { state: plan-ready, at: "2026-07-25T20:00:00Z" }
   - id: t-002
-    state: prioritized
+    state: plan-ready
     kind: feature
     title: "dev has real Consus integration wired into core code -- violates standalone-god principle, needs rip-out/re-architecture decision"
     description: |
@@ -117,14 +117,17 @@ items:
     priority: p0
     severity: critical
     assignee: null
-    linked_epic: null
-    linked_story: null
+    linked_epic: rip-out-consus-coupling
+    linked_story:
+      - core-rip-out-consus-coupling
+      - document-consus-ripout-and-standalone-boundary
     closed_reason: null
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-14T04:05:17Z" }
       - { state: clarified, at: "2026-08-14T14:34:36Z" }
       - { state: prioritized, at: "2026-08-14T14:34:36Z" }
+      - { state: plan-ready, at: "2026-08-14T15:12:49Z" }
   - id: t-003
     state: plan-ready
     kind: bug

@@ -48,7 +48,7 @@ items:
       - { state: plan-ready, at: "2026-07-25T20:00:00Z" }
       - { state: closed, at: "2026-08-14T18:00:00Z" }
   - id: t-002
-    state: plan-ready
+    state: closed
     kind: feature
     title: "dev has real Consus integration wired into core code -- violates standalone-god principle, needs rip-out/re-architecture decision"
     description: |
@@ -122,15 +122,16 @@ items:
     linked_story:
       - core-rip-out-consus-coupling
       - document-consus-ripout-and-standalone-boundary
-    closed_reason: null
-    closed_at: null
+    closed_reason: "merged to origin/dev (807c18e, via the fix-startrun-heimdall-routing chain) -- live pause/resume PoC confirmed waiting_on_human held throughout with a real Consus instance reachable, zero Consus references anywhere in run state."
+    closed_at: "2026-08-14T20:00:00Z"
     state_history:
       - { state: inbox, at: "2026-08-14T04:05:17Z" }
       - { state: clarified, at: "2026-08-14T14:34:36Z" }
       - { state: prioritized, at: "2026-08-14T14:34:36Z" }
       - { state: plan-ready, at: "2026-08-14T15:12:49Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
   - id: t-003
-    state: plan-ready
+    state: closed
     kind: bug
     title: "startRun (default SpawnDriver) fails end-to-end in a stock environment -- non-fail-open Heimdall call + task-type mismatch"
     description: |
@@ -196,15 +197,16 @@ items:
       - add-upstream-error-code
       - auto-cleanup-orphaned-runs-on-first-turn-failure
       - fix-heimdall-task-type-value
-    closed_reason: null
-    closed_at: null
+    closed_reason: "merged to origin/dev (807c18e) -- live pause/resume PoC confirmed startRun completes end-to-end with the MINERVA_FALLBACK_CLI/MINERVA_FALLBACK_MODEL fallback exercised live, no Heimdall running."
+    closed_at: "2026-08-14T20:00:00Z"
     state_history:
       - { state: inbox, at: "2026-08-14T04:17:00Z" }
       - { state: clarified, at: "2026-08-14T04:33:46Z" }
       - { state: prioritized, at: "2026-08-14T04:33:46Z" }
       - { state: plan-ready, at: "2026-08-14T05:00:24Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
   - id: t-004
-    state: plan-ready
+    state: closed
     kind: bug
     title: "kickoff-engine.test.ts: two tests expect frozen plan_runtime='gemini' but get undefined -- reproduced twice, independent of the Heimdall startRun fix"
     description: |
@@ -260,13 +262,14 @@ items:
     assignee: null
     linked_epic: fix-kickoff-engine-plan-runtime-tests
     linked_story: fix-kickoff-engine-plan-runtime-tests
-    closed_reason: null
-    closed_at: null
+    closed_reason: "merged to origin/dev (807c18e) -- kickoff-engine.test.ts fully clean on the final full-suite run."
+    closed_at: "2026-08-14T20:00:00Z"
     state_history:
       - { state: inbox, at: "2026-08-14T05:26:55Z" }
       - { state: clarified, at: "2026-08-14T18:10:00Z" }
       - { state: prioritized, at: "2026-08-14T18:10:00Z" }
       - { state: plan-ready, at: "2026-08-14T18:10:00Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
   - id: t-007
     state: inbox
     kind: feature
@@ -301,7 +304,7 @@ items:
     state_history:
       - { state: inbox, at: "2026-08-14T18:10:00Z" }
   - id: t-005
-    state: plan-ready
+    state: closed
     kind: feature
     title: "Remove bin/ideate-to-consus.mjs -- the idea<->Consus round-trip loop belongs in the Pantheon layer, not in Minerva"
     description: |
@@ -351,15 +354,16 @@ items:
     assignee: null
     linked_epic: remove-ideate-to-consus
     linked_story: remove-ideate-to-consus-tool
-    closed_reason: null
-    closed_at: null
+    closed_reason: "merged to origin/dev (807c18e) -- bin/ideate-to-consus.mjs and its demo artifacts confirmed gone."
+    closed_at: "2026-08-14T20:00:00Z"
     state_history:
       - { state: inbox, at: "2026-08-14T16:30:00Z" }
       - { state: clarified, at: "2026-08-14T16:30:00Z" }
       - { state: prioritized, at: "2026-08-14T16:30:00Z" }
       - { state: plan-ready, at: "2026-08-14T16:30:00Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
   - id: t-006
-    state: inbox
+    state: closed
     kind: bug
     title: "Broad test-suite flakiness on this dev machine: 10-17 live-subprocess/timing-sensitive tests fail under a full `npm test` run, unrelated to any code change"
     description: |
@@ -434,10 +438,11 @@ items:
     assignee: null
     linked_epic: fix-test-suite-flakiness-t006
     linked_story: fix-test-suite-flakiness-t006
-    closed_reason: null
-    closed_at: null
+    closed_reason: "merged to origin/dev (807c18e) -- full suite verified clean (205/208 pass, 0 fail, 3 correct skips) before push."
+    closed_at: "2026-08-14T20:00:00Z"
     state_history:
       - { state: inbox, at: "2026-08-14T16:55:00Z" }
       - { state: clarified, at: "2026-08-14T19:30:00Z" }
       - { state: prioritized, at: "2026-08-14T19:30:00Z" }
       - { state: plan-ready, at: "2026-08-14T19:30:00Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }

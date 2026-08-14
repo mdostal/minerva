@@ -184,17 +184,25 @@ function readRecord(runId: string) {
   return JSON.parse(readFileSync(join(minervaHome, "runs", runId, "run.yaml"), "utf8"));
 }
 
-test("planning route freezes on run record when Heimdall returns a non-claude runtime", async () => {
+// NOTE: this file's env() unconditionally sets MINERVA_TEST_DRIVE_PROMPT (needed to keep every
+// test's real `claude -p` subprocess spawn cheap/scripted). src/agnostic-plan-driver.ts's
+// resolveAgnosticPlanDriver() treats that as a deliberate "bulletproof claude fallback" test
+// seam and short-circuits to null before ever reaching Heimdall's resolved route -- so
+// plan_runtime/plan_model can never actually freeze to a non-claude value inside this file,
+// regardless of what a mock Heimdall server returns. The test below confirms that guard holds
+// even when Heimdall explicitly offers a non-claude runtime, rather than asserting the freeze
+// itself (which needs a non-test-mode path -- see triage t-007).
+test("planning route stays absent in test mode even when Heimdall offers a non-claude runtime (bulletproof claude fallback)", async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
     const started = call("startRun", { idea: "freeze test" }, customEnv);
     assert.equal(started.status, 0);
     const runId = started.result.run_id;
-    
+
     const record = readRecord(runId);
-    assert.equal(record.plan_runtime, "gemini");
-    assert.equal(record.plan_model, "gemini-2.0-flash-exp");
+    assert.equal(record.plan_runtime, undefined);
+    assert.equal(record.plan_model, undefined);
   } finally {
     mock.server.close();
   }
@@ -232,16 +240,20 @@ test("planning route stays absent when Heimdall explicitly returns claude", asyn
   }
 });
 
-test("submitAnswers keeps the frozen plan_runtime (no drift) and falls back correctly if CLI is missing", async () => {
+// Same bulletproof-fallback caveat as above: plan_runtime never freezes in this file's test
+// mode, so "no drift" here means submitAnswers doesn't introduce a spurious plan_runtime value
+// on a run that started with none -- not that a frozen non-claude value survives a continuation
+// turn (that positive path is untested anywhere yet -- see triage t-007).
+test("submitAnswers introduces no plan_runtime drift on a run that never froze one, and falls back correctly if CLI is missing", async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl(), HIVE_PLAN_AGNOSTIC_CLI: "/does/not/exist" };
     const started = call("startRun", { idea: "continuation test" }, customEnv);
     assert.equal(started.status, 0);
     const runId = started.result.run_id;
-    
+
     const record1 = readRecord(runId);
-    assert.equal(record1.plan_runtime, "gemini"); // Frozen properly
+    assert.equal(record1.plan_runtime, undefined); // bulletproof fallback holds in test mode
 
     const q1 = call("getQuestions", { run_id: runId, channel: "human" }, customEnv).result.questions[0];
     
@@ -256,7 +268,7 @@ test("submitAnswers keeps the frozen plan_runtime (no drift) and falls back corr
     
     const record2 = readRecord(runId);
     // plan_runtime should not change during submitAnswers
-    assert.equal(record2.plan_runtime, "gemini");
+    assert.equal(record2.plan_runtime, undefined);
   } finally {
     mock.server.close();
   }

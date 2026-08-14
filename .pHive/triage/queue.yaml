@@ -1,7 +1,7 @@
 version: 1
 items:
   - id: t-001
-    state: plan-ready
+    state: closed
     kind: bug
     title: "Minerva driver orphans detached claude subprocesses on interrupt -- lock types, make driver swappable"
     description: |
@@ -39,13 +39,14 @@ items:
     assignee: null
     linked_epic: swappable-driver
     linked_story: lock-core-types
-    closed_reason: null
-    closed_at: null
+    closed_reason: "shipped in PR #2 (epic swappable-driver, v0.1.1) -- Driver abstraction, SpawnDriver hardening (SIGINT/SIGTERM, configurable turn timeout), locked core types, and the ForkedHiveDriver seam all merged to origin/dev before this session began. Discovered stale (still plan-ready) during a 2026-08-14 backlog sweep; closing as bookkeeping, no further work needed."
+    closed_at: "2026-08-14T18:00:00Z"
     state_history:
       - { state: inbox, at: "2026-07-25T19:00:00Z" }
       - { state: clarified, at: "2026-07-25T19:00:00Z" }
       - { state: prioritized, at: "2026-07-25T19:00:00Z" }
       - { state: plan-ready, at: "2026-07-25T20:00:00Z" }
+      - { state: closed, at: "2026-08-14T18:00:00Z" }
   - id: t-002
     state: plan-ready
     kind: feature
@@ -228,11 +229,68 @@ items:
       Minerva's own plan_runtime-freezing code path (wherever `record.plan_runtime` gets set from
       the resolved route), not an environment/reachability problem.
 
-      Not investigated further -- filed so it surfaces at the next standup rather than getting
-      lost. Needs a proper /plan cycle (or a quick standalone fix if root cause turns out to be
-      small) once picked up.
+      ROOT CAUSE FOUND (2026-08-14T18:10Z): not a bug in the freezing code path -- the two tests
+      are stale against a deliberate, documented guard added by the runner-agnostic PLAN driver
+      work (commit 9b79947, PR #22, merged to main just before this session's kickoff).
+      src/agnostic-plan-driver.ts:112: `if (process.env.MINERVA_TEST_DRIVE_PROMPT) return null;`
+      -- a "bulletproof claude fallback" test seam (comment: "the automated suite injects a fake
+      driver and swaps the drive prompt; never reach for the network or a real runtime there").
+      kickoff-engine.test.ts's env() helper sets MINERVA_TEST_DRIVE_PROMPT unconditionally for
+      EVERY test in the file (needed to keep its real `claude -p` subprocess spawns cheap/
+      scripted) -- so resolveAgnosticPlanDriver() always short-circuits to null before ever
+      reaching Heimdall's mocked route, and kickoff-engine.ts:297 never sets plan_runtime/
+      plan_model, regardless of what the mock Heimdall server returns. The sibling tests
+      expecting `plan_runtime === undefined` ("falls back to claude", "stays absent when Heimdall
+      explicitly returns claude") pass trivially -- that's the ONLY reachable behavior in this
+      file's fixture now. This also means real positive-path coverage (resolveAgnosticPlanDriver
+      actually picking a non-claude runtime) has a genuine gap: agnostic-plan-driver.test.ts only
+      covers the two null-return guards (test mode, feature off), never the actual resolution
+      path, because exercising it needs a real ported CLI + opencode binary on disk with no
+      dependency-injection seam to fake them.
+
+      DECISION: scope is now small and unambiguous -- fix the two stale test expectations to
+      match the deliberately-guarded current behavior (rewrite, not delete, so the guard itself
+      stays regression-tested); file the deeper positive-path coverage gap as its own follow-on
+      triage item (t-007) rather than pulling a DI refactor into this fix. Fast-tracked to
+      plan-ready; executing directly, no research-brief/grill ceremony, consistent with t-005.
     reporter: "mdostal"
     reported_at: "2026-08-14T05:26:55Z"
+    priority: p2
+    severity: low
+    assignee: null
+    linked_epic: fix-kickoff-engine-plan-runtime-tests
+    linked_story: fix-kickoff-engine-plan-runtime-tests
+    closed_reason: null
+    closed_at: null
+    state_history:
+      - { state: inbox, at: "2026-08-14T05:26:55Z" }
+      - { state: clarified, at: "2026-08-14T18:10:00Z" }
+      - { state: prioritized, at: "2026-08-14T18:10:00Z" }
+      - { state: plan-ready, at: "2026-08-14T18:10:00Z" }
+  - id: t-007
+    state: inbox
+    kind: feature
+    title: "No test coverage for resolveAgnosticPlanDriver's actual positive path (picking a non-claude Heimdall-routed runtime) -- only the null-return guards are tested"
+    description: |
+      Surfaced while root-causing t-004. src/agnostic-plan-driver.ts's resolveAgnosticPlanDriver()
+      has 5 short-circuit-to-null guards (feature off, test mode, unreachable/claude route, missing
+      ported CLI, missing opencode binary) but the actual success path -- constructing a real
+      AgnosticPlanDriver from a resolved non-claude route -- has zero test coverage anywhere.
+      agnostic-plan-driver.test.ts only covers 2 of the 5 guards (test mode, feature off).
+      kickoff-engine.test.ts's two plan_runtime tests (fixed via t-004) can never reach this path
+      either, since that file's fixture always sets MINERVA_TEST_DRIVE_PROMPT.
+
+      Blocker: agnosticPlanCliPath() and opencodeAvailable() (agnostic-plan-driver.ts:36,70) have
+      no dependency-injection seam -- they hit the real filesystem / spawn a real `opencode
+      --version` check. A clean unit test needs either (a) a DI refactor to inject these as
+      parameters/overridable functions, or (b) an environment-gated live integration test (skip
+      unless a real ported CLI + opencode are present on the test machine, similar to other
+      live-driver tests in this repo).
+
+      Not investigated further -- filed so it surfaces at standup. Needs a /plan cycle to pick the
+      approach (DI refactor vs. gated live test) once picked up.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T18:10:00Z"
     priority: null
     severity: null
     assignee: null
@@ -241,7 +299,7 @@ items:
     closed_reason: null
     closed_at: null
     state_history:
-      - { state: inbox, at: "2026-08-14T05:26:55Z" }
+      - { state: inbox, at: "2026-08-14T18:10:00Z" }
   - id: t-005
     state: plan-ready
     kind: feature

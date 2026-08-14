@@ -1,0 +1,30 @@
+id: fix-kickoff-engine-plan-runtime-tests
+epic: fix-kickoff-engine-plan-runtime-tests
+title: Rewrite the two stale plan_runtime='gemini' tests to assert the current bulletproof-fallback behavior
+complexity: low
+depends_on: []
+
+description: >
+  src/kickoff-engine.test.ts had two tests asserting record.plan_runtime === 'gemini' after
+  startRun against a mocked non-claude Heimdall response. Both are unreachable: the file's env()
+  helper always sets MINERVA_TEST_DRIVE_PROMPT, and src/agnostic-plan-driver.ts's
+  resolveAgnosticPlanDriver() treats that as a deliberate test seam, returning null before ever
+  resolving Heimdall's route. Rewrite both tests to assert the guard holds (plan_runtime/
+  plan_model stay undefined even when Heimdall explicitly offers a non-claude runtime) instead of
+  asserting the now-unreachable freeze. Add an explanatory comment above both so the next reader
+  understands why, rather than re-discovering it.
+
+acceptance_criteria:
+  - "planning route freezes on run record when Heimdall returns a non-claude runtime" is renamed
+    and rewritten to assert plan_runtime/plan_model stay undefined (bulletproof fallback holds).
+  - "submitAnswers keeps the frozen plan_runtime (no drift)" is renamed and rewritten to assert no
+    drift from undefined -> defined across a continuation turn, not a frozen non-claude value
+    surviving the turn.
+  - npm run typecheck and the full kickoff-engine.test.ts file pass.
+  - Triage t-004 advances to plan-ready with a DECISION note recording the root cause.
+  - Triage t-007 filed for the separately-scoped positive-path coverage gap this surfaced.
+
+out_of_scope:
+  - Adding real positive-path test coverage for resolveAgnosticPlanDriver (needs a DI refactor or
+    an environment-gated live test -- triage t-007, a real design decision on its own).
+  - Any change to agnostic-plan-driver.ts's guard logic itself -- it is working as intended.

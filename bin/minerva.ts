@@ -4,9 +4,10 @@
 // See docs/architecture.md AD-1.
 
 import { dispatch } from "../src/dispatch.ts";
-import { resumeFromConsusAnswer, resumeAnsweredConsusDecision } from "../src/consus-resume.ts";
-import { pollConsusAnswers } from "../src/consus-poller.ts";
-import { pollAndResumeConsusAnswers } from "../src/consus-auto-resume.ts";
+import { submitAnswers } from "../src/kickoff-engine.ts";
+import { getRunStatus, type Channel } from "../src/run-manager.ts";
+import { getOutput, type CompletedEpic } from "../src/output-emitter.ts";
+import { fileAllStoriesToMultica } from "../src/plan-runner.ts";
 import { readFileSync } from "node:fs";
 
 function readStdin(): Promise<string> {
@@ -58,19 +59,10 @@ function nextValue(argv: string[], index: number, flag: string): string {
 
 async function mainArgs(argv: string[]): Promise<void> {
   const params: Record<string, unknown> = {};
-  let consusItemFile: string | undefined;
-  let pollConsus = false;
-  let pollAndResume = false;
 
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     switch (flag) {
-      case "--poll-consus":
-        pollConsus = true;
-        break;
-      case "--poll-and-resume":
-        pollAndResume = true;
-        break;
       case "--run":
         params.run_id = nextValue(argv, i, flag);
         i++;
@@ -110,10 +102,6 @@ async function mainArgs(argv: string[]): Promise<void> {
       case "--file-to-multica":
         params.file_to_multica = true;
         break;
-      case "--consus-item-file":
-        consusItemFile = nextValue(argv, i, flag);
-        i++;
-        break;
       case "-h":
       case "--help":
         process.stdout.write(ARG_HELP);
@@ -125,41 +113,67 @@ async function mainArgs(argv: string[]): Promise<void> {
 
   if (!params.channel) params.channel = "human";
 
-  const result = pollAndResume
-    ? await pollAndResumeConsusAnswers(params)
-    : pollConsus
-    ? await pollConsusAnswers(params)
-    : consusItemFile
-      ? await resumeAnsweredConsusDecision({
-          item: JSON.parse(readFileSync(consusItemFile, "utf8")),
-          file_to_multica: params.file_to_multica === true,
-          parent_issue_id: params.parent_issue_id,
-          project: params.project,
-          target_repo: params.target_repo,
-        })
-      : await resumeFromConsusAnswer(params);
+  const result = await resumeRun(params);
 
   process.stdout.write(JSON.stringify({ result }, null, 2) + "\n");
   process.exit(0);
 }
 
-const ARG_HELP = `minerva — JSON-over-stdio by default, plus Consus resume shorthand
+// Resume a parked run by answering its pending question, then optionally file the resulting
+// stories to Multica. Built entirely on the core provider-neutral ABI (submitAnswers/
+// getRunStatus/getOutput) plus plan-runner.ts's own Multica-filing helper -- no dependency on any
+// external decision-routing service, so --file-to-multica keeps working standalone.
+async function resumeRun(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const runId = params.run_id;
+  const questionId = params.question_id;
+  const channel = params.channel;
+  const answer = params.answer;
+  if (typeof runId !== "string" || typeof questionId !== "string" || typeof answer !== "string") {
+    throw new Error("--resume/--run, --question, and --answer/--answer-file are all required");
+  }
+  if (channel !== "agent" && channel !== "human") {
+    throw new Error('--channel must be "agent" or "human"');
+  }
+
+  const fileToMultica = params.file_to_multica === true;
+  const parentIssueId = typeof params.parent_issue_id === "string" ? params.parent_issue_id : undefined;
+  if (fileToMultica && !parentIssueId) {
+    throw new Error("--file-to-multica requires --parent <issue_id>");
+  }
+
+  await submitAnswers({
+    run_id: runId,
+    channel: channel as Channel,
+    answers: [{ question_id: questionId, answer }],
+  });
+
+  const after = getRunStatus({ run_id: runId }) as { status: string };
+  const result: Record<string, unknown> = {
+    run_id: runId,
+    status: after.status,
+    resumed: true,
+    filed_stories: [],
+    file_errors: [],
+  };
+
+  if (after.status === "complete" && fileToMultica) {
+    const output = getOutput({ run_id: runId }) as { epic: CompletedEpic | null; epics?: CompletedEpic[] };
+    const epics = output.epics ?? (output.epic ? [output.epic] : []);
+    const filed = fileAllStoriesToMultica(parentIssueId!, epics, {
+      project: typeof params.project === "string" ? params.project : undefined,
+      targetRepo: typeof params.target_repo === "string" ? params.target_repo : undefined,
+    });
+    result.filed_stories = filed.filed;
+    result.file_errors = filed.errors;
+  }
+
+  return result;
+}
+
+const ARG_HELP = `minerva — JSON-over-stdio
 
   minerva --resume <run_id> --question <question_id> --answer "<answer>" [--channel human|agent]
           [--file-to-multica --parent <issue_id>] [--project <project_id>] [--target-repo owner/repo]
-
-  minerva --consus-item-file <path.json> [--file-to-multica --parent <issue_id>]
-
-  minerva --poll-consus [--run <run_id>]
-          One poll pass over every parked run-question mapping (or just <run_id>): queries Consus
-          for each's latest status and extracts any answered ones. Read-only -- run this on your
-          own interval (cron/launchd/etc); it does not resume anything itself.
-
-  minerva --poll-and-resume [--run <run_id>] [--file-to-multica --parent <issue_id>]
-          Same poll pass as --poll-consus, then immediately resumes every parked run it found
-          answered (feeds each answer into resumeFromConsusAnswer). Run this on your own interval
-          instead of --poll-consus when you want parked runs to advance automatically as soon as
-          Consus reports an answer.
 `;
 
 main();

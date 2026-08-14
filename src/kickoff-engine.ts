@@ -21,7 +21,6 @@ import { abortRun } from "./cleanup-ledger.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
-import { postQuestionToConsusDecisionApi } from "./consus-decisions.ts";
 import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
@@ -176,19 +175,6 @@ export async function recordTurn(runId: string, rawResult: string): Promise<void
     status: "waiting_on_human",
     questions: [...record.questions, question],
   });
-
-  const posted = await postQuestionToConsusDecisionApi(runId, question);
-  if (posted.posted) {
-    const patch: Partial<import("./run-manager.ts").RunRecord> = { status: "awaiting-consus" };
-    if (posted.consus_question_id) {
-      const current = readRunRecord(runId);
-      const updatedQuestions = current.questions.map((q) =>
-        q.id === question.id ? { ...q, consus_question_id: posted.consus_question_id } : q
-      );
-      patch.questions = updatedQuestions;
-    }
-    updateRunRecord(runId, patch);
-  }
 }
 
 // Best-effort parse of the structured envelope fields a driver may embed alongside the question

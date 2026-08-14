@@ -43,13 +43,12 @@ test("error envelope always uses the closed 5-code enum, never a custom code", (
   assert.ok(CLOSED_ENUM.has(parsed.error.code), `${parsed.error.code} must be one of the closed enum`);
 });
 
-test("pollAndResumeConsusAnswers is registered as a real ABI method and no-ops with nothing parked", () => {
+test("pollAndResumeConsusAnswers is NOT a registered ABI method -- the Consus-coupled auto-resume methods were ripped out", () => {
   const minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-poll-resume-cli-"));
   try {
-    const { result, error, status } = call("pollAndResumeConsusAnswers", {}, { MINERVA_HOME: minervaHome });
-    assert.equal(status, 0);
-    assert.equal(error, undefined);
-    assert.deepEqual(result, { polled: 0, resumed: [], poll_errors: [], resume_errors: [] });
+    const { error, status } = call("pollAndResumeConsusAnswers", {}, { MINERVA_HOME: minervaHome });
+    assert.equal(status, 1);
+    assert.equal(error?.code, "UNKNOWN_METHOD");
   } finally {
     rmSync(minervaHome, { recursive: true, force: true });
   }

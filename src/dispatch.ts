@@ -5,9 +5,6 @@ import { getRunStatus, listRuns } from "./run-manager.ts";
 import { startRun, getQuestions, submitAnswers } from "./kickoff-engine.ts";
 import { getOutput } from "./output-emitter.ts";
 import { abortRun } from "./cleanup-ledger.ts";
-import { resumeFromConsusAnswer, resumeAnsweredConsusDecision } from "./consus-resume.ts";
-import { pollConsusAnswers } from "./consus-poller.ts";
-import { pollAndResumeConsusAnswers } from "./consus-auto-resume.ts";
 
 export interface Envelope {
   method: string;
@@ -33,10 +30,6 @@ const handlers: Record<string, Handler> = {
   submitAnswers,
   getOutput,
   abortRun,
-  resumeFromConsusAnswer,
-  resumeAnsweredConsusDecision,
-  pollConsusAnswers,
-  pollAndResumeConsusAnswers,
 };
 
 function isValidEnvelope(req: unknown): req is Envelope {

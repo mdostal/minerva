@@ -342,23 +342,17 @@ test("orphan cleanup: a first-turn failure (Heimdall routing failure, no fallbac
 });
 
 test("orphan cleanup boundary: a run that already reached waiting_on_human is NOT auto-aborted by a later-stage (submitAnswers) failure -- that is a stall, protected by AD-5, out of scope for this hook", () => {
-  // MINERVA_CONSUS_DECISIONS_URL: "" disables the (unrelated) Consus decision-post integration
-  // for this test -- without it, a real Consus service reachable from this environment would
-  // flip the run's status straight to "awaiting-consus" instead of leaving it "waiting_on_human",
-  // which has nothing to do with this story and would make this test flaky/environment-dependent.
-  const noConsusEnv = { ...env(), MINERVA_CONSUS_DECISIONS_URL: "" };
-
   // First turn succeeds for real (default working test route + haiku), reaching waiting_on_human
   // -- a real question has been surfaced, so this run is no longer an "orphan" by this story's
   // own definition.
-  const started = call("startRun", { idea: "an idea that reaches a real question first" }, noConsusEnv);
+  const started = call("startRun", { idea: "an idea that reaches a real question first" }, env());
   assert.equal(started.status, 0);
   const runId = started.result.run_id;
 
-  const beforeStatus = call("getRunStatus", { run_id: runId }, noConsusEnv);
+  const beforeStatus = call("getRunStatus", { run_id: runId }, env());
   assert.equal(beforeStatus.result.status, "waiting_on_human");
 
-  const q1 = call("getQuestions", { run_id: runId, channel: "human" }, noConsusEnv).result.questions[0];
+  const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
   assert.ok(q1);
 
   const ledgerBefore = readLedgerLines().filter((l) => l.run_id === runId);
@@ -367,7 +361,7 @@ test("orphan cleanup boundary: a run that already reached waiting_on_human is NO
   // Now force a Heimdall routing failure on submitAnswers's own (later-stage) drive turn -- this
   // is NOT the run's first turn, so startRun's new auto-cleanup hook must not have any bearing
   // on it (submitAnswers's own call site is untouched by this story).
-  const brokenEnv = { ...noConsusEnv, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: "http://127.0.0.1:1" };
+  const brokenEnv = { ...env(), MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: "http://127.0.0.1:1" };
   const submitted = call(
     "submitAnswers",
     { run_id: runId, channel: "human", answers: [{ question_id: q1.id, answer: "mango" }] },
@@ -378,7 +372,7 @@ test("orphan cleanup boundary: a run that already reached waiting_on_human is NO
   // story) -- but the run must NOT have been auto-aborted by this story's new hook.
   assert.equal(submitted.status, 1);
 
-  const afterStatus = call("getRunStatus", { run_id: runId }, noConsusEnv);
+  const afterStatus = call("getRunStatus", { run_id: runId }, env());
   assert.notEqual(afterStatus.result.status, "aborted");
 
   const ledgerAfter = readLedgerLines().filter((l) => l.run_id === runId);

@@ -101,3 +101,70 @@ items:
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-14T04:05:17Z" }
+  - id: t-003
+    state: inbox
+    kind: bug
+    title: "startRun (default SpawnDriver) fails end-to-end in a stock environment -- non-fail-open Heimdall call + task-type mismatch"
+    description: |
+      Confirmed via a live, black-box functional test (2 parallel real startRun invocations
+      against dev, no Minerva code changes made during the test -- see epic minerva-value-audit,
+      which was investigating Minerva's pause/resume value proposition and needed a live run to
+      validate it). Neither run ever produced a question; both failed identically before a single
+      real driving turn was ever spawned.
+
+      Root causes, precisely traced (read-only):
+
+      1. src/driver.ts's SpawnDriver.runTurn() calls resolveRuntimeRoute(), which does a
+         REQUIRED, non-fail-open fetch to Heimdall's /available-route?task-type=kickoff before
+         every turn -- unlike the sibling Heimdall lookup in src/agnostic-plan-driver.ts, which
+         is explicitly fail-open ("BULLETPROOF CLAUDE FALLBACK"). When this fetch throws, the
+         exception propagates uncaught out of startRun.
+      2. With no Heimdall running (the default state on a fresh machine), that's an uncaught
+         ECONNREFUSED / "fetch failed".
+      3. When a real Heimdall instance IS running (confirmed by manually starting one from the
+         sibling /Users/mdostal/Documents/work/pantheon/heimdall checkout as a diagnostic step,
+         not a code change), the failure becomes deterministic and reveals a second, independent
+         bug: Heimdall's live API only accepts task-type planning|build|review -- Minerva's
+         driver hardcodes task-type=kickoff, which Heimdall rejects with 400 invalid_task_type.
+         Real drift between Minerva and the service it depends on, not an environment artifact.
+      4. Even with a corrected task type, Heimdall separately reports the local
+         claude@mathew.dostal lane as "down" ("reason": "unconfigured -- no status recorded
+         yet"), so a task-type fix alone would not be sufficient to unblock a live run today.
+      5. All of the above surface identically to the ABI caller as
+         {"error":{"code":"UNKNOWN_METHOD"}} -- src/dispatch.ts's generic catch-all mislabels any
+         uncaught exception this way, so a real external caller cannot distinguish "you called a
+         nonexistent method" from "an internal routing dependency failed." A debuggability bug
+         independent of the routing bug itself.
+      6. Side effect: startRun calls allocateRun() (creating the run's workspace/worktree/
+         run.yaml on disk) BEFORE the failing drive turn, so every failed attempt leaves a
+         permanently stuck in_progress run with zero cleanup path -- 7 such orphaned runs
+         accumulated during the test (harmless, confined to a scratch MINERVA_HOME, not the real
+         ~/.minerva/runs, but the same would happen in a real deployment).
+
+      Impact: this blocks the entire premise of Minerva's value proposition -- the cold-start-
+      tolerant pause/resume ABI (the whole subject of epic minerva-value-audit) cannot be
+      exercised at all while startRun itself does not complete in a stock environment.
+
+      Recommend a proper /plan cycle to decide the fix: (a) make SpawnDriver's Heimdall route
+      lookup fail-open, mirroring agnostic-plan-driver.ts's existing pattern; (b) reconcile the
+      task-type vocabulary between Minerva's driver.ts and Heimdall's actual accepted values
+      (planning/build/review vs kickoff); (c) give dispatch.ts's catch-all a way to surface the
+      real underlying error/code instead of collapsing everything to UNKNOWN_METHOD; (d) decide
+      whether allocateRun() should roll back / mark the run failed rather than leaving it
+      permanently stuck in_progress when the first drive turn throws before completion.
+
+      Not resolved by this triage entry -- filed so it surfaces at the next standup. Separate
+      from and more urgent-looking than t-002 (the Consus-coupling architecture question): t-002
+      is an architecture/scope question, this is a live, reproducible functional break in the
+      core ABI's most basic method.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T04:17:00Z"
+    priority: null
+    severity: null
+    assignee: null
+    linked_epic: null
+    linked_story: null
+    closed_reason: null
+    closed_at: null
+    state_history:
+      - { state: inbox, at: "2026-08-14T04:17:00Z" }

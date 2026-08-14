@@ -136,11 +136,20 @@ function resolveRouteTimeoutMs(): number {
   return parsed;
 }
 
+// Heimdall's /available-route only accepts task-type=planning|build|review (a closed enum --
+// see heimdall/src/core/task-type.ts's TASK_TYPES); "kickoff" was never a valid value and Heimdall
+// rejects it with HTTP 400 invalid_task_type. This driver's turns (SpawnDriver/SubagentDriver/
+// ForkedHiveDriver) exclusively serve startRun, which drives plugin-hive's kickoff+plan skills to
+// completion (research, design discussion, story decomposition -- see src/plan-runner.ts) and
+// never touches code implementation or code review. That makes "planning" the correct task type
+// here, corroborated by src/agnostic-plan-driver.ts's resolvePlanningRoute(), which already calls
+// Heimdall with task-type=planning for Minerva's own planning-flavored turns and is confirmed
+// working against a live Heimdall instance.
 function availableRouteUrl(): string {
   const exact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
   if (exact) return exact;
   const base = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? DEFAULT_HEIMDALL_URL;
-  return new URL("/available-route?task-type=kickoff", base.endsWith("/") ? base : `${base}/`).toString();
+  return new URL("/available-route?task-type=planning", base.endsWith("/") ? base : `${base}/`).toString();
 }
 
 // getAdapter()'s own known/distinguished CLI set (opencode, codex; anything else -- including

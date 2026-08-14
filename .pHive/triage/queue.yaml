@@ -46,3 +46,58 @@ items:
       - { state: clarified, at: "2026-07-25T19:00:00Z" }
       - { state: prioritized, at: "2026-07-25T19:00:00Z" }
       - { state: plan-ready, at: "2026-07-25T20:00:00Z" }
+  - id: t-002
+    state: inbox
+    kind: feature
+    title: "dev has real Consus integration wired into core code -- violates standalone-god principle, needs rip-out/re-architecture decision"
+    description: |
+      Surfaced during epic minerva-value-audit (research into whether plugin-hive's own
+      runner-agnostic work replaces Minerva's value). Operator principle stated directly: "if
+      the plugin requires the other systems, then the god/plugin is not a true standalone god
+      for the Pantheon -- if it requires all of the others to do anything, then it is a process
+      piece or a flag in the pantheon itself." Minerva's dev branch does not meet this bar today.
+
+      Full findings:
+      1. src/dispatch.ts imports and exposes 4 Consus-specific ABI methods alongside the core
+         provider-neutral ones: resumeFromConsusAnswer, resumeAnsweredConsusDecision,
+         pollConsusAnswers, pollAndResumeConsusAnswers (from consus-resume.ts, consus-poller.ts,
+         consus-auto-resume.ts).
+      2. src/kickoff-engine.ts's core startRun question-surfacing path calls
+         postQuestionToConsusDecisionApi() UNCONDITIONALLY on every question -- not behind any
+         opt-in flag (unlike plan-runner.ts's clean pollConsusForAnswers flag pattern) -- though
+         it fails soft (750ms timeout, catches unreachable, falls back to normal
+         waiting_on_human status rather than throwing).
+      3. src/run-manager.ts's core RunStatus type has "awaiting-consus" as a first-class enum
+         value, and RunRecord has a first-class consus_question_id field -- Consus-awareness has
+         leaked into the core data model, not just add-on modules.
+      4. src/plan-runner.ts has 24 Consus references, including a CONSUS_URL env var default
+         (http://localhost:8722), an opt-in poll flag (pollConsusForAnswers), and a best-effort
+         post-to-Consus block.
+      5. Dedicated integration modules: src/consus-decisions.ts, src/consus-poller.ts,
+         src/consus-resume.ts, src/consus-auto-resume.ts -- landed via a real 5-commit
+         "minerva-auto-resume" epic (PAN-7523, PAN-7524, +3 feat commits).
+      6. This contradicts .pHive/CONTEXT.md's explicit convention: "every god-integration
+         (Delphi, Auriga, Vulcan, Multica, votem) is v2, each behind a contract... v1 is
+         standalone." Consus (renamed from Delphi) integration here is direct/hardcoded, not
+         behind any contract or abstraction seam.
+
+      Needs a proper /plan cycle: research the full blast radius (including any test files and
+      the seed-repo naming convention "consus-seeds"), decide the rip-out or
+      abstract-behind-a-contract approach, and decompose into stories. NOT resolved by this
+      triage entry -- filed here so it surfaces at the next standup rather than getting lost.
+
+      Separately (NOT part of this item): src/full-loop.test.ts and src/plan-runner.test.ts
+      reference the default seed-repo path (~/repos/consus-seeds) without self-provisioning a
+      temp git repo the way 12 other test files correctly do. That's a small, unrelated
+      test-hygiene bug already tracked as its own story in the minerva-value-audit epic.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T04:05:17Z"
+    priority: null
+    severity: null
+    assignee: null
+    linked_epic: null
+    linked_story: null
+    closed_reason: null
+    closed_at: null
+    state_history:
+      - { state: inbox, at: "2026-08-14T04:05:17Z" }

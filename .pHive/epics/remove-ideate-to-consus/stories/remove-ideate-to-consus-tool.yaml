@@ -1,0 +1,31 @@
+id: remove-ideate-to-consus-tool
+epic: remove-ideate-to-consus
+title: Delete ideate-to-consus.mjs, its demo artifacts, and the last dead Consus env-var reference
+complexity: low
+depends_on: []
+
+description: >
+  Delete bin/ideate-to-consus.mjs (634 lines, no dedicated test file) and its demo output
+  (docs/ideation/pan-6965/*, docs/ideation/pan-6963/ingested-context.md). Remove the two dead
+  MINERVA_CONSUS_DECISIONS_URL env-var lines in tests/e2e/ForkedDriverFlow.test.ts (save + set;
+  restore is a generic Object.entries loop over the save object, so removing the key is a clean,
+  self-contained edit). Amend CHANGELOG.md's existing Unreleased entry for rip-out-consus-coupling,
+  which described ideate-to-consus.mjs as staying with a header-note exclusion -- since nothing has
+  shipped yet, amend in place rather than adding a contradicting bullet.
+
+acceptance_criteria:
+  - bin/ideate-to-consus.mjs no longer exists on disk.
+  - docs/ideation/pan-6965/ and docs/ideation/pan-6963/ no longer exist on disk.
+  - grep -i consus across tracked source/test files (excluding historical .pHive/epics docs,
+    triage queue, CHANGELOG, the intentionally-named consus-seeds default and its regression
+    test, and the pollAndResumeConsusAnswers regression-test name) returns zero hits.
+  - tests/e2e/ForkedDriverFlow.test.ts passes with no MINERVA_CONSUS_DECISIONS_URL references.
+  - npm run typecheck and the full test suite pass.
+  - CHANGELOG.md and package.json version reflect the change (patch bump).
+
+out_of_scope:
+  - src/run-manager.ts's consus-seeds default seed-repo naming (not a live API coupling, not part
+    of the idea<->decision-surface round trip).
+  - VISION.md / README.md's Pantheon-architecture "Delphi / Consus" mentions (correctly describe
+    Consus as an external consumer of Minerva's generic waiting_on_human channel).
+  - Historical .pHive/epics/minerva-auto-resume and .pHive/epics/fix-route-response-contract docs.

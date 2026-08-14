@@ -89,6 +89,26 @@ export class TurnTimeoutError extends Error {
   }
 }
 
+// fix-heimdall-route-fail-fast-with-fallback: resolveRuntimeRoute() used to throw a plain,
+// untyped Error on any Heimdall failure (unreachable, non-2xx, malformed body), and every one
+// of its call sites (SpawnDriver/SubagentDriver/ForkedHiveDriver.dispatchFresh/
+// ForkedHiveDriver.classify, plus submitAnswers via driverForRecord()'s default fallback) called
+// it with zero try/catch -- two real startRun invocations against dev both failed before a
+// single question was ever surfaced. HeimdallRouteError is the distinguishable, catchable type
+// this story introduces so a Heimdall routing failure is no longer indistinguishable from any
+// other bug. It deliberately does NOT extend TurnTimeoutError: a routing failure is not a "ran
+// long" condition (kickoff-engine's runTurnResumable retries only `instanceof TurnTimeoutError`)
+// -- retrying it would mask a real outage as a transient blip and multiply load against a
+// service that may already be reporting down. This story does not add a new ErrorCode for it
+// (that's add-upstream-error-code's job, mapping this type at the dispatch layer); it only makes
+// the throw type-distinguishable.
+export class HeimdallRouteError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "HeimdallRouteError";
+  }
+}
+
 export interface RuntimeRoute {
   cli: string;
   model: string;
@@ -116,11 +136,63 @@ function resolveRouteTimeoutMs(): number {
   return parsed;
 }
 
+// Heimdall's /available-route only accepts task-type=planning|build|review (a closed enum --
+// see heimdall/src/core/task-type.ts's TASK_TYPES); "kickoff" was never a valid value and Heimdall
+// rejects it with HTTP 400 invalid_task_type. This driver's turns (SpawnDriver/SubagentDriver/
+// ForkedHiveDriver) exclusively serve startRun, which drives plugin-hive's kickoff+plan skills to
+// completion (research, design discussion, story decomposition -- see src/plan-runner.ts) and
+// never touches code implementation or code review. That makes "planning" the correct task type
+// here, corroborated by src/agnostic-plan-driver.ts's resolvePlanningRoute(), which already calls
+// Heimdall with task-type=planning for Minerva's own planning-flavored turns and is confirmed
+// working against a live Heimdall instance.
 function availableRouteUrl(): string {
   const exact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
   if (exact) return exact;
   const base = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? DEFAULT_HEIMDALL_URL;
-  return new URL("/available-route?task-type=kickoff", base.endsWith("/") ? base : `${base}/`).toString();
+  return new URL("/available-route?task-type=planning", base.endsWith("/") ? base : `${base}/`).toString();
+}
+
+// getAdapter()'s own known/distinguished CLI set (opencode, codex; anything else -- including
+// "claude" -- silently falls through to ClaudeAdapter there). getAdapter() itself is NOT
+// changed by this story: its fallthrough has other callers, and changing its default behavior
+// has a larger blast radius than validating this one new env var at the boundary where it's
+// read (design-discussion.md §3a). "claude" is included here because it IS a legitimate,
+// recognized value for this new config surface even though getAdapter() reaches it via
+// fallthrough rather than an explicit branch.
+const KNOWN_FALLBACK_CLIS = new Set(["opencode", "codex", "claude"]);
+
+// Optional operator-declared escape hatch: MINERVA_FALLBACK_CLI/MINERVA_FALLBACK_MODEL. Read
+// and validated unconditionally, every call, regardless of whether Heimdall ends up being
+// reachable -- malformed operator config (only one of the pair set, or an unrecognized CLI) must
+// never be silently ignored just because Heimdall happened to succeed this time. Mirrors
+// MINERVA_TURN_RETRY_LIMIT/MINERVA_TURN_TIMEOUT_MS's existing "fail loudly on invalid input"
+// shape (kickoff-engine.ts:69-80, driver.ts:62-72). Returns null only when NEITHER var is
+// meaningfully set (undefined or blank), meaning no fallback is configured at all.
+function resolveFallbackRoute(): RuntimeRoute | null {
+  const rawCli = process.env.MINERVA_FALLBACK_CLI;
+  const rawModel = process.env.MINERVA_FALLBACK_MODEL;
+  const cli = rawCli?.trim();
+  const model = rawModel?.trim();
+  const cliSet = !!cli;
+  const modelSet = !!model;
+
+  if (!cliSet && !modelSet) return null;
+
+  if (cliSet !== modelSet) {
+    throw new Error(
+      `MINERVA_FALLBACK_CLI and MINERVA_FALLBACK_MODEL must both be set together, or both left ` +
+        `unset -- got MINERVA_FALLBACK_CLI=${cliSet ? JSON.stringify(cli) : "(unset)"}, ` +
+        `MINERVA_FALLBACK_MODEL=${modelSet ? JSON.stringify(model) : "(unset)"}`,
+    );
+  }
+
+  if (!KNOWN_FALLBACK_CLIS.has(cli!)) {
+    throw new Error(
+      `Unrecognized MINERVA_FALLBACK_CLI value "${cli}" -- expected one of: ${[...KNOWN_FALLBACK_CLIS].join(", ")}`,
+    );
+  }
+
+  return { cli: cli!, model: model! };
 }
 
 export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
@@ -151,6 +223,13 @@ export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
 }
 
 export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fetch): Promise<RuntimeRoute> {
+  // Read + validate the operator fallback config FIRST, unconditionally -- malformed config
+  // (partial pair, unrecognized CLI) fails loudly here regardless of whether Heimdall is even
+  // reachable. This intentionally throws a plain Error (matching this file's other
+  // invalid-env-var precedents), not HeimdallRouteError: it's an operator config mistake, not a
+  // Heimdall routing failure.
+  const fallback = resolveFallbackRoute();
+
   const endpoint = availableRouteUrl();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolveRouteTimeoutMs());
@@ -168,10 +247,23 @@ export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fet
     }
     return parseAvailableRoutePayload(parsed);
   } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") {
-      throw new Error(`Heimdall /available-route timed out after ${resolveRouteTimeoutMs()}ms`);
-    }
-    throw e;
+    // Heimdall failed (unreachable, non-2xx, malformed/timed-out body). If the operator declared
+    // an explicit fallback pair, honor it verbatim -- no inference, exactly what they configured.
+    // Otherwise fail fast with a distinguishable, typed error (not a plain Error) rather than the
+    // untyped throw this story fixes: every call site (SpawnDriver/SubagentDriver/
+    // ForkedHiveDriver.dispatchFresh/.classify, plus submitAnswers) inherits this automatically,
+    // since none of them wrap this call in their own try/catch.
+    if (fallback) return fallback;
+    const reason =
+      e instanceof Error && e.name === "AbortError"
+        ? `Heimdall /available-route timed out after ${resolveRouteTimeoutMs()}ms`
+        : e instanceof Error
+          ? e.message
+          : String(e);
+    throw new HeimdallRouteError(
+      `Heimdall routing failed and no MINERVA_FALLBACK_CLI/MINERVA_FALLBACK_MODEL fallback is configured: ${reason}`,
+      e,
+    );
   } finally {
     clearTimeout(timer);
   }

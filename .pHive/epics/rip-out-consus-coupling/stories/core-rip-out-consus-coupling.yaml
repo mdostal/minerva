@@ -1,0 +1,202 @@
+id: core-rip-out-consus-coupling
+epic: rip-out-consus-coupling
+title: Remove all Consus coupling from Minerva's core ABI, engine, and CLI
+status: pending
+complexity: high
+methodology: tdd
+depends_on: []
+
+description: |
+  Minerva's core code is directly, unconditionally coupled to Consus (renamed Delphi), violating
+  the pre-existing, already-approved v1 requirement in docs/product-brief.md and
+  docs/initial-info.md: zero dependency on Delphi/Auriga/Vulcan/Multica/votem existing. This was
+  discovered live: a real Consus service happened to be reachable on a dev machine and silently
+  broke 20 tests (run status flipped to "awaiting-consus" instead of the expected
+  "waiting_on_human"). The operator's directive is explicit: full rip-out, not a flag/gate.
+
+  This is ONE atomic story, not split further, because the pieces are compile-interdependent —
+  deleting src/consus-*.ts while bin/minerva.ts still imports from them breaks the build; the
+  PlanRequest type change and bin/minerva-plan.ts's call-site fix must land in the same commit
+  or the build won't compile in between. No sub-boundary in this list may be split into a
+  separate story without leaving an intentionally broken intermediate state.
+
+  ## What to remove (verbatim from the design discussion's resolved decisions — do not re-litigate)
+
+  1. **Delete four modules as one atomic unit**, respecting the consus-poller.ts ->
+     consus-resume.ts import dependency (extractAnswerFromItem) — never delete consus-resume.ts
+     first and leave consus-poller.ts with a dangling import:
+     - src/consus-decisions.ts (+ src/consus-decisions.test.ts)
+     - src/consus-poller.ts (+ src/consus-poller.test.ts)
+     - src/consus-resume.ts (+ src/consus-resume.test.ts) — also carries a duplicate
+       fileStoriesToMultica/fileAllStoriesToMultica implementation; deleting this file removes
+       that duplicate "for free," you do not need to touch plan-runner.ts's separate copy.
+     - src/consus-auto-resume.ts (+ src/consus-auto-resume.test.ts)
+
+  2. **src/dispatch.ts**: remove the 4 Consus method registrations from the handler map
+     (resumeFromConsusAnswer, resumeAnsweredConsusDecision, pollConsusAnswers,
+     pollAndResumeConsusAnswers) and their 3 import lines. Leave the 8 provider-neutral methods
+     untouched (capabilities, startRun, getRunStatus, listRuns, getQuestions, submitAnswers,
+     getOutput, abortRun).
+
+  3. **src/kickoff-engine.ts**: in recordTurn(), delete the call to
+     postQuestionToConsusDecisionApi() and the branch that flips status to "awaiting-consus" on
+     a truthy result — DELETE the block entirely, do not add a flag/gate around it. recordTurn()
+     already forms a complete, correct unit without it (it already calls updateRunRecord with
+     status: "waiting_on_human" and the question before the Consus block runs) — deleting the
+     Consus block leaves no orphaned variables or dead code.
+
+  4. **src/run-manager.ts**: remove "awaiting-consus" from the RunStatus union type, and remove
+     consus_question_id from the Question interface (NOT a top-level RunRecord field — it's
+     nested inside RunRecord.questions[]). Do NOT touch defaultSeedRepoPath()'s
+     "~/repos/consus-seeds" reference — that's an unrelated seed-repo naming coincidence,
+     explicitly out of scope (tracked separately under epic minerva-value-audit).
+
+  5. **src/plan-runner.ts**: delete the unconditional "surface parked questions to Consus" block
+     at the end of runHeadlessPlan (the one that POSTs to ${CONSUS_URL}/api/questions regardless
+     of any flag). Delete the pollConsusForAnswers-gated poll loop too — nothing is left to poll
+     once the dedicated modules are gone. Remove pollConsusForAnswers from the PlanRequest type
+     entirely (do not just stop using it — remove the field so TypeScript's excess-property
+     check forces bin/minerva-plan.ts's call site to be fixed in this same commit, not silently
+     ignored later). Remove the CONSUS_URL env var default and its usage. Leave the Multica CLI
+     shell-out surface (_multicaRunner, fileStoriesToMultica, __setMulticaRunnerForTest) —
+     Multica is out of scope for this epic (already flag-gated, not the coupling that broke
+     tests).
+
+  6. **bin/minerva-plan.ts**: fix the call site that will now fail to compile (it currently
+     hardcodes pollConsusForAnswers: true in the runHeadlessPlan({...}) call — remove that field
+     from the call). Add a one-line comment directly above the runHeadlessPlan({...}) call
+     warning future editors: do not extract this object literal into a variable before passing
+     it, doing so would silently defeat TypeScript's excess-property checking that currently
+     catches a stale/removed field at compile time (this is the specific fragility the design
+     discussion flags — the forcing function only works because the call passes an inline object
+     literal directly, not through an intermediate variable).
+
+  7. **bin/minerva.ts**: remove --poll-consus, --poll-and-resume, --consus-item-file from
+     mainArgs() and their handling logic, remove the direct Consus module imports. Update the
+     ARG_HELP string: `"minerva — JSON-over-stdio by default, plus Consus resume shorthand"`
+     becomes `"minerva — JSON-over-stdio"` (or equivalent, matching this file's existing help
+     text style). Leave --file-to-multica untouched (opt-in, not part of the Consus coupling).
+     This must happen in the SAME commit as step 1 (module deletion) — bin/minerva.ts currently
+     imports the modules step 1 deletes, so leaving its imports in place breaks the build
+     immediately.
+
+  DO NOT: touch src/agnostic-plan-driver.ts, src/driver.ts, or anything from the
+  fix-startrun-heimdall-routing epic this branch is already built on. DO NOT: touch Multica
+  logic in plan-runner.ts, consus-resume.ts's Multica functions (deleted wholesale, not
+  surgically edited), or bin/ideate-to-consus.mjs (a separate story handles its header-comment
+  note). DO NOT: consolidate the duplicate Multica-shell-out implementations — explicitly out of
+  scope per the design discussion (§3e), tracked as a future follow-up, not this epic.
+
+acceptance_criteria:
+  - "Given the 4 dedicated consus-*.ts modules and their test files, when this story completes, then none of them exist on disk, and no remaining file imports from any of them"
+  - "Given src/dispatch.ts, when read after this story, then it registers exactly 8 methods (the original provider-neutral set) and imports nothing from any consus-*.ts module"
+  - "Given src/kickoff-engine.ts's recordTurn(), when a question is recorded, then the run's status is set to waiting_on_human and nothing in the function ever references Consus, awaiting-consus, or consus_question_id"
+  - "Given src/run-manager.ts, when read, then RunStatus has no 'awaiting-consus' value and Question has no consus_question_id field; defaultSeedRepoPath()'s consus-seeds reference is UNCHANGED (out of scope)"
+  - "Given src/plan-runner.ts, when read, then there is no unconditional or flag-gated Consus HTTP call anywhere, no CONSUS_URL reference, and PlanRequest has no pollConsusForAnswers field"
+  - "Given bin/minerva-plan.ts, when read, then its runHeadlessPlan({...}) call has no pollConsusForAnswers field and carries the warning comment about not extracting the object literal to a variable"
+  - "Given bin/minerva.ts --help (or equivalent invocation), when run, then its output contains no mention of Consus, --poll-consus, --poll-and-resume, or --consus-item-file, and --file-to-multica still works"
+  - "Given src/types.test.ts's exhaustive RunStatus switch, when updated in this SAME commit as the run-manager.ts type change, then it compiles and passes with no awaiting-consus branch"
+  - "Given src/kickoff-engine.test.ts, when read, then the MINERVA_CONSUS_DECISIONS_URL: \"\" workaround at (formerly) line 344 is removed as dead/meaningless config"
+  - "Given src/full-loop.test.ts and src/e2e-auto-resume.test.ts, when this story completes, then they are REWRITTEN (not deleted) to assert the underlying capability (a run pauses to waiting_on_human and resumes via submitAnswers) without any Consus-shaped assertions (no consus.posts.length, no mockConsusServer usage) -- the end-to-end pause/resume capability itself must still have test coverage"
+  - "Given bin/minerva.test.ts, when read, then the test asserting pollAndResumeConsusAnswers is a registered ABI method is removed or inverted to assert it is NOT registered"
+  - "Given `grep -ril consus src/ bin/` run after this story (case-insensitive), when checked, then the only surviving source-code hits are: bin/ideate-to-consus.mjs (untouched by this story, handled by the sibling docs story), and run-manager.ts's unrelated consus-seeds reference -- nothing else"
+  - "Given `npx tsc --noEmit`, when run, then it passes with zero errors"
+  - "Given the full test suite (`npm test` or targeted equivalent), when run, then it passes with zero new failures beyond the pre-existing, already-documented ones (live-Consus-service test flakiness this story ELIMINATES should now be gone; the unrelated t-004 plan_runtime bug and any real-subprocess-spawning tests are out of scope)"
+
+metric:
+  applies: true
+  name: dispatch.core_abi_consus_free
+  direction: up
+  unit: bool
+  baseline: 0
+  target: 1
+  window: "story integrate step"
+  source:
+    kind: manual
+    ref: "Run `grep -ril consus src/ bin/` and confirm zero hits outside bin/ideate-to-consus.mjs and run-manager.ts's unrelated consus-seeds line; run the full test suite and confirm no test ever observes status:awaiting-consus"
+  verify_at: "story integrate step"
+  owner: developer
+
+steps:
+  - id: research
+    description: Read src/dispatch.ts, src/kickoff-engine.ts's recordTurn(), src/run-manager.ts's RunStatus/Question types, src/plan-runner.ts's Consus block and pollConsusForAnswers usage, bin/minerva.ts's mainArgs(), bin/minerva-plan.ts's runHeadlessPlan call site, and all 4 consus-*.ts modules plus their test files, to confirm exact line numbers and the consus-poller.ts->consus-resume.ts dependency before making any change.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Rewrite src/full-loop.test.ts and src/e2e-auto-resume.test.ts FIRST, before deleting any
+      production code, to assert the underlying pause/resume capability (waiting_on_human,
+      submitAnswers) without Consus-shaped assertions. Update src/types.test.ts's exhaustive
+      switch to drop the awaiting-consus branch. Update bin/minerva.test.ts to remove/invert the
+      pollAndResumeConsusAnswers registration assertion. These will fail to compile/run until the
+      production code changes land -- that's expected for this step.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Delete the 4 consus-*.ts modules (atomic, respecting the import dependency), and make all the src/dispatch.ts, kickoff-engine.ts, run-manager.ts, plan-runner.ts, bin/minerva.ts, bin/minerva-plan.ts changes described above, in one commit, to make the rewritten tests pass and the build compile.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the grep-for-consus acceptance criterion holds, confirm no dangling imports, confirm defaultSeedRepoPath()'s consus-seeds reference was left untouched, confirm the full test suite is green with zero new failures, confirm typecheck is clean, confirm bin/ideate-to-consus.mjs was NOT touched (separate story).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  tech_stack:
+    language: typescript
+    test_runner: "node:test via tsx --test"
+  key_files:
+    - path: src/dispatch.ts
+      purpose: "Handler map registry -- remove 4 Consus method registrations + imports"
+    - path: src/kickoff-engine.ts
+      purpose: "recordTurn() (~151-192) -- delete the unconditional Consus POST call and status-flip branch (~180-191)"
+    - path: src/run-manager.ts
+      purpose: "RunStatus union (~line 14) and Question interface (~line 64) -- remove Consus-specific members; leave defaultSeedRepoPath() untouched"
+    - path: src/plan-runner.ts
+      purpose: "Unconditional Consus-surfacing block + pollConsusForAnswers-gated poll loop + PlanRequest.pollConsusForAnswers field -- all removed"
+    - path: bin/minerva-plan.ts
+      purpose: "runHeadlessPlan({...}) call site (~line 150) -- remove pollConsusForAnswers:true, add warning comment"
+    - path: bin/minerva.ts
+      purpose: "mainArgs() -- remove --poll-consus/--poll-and-resume/--consus-item-file and Consus imports; update ARG_HELP"
+    - path: src/consus-decisions.ts
+      purpose: "Full file deletion"
+    - path: src/consus-poller.ts
+      purpose: "Full file deletion -- depends on consus-resume.ts, delete together"
+    - path: src/consus-resume.ts
+      purpose: "Full file deletion -- also removes a duplicate fileStoriesToMultica implementation"
+    - path: src/consus-auto-resume.ts
+      purpose: "Full file deletion"
+
+design_decisions:
+  - decision: One atomic story covering all of §3(a)-(d), not split by TPM's initial 2-story suggestion
+    rationale: "bin/minerva.ts imports the modules this story deletes -- splitting the CLI-flag cleanup into a separate story would leave an intentionally broken intermediate build state between stories, which no Hive story boundary should do. The design discussion's own §3 ordering note and §7 verification plan both already assume same-commit landing for these pieces."
+  - decision: Remove pollConsusForAnswers from PlanRequest rather than deprecate/ignore it
+    rationale: "Makes bin/minerva-plan.ts's stale call site a compile error (loud, fixed now) instead of a silent no-op (quiet, wrong later) -- this is the epic's own explicitly-designed forcing function (design-discussion.md §3d)"
+  - decision: Rewrite full-loop.test.ts/e2e-auto-resume.test.ts rather than delete them
+    rationale: "They assert real, valuable end-to-end behavior (does a run actually pause and resume) that predates and is independent of Consus -- deleting them would remove real coverage, not just Consus-specific assertions"
+
+cross_cutting:
+  - concern: documentation
+    action: "This story does NOT update docs -- that's the sibling story document-consus-ripout-and-standalone-boundary, which depends on this one completing first so it can describe the actual end state accurately"
+
+risks:
+  - severity: high
+    description: "bin/minerva-plan.ts's hardcoded pollConsusForAnswers:true is the sharpest edge in this epic -- if plan-runner.ts's type change and this file's call-site fix land in separate commits, the build breaks in between (best case) or a stale field silently no-ops (worst case, if TypeScript's excess-property check doesn't fire for some reason)"
+    mitigation: "Both changes MUST land in this single story's single commit, verified by acceptance criteria requiring a clean tsc --noEmit at integrate time; the warning comment guards against a FUTURE regression, not this story's own risk"
+  - severity: medium
+    description: "types.test.ts's exhaustive switch over RunStatus will fail to compile the moment awaiting-consus is removed from the type -- easy to miss if the test-spec step doesn't explicitly include it"
+    mitigation: "Explicitly listed as a test-spec step deliverable and an acceptance criterion, not left to be discovered incidentally"
+
+references:
+  - path: .pHive/epics/rip-out-consus-coupling/docs/design-discussion.md
+    relevant_excerpt: |
+      §3(a): "Deleting it means recordTurn() goes back to doing one thing: recording the turn."
+      §3(d): "I'd rather it fail to compile -- a forcing function to fix the call site in the
+      same commit rather than discover the drift later." §7 Verification Plan steps 1-9 (the
+      exact ordering and same-commit requirements this story's steps mirror).
+  - path: .pHive/triage/queue.yaml
+    relevant_excerpt: "t-002: operator directive 'you need to full rip it out and apart', p0/critical, linked_epic rip-out-consus-coupling"

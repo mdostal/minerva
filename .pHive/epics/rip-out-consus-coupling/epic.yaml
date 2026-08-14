@@ -1,0 +1,43 @@
+name: rip-out-consus-coupling
+title: "Full Rip-Out of Consus Coupling from Minerva's Core"
+description: >
+  Per the operator's explicit directive ("you need to full rip it out and apart") and Minerva's
+  own pre-existing, already-approved v1 requirement (docs/product-brief.md, docs/initial-info.md:
+  zero dependency on Delphi/Auriga/Vulcan/Multica/votem existing), remove all direct Consus
+  (renamed Delphi) coupling from Minerva's core dispatch/engine/types, close the one unconditional
+  gap in plan-runner.ts, and clean bin/minerva.ts's CLI surface -- one atomic story
+  (core-rip-out-consus-coupling) since the pieces are compile-interdependent. bin/minerva-plan.ts
+  stays as a genuine standalone tool (its core function needs no sibling god); bin/ideate-to-consus.mjs
+  is explicitly excluded from Minerva's standalone claim via a header note rather than relocated
+  (a repo-topology decision beyond this epic's authority) since its entire purpose is a
+  Consus/Janus round-trip. Multica coupling (already flag-gated, not the coupling that broke 20
+  tests) is explicitly out of scope. Definition of Done includes a live pause/resume PoC
+  (triage t-002's stated acceptance bar) run by the orchestrator after both stories land, not
+  embedded in story automation.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: tdd
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture]
+  roster: [researcher, technical-writer, tpm, architect]
+  per_tag_reasoning:
+    architecture: "Full removal of cross-system integration coupling from a core ABI, with a real per-binary architectural judgment call (which standalone tools pass the 'genuinely standalone' bar) that shapes the fix's scope, not just a mechanical deletion."
+  confidence: matched
+  gate_decisions:
+    architecture: included
+
+stories:
+  - id: core-rip-out-consus-coupling
+    title: Remove all Consus coupling from Minerva's core ABI, engine, and CLI
+    complexity: high
+    depends_on: []
+  - id: document-consus-ripout-and-standalone-boundary
+    title: Document the rip-out end state and draw an explicit standalone-boundary line around ideate-to-consus.mjs
+    complexity: medium
+    depends_on: [core-rip-out-consus-coupling]

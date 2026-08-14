@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { startRun, getQuestions, submitAnswers, __setDriverForTest } from "./kickoff-engine.ts";
 import { getOutput } from "./output-emitter.ts";
-import { mockHeimdallServer, mockConsusServer, createSeedRepo } from "./test-cli.ts";
+import { mockHeimdallServer, createSeedRepo } from "./test-cli.ts";
 import { resolve, dirname, join } from "node:path";
 import { readRunRecord } from "./run-manager.ts";
 import { fileURLToPath } from "node:url";
@@ -87,7 +87,6 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
   
   const previousHeimdallUrl = process.env.MINERVA_HEIMDALL_URL;
   const previousExact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  const previousConsus = process.env.MINERVA_CONSUS_DECISIONS_URL;
   const previousTestMode = process.env.MINERVA_TEST_MODE;
   const previousCli = process.env.HIVE_PLAN_AGNOSTIC_CLI;
   const previousOpencode = process.env.OPENCODE_BIN;
@@ -104,21 +103,16 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
   process.env.HIVE_PLAN_AGNOSTIC_CLI = fakeCli;
   process.env.MINERVA_SEED_REPO = seedRepo;
 
-  const consus = await mockConsusServer();
-  process.env.MINERVA_CONSUS_DECISIONS_URL = consus.url;
-  
   const defaultDriver = __setDriverForTest(new KickoffDriver() as any);
 
   try {
-    const { run_id } = await startRun({ idea: "test idea", repo_url: seedRepo });
+    const { run_id } = await startRun({ idea: "test idea", target_repo: seedRepo });
     assert.ok(run_id, "startRun should return a run_id");
-    
+
     let { questions } = await getQuestions({ run_id: run_id as string, channel: "human" }) as any;
     assert.equal(questions.length, 1, "Kickoff should surface 1 question");
-    
-    assert.equal(consus.posts.length, 1, "Question should be posted to Consus API");
-    
-    await submitAnswers({ 
+
+    await submitAnswers({
       run_id: run_id as string, 
       channel: "human", 
       answers: [{ question_id: questions[0].id, answer: "yes" }] 
@@ -134,11 +128,9 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
     assert.ok(output.epic.stories.length > 0, "Stories should exist");
   } finally {
     heimdall.server.close();
-    consus.server.close();
     __setDriverForTest(defaultDriver);
     if (previousHeimdallUrl) process.env.MINERVA_HEIMDALL_URL = previousHeimdallUrl; else delete process.env.MINERVA_HEIMDALL_URL;
     if (previousExact) process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousExact; else delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-    if (previousConsus) process.env.MINERVA_CONSUS_DECISIONS_URL = previousConsus; else delete process.env.MINERVA_CONSUS_DECISIONS_URL;
     if (previousTestMode) process.env.MINERVA_TEST_MODE = previousTestMode; else delete process.env.MINERVA_TEST_MODE;
     if (previousCli) process.env.HIVE_PLAN_AGNOSTIC_CLI = previousCli; else delete process.env.HIVE_PLAN_AGNOSTIC_CLI;
     if (previousOpencode) process.env.OPENCODE_BIN = previousOpencode; else delete process.env.OPENCODE_BIN;
@@ -191,7 +183,7 @@ test("fallback path: Heimdall down -> claude/claude gracefully degrades", async 
   const defaultDriver = __setDriverForTest(new FallbackDriver() as any);
 
   try {
-    const { run_id } = await startRun({ idea: "test idea", repo_url: seedRepo });
+    const { run_id } = await startRun({ idea: "test idea", target_repo: seedRepo });
     assert.ok(run_id, "startRun should return a run_id");
     
     const record = readRunRecord(run_id as string);

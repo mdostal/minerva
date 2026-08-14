@@ -17,10 +17,10 @@ import {
   type Channel,
   type RunRecord,
 } from "./run-manager.ts";
+import { abortRun } from "./cleanup-ledger.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
 import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
-import { postQuestionToConsusDecisionApi } from "./consus-decisions.ts";
 import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
@@ -175,19 +175,6 @@ export async function recordTurn(runId: string, rawResult: string): Promise<void
     status: "waiting_on_human",
     questions: [...record.questions, question],
   });
-
-  const posted = await postQuestionToConsusDecisionApi(runId, question);
-  if (posted.posted) {
-    const patch: Partial<import("./run-manager.ts").RunRecord> = { status: "awaiting-consus" };
-    if (posted.consus_question_id) {
-      const current = readRunRecord(runId);
-      const updatedQuestions = current.questions.map((q) =>
-        q.id === question.id ? { ...q, consus_question_id: posted.consus_question_id } : q
-      );
-      patch.questions = updatedQuestions;
-    }
-    updateRunRecord(runId, patch);
-  }
 }
 
 // Best-effort parse of the structured envelope fields a driver may embed alongside the question
@@ -317,11 +304,35 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
   // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
   const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults);
-  const { session_id: sessionId, raw_result: rawResult } = await runTurnResumable(driver, {
-    cwd: record.workspace_path,
-    sessionId: null,
-    prompt: drivePrompt,
-  });
+
+  // auto-cleanup-orphaned-runs-on-first-turn-failure: allocateRun() above already durably wrote
+  // this run's record (status "in_progress") and its workspace/worktree, BEFORE this very first
+  // drive turn is attempted. If this turn throws (any error -- e.g. the HeimdallRouteError the
+  // fix-heimdall-route-fail-fast-with-fallback story now throws when routing fails with no
+  // operator fallback configured), the run would otherwise be left permanently stuck at
+  // "in_progress" with no ledger entry -- an orphan. This run has not yet reached
+  // "waiting_on_human" -- no question has ever been surfaced -- so it has no human-facing state
+  // to preserve, and auto-terminating it here is not the kind of autonomous forward-advancement
+  // "No Autonomous Progress" / AD-5's stall invariant guard against: it happens synchronously,
+  // inside this same failed startRun() call, not on a later autonomous tick (see this story's
+  // spec / design-discussion.md §3d). abortRun()/recordCleanup() (cleanup-ledger.ts) is the
+  // existing, idempotent, AD-4-compliant mechanism (record + signal only, never deletes
+  // workspace_path/state_path) -- reused here unmodified. The original error is always re-thrown
+  // after cleanup so the caller still learns the run failed, never silence. This hook must NEVER
+  // be applied to any later-turn failure (e.g. inside submitAnswers, after waiting_on_human has
+  // been reached) -- that is a stall, explicitly protected by AD-5 and out of scope here.
+  let sessionId: string;
+  let rawResult: string;
+  try {
+    ({ session_id: sessionId, raw_result: rawResult } = await runTurnResumable(driver, {
+      cwd: record.workspace_path,
+      sessionId: null,
+      prompt: drivePrompt,
+    }));
+  } catch (err) {
+    abortRun({ run_id: runId });
+    throw err;
+  }
   recordDriverTurn(runId);
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.

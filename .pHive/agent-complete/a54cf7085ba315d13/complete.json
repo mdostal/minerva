@@ -1,0 +1,16 @@
+{
+  "agent_id": "a54cf7085ba315d13",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "general-purpose",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a54cf7085ba315d13.jsonl",
+  "last_assistant_message": "The research brief is written to `/Users/mdostal/Documents/work/pantheon/minerva/.pHive/epics/fix-startrun-heimdall-routing/docs/research-brief.md`.\n\nBeyond relaying the raw findings, I read the actual source (`src/driver.ts`, `src/dispatch.ts`, `src/agnostic-plan-driver.ts`, `src/run-manager.ts`, `src/kickoff-engine.ts`, `src/cleanup-ledger.ts`, `src/errors.ts`, `src/driver-route.test.ts`) to pin exact line numbers and surface several load-bearing facts not in the raw material:\n\n- `SubagentDriver` (`driver.ts:670`) and `ForkedHiveDriver` (`driver.ts:871`, `:949`) call the same unguarded `resolveRuntimeRoute()` — the bug isn't `SpawnDriver`-exclusive.\n- `submitAnswers` (`kickoff-engine.ts:418`) hits the identical path via `driverForRecord()`'s default fallback.\n- `runTurnResumable()` (`kickoff-engine.ts:90-101`) only retries `TurnTimeoutError` — a routing failure is never retried.\n- `driver-route.test.ts:97-103` already asserts today's fail-loudly behavior as intentional, so this isn't an untested oversight — a fix must consciously rewrite that test.\n- `errors.ts` has only 5 `ErrorCode` values, none fit for \"internal dependency failure,\" which bounds how the `UNKNOWN_METHOD` fix can be shaped.\n- `cleanup-ledger.ts` already provides an AD-4-compliant `abortRun`/`recordCleanup` mechanism (record + signal, never delete) that `startRun`'s failure path could hook into rather than needing new infrastructure — but AD-4 explicitly forbids deleting workspace/state directly, which constrains any \"cleanup\" design.\n\nThe brief follows the required section order (Summary, Key files & surfaces, Patterns & conventions, Constraints, Risks, Open questions, Recommendation) with the Recommendation section clearly marked as synthesis, every non-obvious claim cited to file/line, and six flagged open questions rather than invented answers (correct Heimdall task-type value, fail-open-vs-fail-fast design intent, cleanup scope, whether an ADR already covers the divergence, epic scope boundary across drivers, and the target shape of the debuggability fix).",
+  "prompt_id": "000b346d-24d2-498a-841d-da5866abfeb6",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:38:22Z"
+}

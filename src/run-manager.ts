@@ -11,7 +11,7 @@ import { MinervaError } from "./errors.ts";
 import type { PlanDefaults } from "./plan-defaults.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
-export type RunStatus = "in_progress" | "waiting_on_human" | "awaiting-consus" | "complete" | "aborted";
+export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
 export type Channel = "agent" | "human";
 
 // Closed to exactly the three values the headless-question-protocol's envelope schema
@@ -61,7 +61,6 @@ export interface Question {
   // answer-write-back step can address the correct question within a multi-question envelope
   // without re-deriving the mapping.
   qid?: string;
-  consus_question_id?: string;
 }
 
 export interface RunRecord {

@@ -117,14 +117,12 @@ test("E2E forked driver flow routes a task, records telemetry, and aggregates fi
     MINERVA_HOME: process.env.MINERVA_HOME,
     MINERVA_DRIVER: process.env.MINERVA_DRIVER,
     MINERVA_TEST_DRIVE_PROMPT: process.env.MINERVA_TEST_DRIVE_PROMPT,
-    MINERVA_CONSUS_DECISIONS_URL: process.env.MINERVA_CONSUS_DECISIONS_URL,
   };
 
   process.env.MINERVA_HOME = minervaHome;
   process.env.MINERVA_DRIVER = "forked";
   process.env.MINERVA_TEST_DRIVE_PROMPT =
     "route this simulated external task through forked execution: {idea}";
-  process.env.MINERVA_CONSUS_DECISIONS_URL = "";
 
   try {
     const started = await startRun({

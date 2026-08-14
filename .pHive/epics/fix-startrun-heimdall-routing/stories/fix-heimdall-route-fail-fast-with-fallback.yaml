@@ -1,0 +1,153 @@
+id: fix-heimdall-route-fail-fast-with-fallback
+epic: fix-startrun-heimdall-routing
+title: Make resolveRuntimeRoute() fail loudly with a typed error, or use an explicit operator fallback
+status: pending
+complexity: high
+methodology: tdd
+depends_on: []
+
+description: |
+  `resolveRuntimeRoute()` (src/driver.ts:153-178) throws an untyped `Error` on any Heimdall
+  failure (unreachable, non-2xx, malformed body), and every one of its four call sites
+  (`SpawnDriver.runTurn()` :595, `SubagentDriver.runTurn()` :670, `ForkedHiveDriver.dispatchFresh()`
+  :871, `ForkedHiveDriver.classify()` :949) calls it with zero try/catch. `submitAnswers`
+  (kickoff-engine.ts:418, via `driverForRecord()`'s default fallback) hits the identical path.
+  This was confirmed live: two real `startRun` invocations against `dev` both failed before a
+  single question was ever surfaced.
+
+  Fix `resolveRuntimeRoute()` itself (root-scoped, not per-call-site) so all five exposure points
+  inherit the fix automatically:
+
+  1. **Default behavior (no operator fallback configured): fail fast with a typed error**, not an
+     untyped `Error`. Define a distinguishable error class/type for "Heimdall routing failed" that
+     the debuggability story (add-upstream-error-code, depends on this story) will map to a new
+     ErrorCode. Do NOT add the new ErrorCode yourself — that's the next story's job. Just make the
+     thrown error type-distinguishable (e.g. a new `HeimdallRouteError` class, or reuse
+     `MinervaError` with a specific code that the next story maps at the dispatch layer — your
+     call on the cleanest shape, but it must be catchable-and-distinguishable, not a plain `Error`).
+  2. **Optional operator fallback**: read `MINERVA_FALLBACK_CLI` and `MINERVA_FALLBACK_MODEL` env
+     vars. If *both* are set, use that pair instead of throwing on Heimdall failure — no inference,
+     the operator's literal values, used verbatim. If only one is set, that's malformed config —
+     fail loudly (same shape as an invalid `MINERVA_TURN_TIMEOUT_MS` today), do not silently ignore
+     the partial config.
+  3. **Validate `MINERVA_FALLBACK_CLI` against `getAdapter()`'s known CLI set** (`opencode`,
+     `codex`, `claude`) at the point this new config is read — fail loudly on an unrecognized
+     value. Do NOT change `getAdapter()`'s own default behavior (its silent fallthrough to
+     `ClaudeAdapter` for unrecognized values has other callers; changing it is out of scope for
+     this story per the design discussion's explicit reasoning — validate at the boundary where
+     the new config is read instead).
+  4. **`runTurnResumable()` (kickoff-engine.ts:90-101) must NOT retry this new error type.** It
+     currently retries only `instanceof TurnTimeoutError`. A Heimdall routing failure is not a
+     "ran long" condition — retrying it would mask a real outage as a transient blip and multiply
+     load against a service that may already be reporting down. Do not change the retry gating;
+     just confirm (with a test) the new error type does NOT extend `TurnTimeoutError` and is not
+     swept into the retry path.
+  5. **`src/driver-route.test.ts:97-103` currently asserts today's throw-through behavior as
+     intentional** (`assert.rejects(...)`). This is not an oversight to silently break — consciously
+     rewrite this test to assert the new behavior (typed error when unset, fallback-pair-used when
+     both env vars set, loud failure when only one is set, unrecognized CLI rejected). Do not leave
+     the old assertion in place alongside new tests; replace it.
+
+  DO NOT: implement the new ErrorCode value itself (next story), implement the auto-cleanup hook
+  (separate story), or touch the Heimdall task-type value (`task-type=kickoff` string — separate,
+  independent story). This story is scoped to resolveRuntimeRoute()'s error-handling shape and the
+  operator-fallback config surface only.
+
+acceptance_criteria:
+  - "Given no MINERVA_FALLBACK_CLI/MODEL set and Heimdall unreachable or erroring, when resolveRuntimeRoute() is called from any of the 4 call sites (SpawnDriver, SubagentDriver, ForkedHiveDriver.dispatchFresh, ForkedHiveDriver.classify) or via submitAnswers, then it throws a distinguishable, typed error (not a plain Error)"
+  - "Given both MINERVA_FALLBACK_CLI and MINERVA_FALLBACK_MODEL set to valid values (one of opencode/codex/claude for the CLI), when Heimdall fails, then resolveRuntimeRoute() returns that exact pair instead of throwing"
+  - "Given only one of MINERVA_FALLBACK_CLI or MINERVA_FALLBACK_MODEL set, when resolveRuntimeRoute() is called, then it fails loudly (throws) regardless of whether Heimdall is reachable -- malformed config is never silently ignored"
+  - "Given MINERVA_FALLBACK_CLI set to a value not in {opencode, codex, claude}, when resolveRuntimeRoute() is called, then it fails loudly at config-read time rather than silently falling through to ClaudeAdapter"
+  - "Given the new error type, when runTurnResumable() encounters it, then it is NOT retried (does not extend TurnTimeoutError, propagates on first attempt exactly like today)"
+  - "Given src/driver-route.test.ts, when npx tsx --test src/driver-route.test.ts runs after this story, then it asserts the NEW behavior (no stale assertions of the old untyped-throw-always behavior left in place)"
+  - "Given npx tsc --noEmit, when run, then it passes with zero errors"
+
+metric:
+  applies: true
+  name: driver.heimdall_route_failures_typed
+  direction: up
+  unit: bool
+  baseline: 0
+  target: 1
+  window: "story integrate step"
+  source:
+    kind: manual
+    ref: "Run npx tsx --test src/driver-route.test.ts and confirm the rewritten assertions pass: typed error on unset-fallback failure, fallback pair honored when both env vars set, loud failure on partial config, loud failure on unrecognized fallback CLI"
+  verify_at: "story integrate step"
+  owner: developer
+
+steps:
+  - id: research
+    description: Read src/driver.ts's resolveRuntimeRoute() (153-178), all 4 call sites, getAdapter() (583-591), src/kickoff-engine.ts's runTurnResumable() (90-101) and submitAnswers (375-421), and src/driver-route.test.ts's current assertions (97-103) to confirm exact insertion points before writing tests.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests first, derived from the acceptance criteria above -- do not read the
+      implementation before writing them. Rewrite src/driver-route.test.ts's stale assertion
+      (97-103) to match the new expected behavior; add new test cases for the fallback-pair-used,
+      partial-config-rejected, and unrecognized-CLI-rejected paths; add a test confirming the new
+      error type is not retried by runTurnResumable().
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement resolveRuntimeRoute()'s new error-handling shape and the fallback-config validation to make the failing tests pass. Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the fix is genuinely root-scoped (all 4 call sites + submitAnswers inherit it, not just SpawnDriver), confirm getAdapter() itself was NOT modified, confirm runTurnResumable()'s retry gating was NOT changed (only confirmed via test), confirm driver-route.test.ts's old assertion was consciously replaced not left dangling.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  tech_stack:
+    language: typescript
+    test_runner: "node:test via tsx --test"
+  key_files:
+    - path: src/driver.ts
+      purpose: "resolveRuntimeRoute() (153-178) is the fix target; getAdapter() (583-591) needs validation added at the new config-read call site, not modified itself; 4 call sites at 595/670/871/949"
+    - path: src/kickoff-engine.ts
+      purpose: "runTurnResumable() (90-101) retry gating must not change; submitAnswers (375-421) inherits the fix via driverForRecord()'s default fallback"
+    - path: src/driver-route.test.ts
+      purpose: "Existing test at 97-103 asserts today's behavior -- must be consciously rewritten, not left stale"
+    - path: src/agnostic-plan-driver.ts
+      purpose: "Sibling resolvePlanningRoute() (80-102) is the fail-open pattern this story deliberately does NOT copy -- reference for contrast, not for reuse"
+
+code_examples:
+  - title: Existing fail-loud-or-explicit-value precedent to model the fallback config on
+    file: src/kickoff-engine.ts
+    snippet: |
+      // MINERVA_TURN_RETRY_LIMIT: fails loudly on invalid input, uses the operator's explicit
+      // value when present -- this is the shape MINERVA_FALLBACK_CLI/MODEL should follow.
+      // (see kickoff-engine.ts:60-81 for the exact pattern)
+  - title: The unguarded call site to fix (repeated at 4 locations)
+    file: src/driver.ts
+    snippet: |
+      export class SpawnDriver implements Driver {
+        async runTurn(input: DriverInput): Promise<DriverResult> {
+          const route = await resolveRuntimeRoute();  // <-- unguarded, throws untyped Error today
+          const adapter = getAdapter(route.cli);
+          ...
+
+design_decisions:
+  - decision: Validate the fallback CLI at the config-read boundary, not inside getAdapter()
+    rationale: "getAdapter() is an existing, shared function with callers beyond this new fallback path; changing its default behavior has a larger, less-contained blast radius than validating one new env var where it's read (architect review finding, design-discussion.md §3a)"
+  - decision: Fix resolveRuntimeRoute() itself (root-scoped) rather than wrapping each of the 4 call sites individually
+    rationale: "One fix location, all 5 exposure points (4 call sites + submitAnswers) inherit it automatically and consistently; this scope call is safe specifically because the fix is fail-fast/declared-fallback, not an undeclared fail-open (design-discussion.md §3b)"
+
+risks:
+  - severity: high
+    description: An implementer who validates the fallback pair's presence but not its individual values (e.g. accepts an empty-string MINERVA_FALLBACK_MODEL) could silently mask a real "no runtime available" state as false success
+    mitigation: Acceptance criteria explicitly require both env vars to be validated as non-empty/meaningful, not just present; reviewer step must check for this specifically
+
+references:
+  - path: .pHive/epics/fix-startrun-heimdall-routing/docs/design-discussion.md
+    relevant_excerpt: |
+      §3(a): "fail-fast is the default and only behavior when no fallback is configured...
+      When an operator has explicitly configured MINERVA_FALLBACK_CLI/MINERVA_FALLBACK_MODEL,
+      that declared pair is used instead... validate MINERVA_FALLBACK_CLI against getAdapter's
+      known CLI set... at config-read time, and fail loudly on an unrecognized value."

@@ -1,0 +1,16 @@
+{
+  "agent_id": "af474bbda6c50b628",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-af474bbda6c50b628.jsonl",
+  "last_assistant_message": "Verifying pollConsusForAnswers usage",
+  "prompt_id": "752c87a8-b5c0-42f0-91dc-666e823033c2",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T14:58:12Z"
+}

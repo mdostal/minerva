@@ -17,12 +17,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { startRun } from "./kickoff-engine.ts";
-import { getRunStatus, readRunRecord, updateRunRecord, type Question } from "./run-manager.ts";
+import { getRunStatus, readRunRecord, type Question } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
 import type { CompletedEpic } from "./output-emitter.ts";
 import type { PlanDefaultsMode } from "./plan-defaults.ts";
-import { fetchConsusQuestionStatus } from "./consus-poller.ts";
-import { extractAnswerFromItem } from "./consus-resume.ts";
 import { parseTargetRepoLine, stampTargetRepo, deriveRepoSlugFromWorkspace } from "./target-repo-signal.ts";
 
 export interface PlanRequest {
@@ -31,7 +29,6 @@ export interface PlanRequest {
   mode?: PlanDefaultsMode; // default "auto" -- fully unattended; the whole point of this entry
   defaults?: Record<string, unknown>; // extra per-run plan-defaults overrides (merged over mode)
   ticketId?: string; // origin Multica ticket, for linkage when filing stories back
-  pollConsusForAnswers?: boolean; // poll Consus for answers to parked questions
 }
 
 export interface PlanResult {
@@ -56,74 +53,8 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
     defaults,
   })) as { run_id: string };
 
-  let status = (getRunStatus({ run_id }) as { status: string }).status;
-  let record = readRunRecord(run_id);
-  const consusUrl = process.env.CONSUS_URL || "http://localhost:8722";
-  const consusMap = new Map<string, number>();
-
-  while (status === "waiting_on_human" && req.pollConsusForAnswers) {
-    const pending = record.questions.filter((q) => q.status === "pending");
-    for (const q of pending) {
-      if (consusMap.has(q.id)) continue;
-      try {
-        const res = await fetch(`${consusUrl}/api/questions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            item_id: req.ticketId || `run-${run_id}`,
-            minerva_question_id: q.id,
-            text: q.text,
-            channel: q.channel,
-          }),
-        });
-        if (res.ok) {
-          const data = (await res.json()) as Record<string, unknown>;
-          const id = typeof data.id === "number" ? data.id : Number(data.id);
-          if (Number.isFinite(id)) {
-            consusMap.set(q.id, id);
-            console.error(`[headless] Posted question ${q.id} to Consus (human_request: ${id})`);
-          }
-        } else {
-          console.error(`[headless] Failed to post question ${q.id}: HTTP ${res.status}`);
-        }
-      } catch (e) {
-        console.error(`[headless] Consus unreachable: ${(e as Error).message}`);
-      }
-    }
-
-    let answeredQ: { id: string; answer: string | string[]; channel: string } | null = null;
-    await new Promise((r) => setTimeout(r, 5000));
-
-    for (const [qid, cid] of consusMap.entries()) {
-      // Poll the same /api/questions/:id resource poll-consus-answers posts to and reads --
-      // NOT /api/workflows/pw-:id/status, whose "resumed" response never carries the answer text
-      // (confirmed live against a running Consus instance), which silently stalled this loop
-      // forever after a human answered.
-      const result = await fetchConsusQuestionStatus(String(cid));
-      if (result.status !== "answered") continue;
-      const answerValue = extractAnswerFromItem(result.item, qid);
-      if (answerValue === null) continue;
-      const q = pending.find((q) => q.id === qid);
-      if (q) {
-        answeredQ = { id: qid, answer: answerValue, channel: q.channel };
-        break;
-      }
-    }
-
-    if (answeredQ) {
-      console.error(`[headless] Answer received for ${answeredQ.id}, resuming run...`);
-      const { submitAnswers } = await import("./kickoff-engine.ts");
-      await submitAnswers({
-        run_id,
-        channel: answeredQ.channel,
-        answers: [{ question_id: answeredQ.id, answer: answeredQ.answer }],
-      });
-      consusMap.delete(answeredQ.id);
-    }
-
-    status = (getRunStatus({ run_id }) as { status: string }).status;
-    record = readRunRecord(run_id);
-  }
+  const status = (getRunStatus({ run_id }) as { status: string }).status;
+  const record = readRunRecord(run_id);
 
   let epic: CompletedEpic | null = null;
   let epics: CompletedEpic[] = [];
@@ -133,41 +64,6 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
     epics = out.epics ?? (out.epic ? [out.epic] : []);
   }
   const pending = record.questions.filter((q) => q.status === "pending");
-
-  // Surface parked questions to Consus (the human inbox at /api/questions). Best-effort:
-  // never block or fail the plan if Consus is unreachable — the question stays parked in Minerva.
-  if (pending.length > 0) {
-    const consusUrl = process.env.CONSUS_URL || "http://localhost:8722";
-    for (const q of pending) {
-      const qq = q as unknown as { id?: string; text?: string; suggested_channel?: string; confidence?: number; reason?: string };
-      try {
-        const res = await fetch(`${consusUrl}/api/questions`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            item_id: run_id,
-            item_title: req.idea,
-            minerva_question_id: qq.id,
-            text: qq.text,
-            channel: "consus",
-            suggested_channel: qq.suggested_channel,
-            confidence: qq.confidence,
-            reason: qq.reason,
-          }),
-        });
-        if (res.ok) {
-          const data = (await res.json().catch(() => null)) as any;
-          if (data && typeof data.id === "string") {
-            const current = readRunRecord(run_id);
-            const updated = current.questions.map((qu) => 
-              qu.id === qq.id ? { ...qu, consus_question_id: data.id } : qu
-            );
-            updateRunRecord(run_id, { questions: updated });
-          }
-        }
-      } catch { /* Consus unreachable — question remains parked in Minerva; no data lost */ }
-    }
-  }
 
   return { run_id, status, epic, epics, pending_questions: pending, workspace_path: record.workspace_path };
 }

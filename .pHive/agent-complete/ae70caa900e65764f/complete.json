@@ -1,0 +1,16 @@
+{
+  "agent_id": "ae70caa900e65764f",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "general-purpose",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-ae70caa900e65764f.jsonl",
+  "last_assistant_message": "Committed as `49e538d`. Not pushed, per instructions.\n\n## Summary\n\n**Where the try/catch was added:** `src/kickoff-engine.ts`, `startRun()`, wrapping the first `runTurnResumable()` call (originally at line 320, now lines ~338-349 after the added explanatory comment). On catch, it calls `abortRun({ run_id: runId })` (imported from `./cleanup-ledger.ts`, unmodified) and re-throws the original error — the caller always still learns the run failed. `abortRun()` internally handles the idempotent status transition to `aborted` plus the single `recordCleanup()` ledger/event write, so no new cleanup logic was implemented, only wired in.\n\n**Scope discipline:** only `startRun()`'s first-turn call site was touched. `submitAnswers()`'s `runTurnResumable()` call (used for every later turn, including post-`waiting_on_human` resumes) was left untouched, so a stalled run is never auto-aborted by this hook — verified by a dedicated test.\n\n**Tests added** (`src/kickoff-engine.test.ts`, subprocess-based, consistent with the file's existing convention):\n1. `\"orphan cleanup: a first-turn failure ... auto-aborts the run...\"` — forces `SpawnDriver.runTurn`'s `resolveRuntimeRoute()` to throw `HeimdallRouteError` (unreachable `MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL`, no fallback configured) before any real `claude` process spawns. Asserts: caller gets `status: 1` / `UPSTREAM_ERROR`; run status becomes `aborted`; exactly one ledger record + one `cleanup_needed` event; workspace_path/state_path still exist on disk (AD-4); and a second manual `abortRun` call doesn't double-append the ledger (idempotency through this new path).\n2. `\"orphan cleanup boundary: a run that already reached waiting_on_human is NOT auto-aborted...\"` — lets a run reach `waiting_on_human` for real, then forces the same Heimdall failure on `submitAnswers`'s turn. Asserts the caller still gets an error, but run status is not `aborted`, zero new ledger entries, and workspace/state untouched.\n\nBoth new tests pass. `npx tsc --noEmit` passes with zero errors. Note: 6 pre-existing failures in `kickoff-engine.test.ts` and 1 in `cleanup-ledger.test.ts` exist on this branch independent of my change (confirmed via `git stash`/rerun) — caused by a real local Consus service on `localhost:8722` in this dev environment and an unrelated `plan_runtime` flakiness; I worked around the Consus interference in my own new tests via `MINERVA_CONSUS_DECISIONS_URL: \"\"` but did not touch `cleanup-ledger.ts` or otherwise modify pre-existing tests, per the story's constraints.",
+  "prompt_id": "b064f411-afe1-4076-b1f9-746e8fa9472e",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T05:21:33Z"
+}

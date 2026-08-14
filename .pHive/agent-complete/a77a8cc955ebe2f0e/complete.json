@@ -1,0 +1,16 @@
+{
+  "agent_id": "a77a8cc955ebe2f0e",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a77a8cc955ebe2f0e.jsonl",
+  "last_assistant_message": "Editing §2 to add Heimdall README fact",
+  "prompt_id": "baec2ab9-8047-4036-887e-ca5eda0fabd3",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:49:35Z"
+}

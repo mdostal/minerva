@@ -1,0 +1,16 @@
+{
+  "agent_id": "a9fc0a40e22aa6b74",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a9fc0a40e22aa6b74.jsonl",
+  "last_assistant_message": "Trimming §3(b) contingency paragraph",
+  "prompt_id": "baec2ab9-8047-4036-887e-ca5eda0fabd3",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:51:42Z"
+}

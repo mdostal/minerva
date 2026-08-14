@@ -64,6 +64,19 @@ export function agnosticPlanCliPath(): string | null {
     const r = canon(p);
     if (r) return r;
   }
+  // Silent-null-fallback observability (PAN-7734 starved a build lane before anyone noticed
+  // this): one structured JSON line to stderr, naming every candidate checked, so a real
+  // deployment can grep/alert on this instead of the fallback being invisible. Does NOT change
+  // behavior -- resolveAgnosticPlanDriver() still falls back to the built-in claude SpawnDriver.
+  process.stderr.write(
+    JSON.stringify({
+      level: "warn",
+      event: "agnostic_plan_cli_unresolved",
+      message:
+        "agnosticPlanCliPath: none of the candidate ported-CLI paths exist; falling back to the built-in claude driver",
+      checked_paths: candidates,
+    }) + "\n",
+  );
   return null;
 }
 

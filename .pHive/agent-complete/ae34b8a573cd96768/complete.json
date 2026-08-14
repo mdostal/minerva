@@ -1,0 +1,16 @@
+{
+  "agent_id": "ae34b8a573cd96768",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-ae34b8a573cd96768.jsonl",
+  "last_assistant_message": "Diffing driver.ts against origin/dev",
+  "prompt_id": "baa62d0e-65e1-4aa7-9a60-0243f8745bd9",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T00:20:09Z"
+}

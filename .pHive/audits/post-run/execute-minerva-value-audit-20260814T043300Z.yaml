@@ -1,0 +1,15 @@
+run_id: execute-minerva-value-audit-20260814T043300Z
+skill: execute
+timestamp: 2026-08-14T04:33:00Z
+gate_lift_fired: false
+methodology: tdd
+methodology_source: hive-config
+story_specs_produced: 5
+nonsensical_defaults:
+  - all-backend-defaults
+warnings_emitted: 1
+backend_sources:
+  sessions_enabled: default
+  parallel_teams: default
+  terminal_mux: default
+  executor: default

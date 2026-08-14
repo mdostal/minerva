@@ -94,3 +94,55 @@ test("resolveAgnosticPlanDriver returns null when feature is off", async () => {
     else process.env.MINERVA_PLAN_AGNOSTIC = prev;
   }
 });
+
+test("agnosticPlanCliPath logs exactly one structured WARN line to stderr when all five candidates are absent, and still returns null", () => {
+  // Point homedir() at a freshly-created, empty temp dir: none of the five hardcoded
+  // candidates (all rooted at homedir()) can possibly exist under it, and no override env var
+  // short-circuits the search -- so this deterministically exercises the "all candidates
+  // absent" path regardless of what's actually installed on the host running this test.
+  const previousHome = process.env.HOME;
+  const previousOverride = process.env.HIVE_PLAN_AGNOSTIC_CLI;
+  const fakeHome = mkdtempSync(join(tmpdir(), "agnostic-cli-no-home-"));
+  process.env.HOME = fakeHome;
+  delete process.env.HIVE_PLAN_AGNOSTIC_CLI;
+
+  const expectedCandidates = [
+    join(fakeHome, "code", "plugin-hive-fork-dev", "hive", "agnostic", "plan-agnostic.mjs"),
+    join(fakeHome, "Code", "plugin-hive-fork-dev", "hive", "agnostic", "plan-agnostic.mjs"),
+    join(fakeHome, "code", "plugin-hive-fork", "hive", "agnostic", "plan-agnostic.mjs"),
+    join(fakeHome, "Code", "plugin-hive-fork", "hive", "agnostic", "plan-agnostic.mjs"),
+    join(fakeHome, ".claude", "plugins", "plugin-hive", "hive", "agnostic", "plan-agnostic.mjs"),
+  ];
+
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(typeof chunk === "string" ? chunk : String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+
+  let result: string | null;
+  try {
+    result = agnosticPlanCliPath();
+  } finally {
+    process.stderr.write = originalWrite;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousOverride === undefined) delete process.env.HIVE_PLAN_AGNOSTIC_CLI;
+    else process.env.HIVE_PLAN_AGNOSTIC_CLI = previousOverride;
+  }
+
+  // Fallback behavior unchanged: still returns null.
+  assert.equal(result, null);
+
+  // Exactly one structured (JSON) WARN line on stderr, naming the checked candidates.
+  const lines = chunks.join("").split("\n").filter((l) => l.trim().length > 0);
+  assert.equal(lines.length, 1, `expected exactly one stderr line, got: ${JSON.stringify(lines)}`);
+
+  const parsed = JSON.parse(lines[0] as string);
+  assert.equal(String(parsed.level).toLowerCase(), "warn");
+  const serialized = JSON.stringify(parsed);
+  for (const candidate of expectedCandidates) {
+    assert.ok(serialized.includes(candidate), `expected log line to name checked candidate ${candidate}`);
+  }
+});

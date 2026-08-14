@@ -1,0 +1,9 @@
+run_id: plan-minerva-value-audit-20260814T010712Z
+skill: plan
+timestamp: 2026-08-14T01:07:12Z
+gate_lift_fired: false
+methodology: tdd
+methodology_source: hive-config
+story_specs_produced: 4
+nonsensical_defaults: []
+warnings_emitted: 0

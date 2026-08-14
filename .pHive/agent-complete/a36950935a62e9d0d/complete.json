@@ -1,0 +1,16 @@
+{
+  "agent_id": "a36950935a62e9d0d",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a36950935a62e9d0d.jsonl",
+  "last_assistant_message": "Searching for example design-discussion.md files",
+  "prompt_id": "415196a5-c507-4a77-9845-9686e8003f19",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-13T23:57:43Z"
+}

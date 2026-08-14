@@ -896,6 +896,22 @@ export class ForkedHiveDriver implements Driver {
   private async surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult> {
     const pending = listEnvelopes(cwd).find((e) => e.status === "pending");
     if (!pending) {
+      // Zero-envelopes observability: this placeholder fires both when a run legitimately
+      // completed AND when no envelope was ever written because MINERVA_HIVE_PLUGIN_DIR is
+      // unset against a plugin-hive install that predates PR #341 -- today those two cases are
+      // indistinguishable. One structured JSON line to stderr so a real deployment can
+      // grep/alert on this. Does NOT change behavior -- the placeholder below is unchanged.
+      process.stderr.write(
+        JSON.stringify({
+          level: "warn",
+          event: "forked_hive_driver_no_pending_envelope",
+          message:
+            "surfaceNextQuestion: zero pending envelopes found -- ambiguous between a legitimately " +
+            "complete run and MINERVA_HIVE_PLUGIN_DIR being unset against a pre-#341 plugin-hive " +
+            "install that never wrote one",
+          cwd,
+        }) + "\n",
+      );
       // No pending envelope -- the skill likely completed. checkAndMarkComplete() (shared by
       // every Driver implementation) detects this as a filesystem fact independent of
       // raw_result, so this placeholder is never actually consulted for completion detection.

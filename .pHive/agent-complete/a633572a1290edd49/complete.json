@@ -1,0 +1,16 @@
+{
+  "agent_id": "a633572a1290edd49",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a633572a1290edd49.jsonl",
+  "last_assistant_message": "Checking ~/code and ~/Code for plugin-hive-fork naming",
+  "prompt_id": "f867da5c-e187-4020-8c73-c1d6816f2b68",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T00:21:17Z"
+}

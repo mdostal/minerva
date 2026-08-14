@@ -1,0 +1,86 @@
+id: resolve-plan-agnostic-architecture-question
+epic: minerva-value-audit
+title: Resolve whether plan-agnostic.mjs substitutes for Minerva's full plan-flow loop
+status: pending
+complexity: low
+methodology: classic
+depends_on: [document-pr341-production-dependency]
+
+description: |
+  Open Question 1 from design-discussion.md (§6): does `hive/agnostic/plan-agnostic.mjs` (fork
+  PR #12, on mdostal/plugin-hive-fork's `dev` branch) actually substitute for Minerva's own
+  kickoff/plan question-and-answer loop end-to-end, or does it only handle the single-shot
+  DECOMPOSE write? This was flagged by §8's scale assessment as NOT gating this epic's
+  recommendation, but as something that "could in principle change how much of [Minerva's]
+  plan-flow gets delegated" if left unresolved — and TPM's collaborative review explicitly asked
+  that it be tracked as its own owned item rather than left as prose in a shelved document.
+
+  None of this machine's local candidate paths for the fork checkout exist (confirmed during this
+  epic's research), so read the source directly from GitHub instead:
+  `gh api repos/mdostal/plugin-hive-fork/contents/hive/agnostic/plan-agnostic.mjs?ref=dev` and
+  the same for `adapters.mjs` (or `git show` against a fetched remote ref, whichever is more
+  reliable — try `gh api` first, fall back to fetching the fork as a remote if the API call
+  fails).
+
+  Read both files and answer definitively: does `plan-agnostic.mjs` drive a full multi-turn
+  question/answer loop (comparable to Minerva's own kickoff-engine.ts + question-extraction.ts +
+  escalation-classification.ts), or does it perform a single, non-interactive DECOMPOSE call and
+  exit? Append the answer, with direct citations (file, line numbers, and a short code excerpt),
+  as a new section to `docs/decisions/002-pr341-production-dependency.md` (created by
+  document-pr341-production-dependency, which this story depends on for that reason).
+
+acceptance_criteria:
+  - "Given docs/decisions/002-pr341-production-dependency.md, when read after this story, then it contains a new section answering Open Question 1 with a direct citation (file + line range) to plan-agnostic.mjs and/or adapters.mjs"
+  - "Given the answer, when stated, then it is definitive (yes/no/partial with specifics), not another open question — if the source genuinely can't be read (e.g. gh api fails and no fallback works), the story fails rather than silently writing a non-answer"
+
+metric:
+  applies: false
+  justification: "One-time research/documentation story answering a specific open question; not a recurring or trend measurement."
+
+steps:
+  - id: research
+    description: Fetch and read hive/agnostic/plan-agnostic.mjs and hive/agnostic/adapters.mjs from mdostal/plugin-hive-fork's dev branch via gh api (or git fetch as fallback). Compare their control flow against Minerva's own src/kickoff-engine.ts + src/question-extraction.ts + src/escalation-classification.ts to determine whether they implement an equivalent multi-turn loop or a single-shot call.
+    agent: researcher
+  - id: implement
+    description: Append the findings as a new, clearly-cited section to docs/decisions/002-pr341-production-dependency.md.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Confirm the answer is definitive and directly cited, not hedged or restated as still-open.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/kickoff-engine.ts
+      purpose: "Minerva's own multi-turn question/answer loop implementation — the comparison baseline"
+    - path: src/question-extraction.ts
+      purpose: "How Minerva extracts a single question per turn via constrained --json-schema call — compare plan-agnostic.mjs's approach against this"
+    - path: docs/decisions/002-pr341-production-dependency.md
+      purpose: "Produced by document-pr341-production-dependency — append the new section here rather than creating a separate file"
+
+design_decisions:
+  - decision: Append to the existing decision doc rather than creating a new file
+    rationale: Both this story and document-pr341-production-dependency concern the same underlying question (what does Minerva actually depend on in plugin-hive/its fork, and how solid is that dependency) — one doc keeps the audit trail coherent
+
+cross_cutting:
+  - concern: documentation
+    action: "This story's entire output is a documentation addition — satisfies the concern directly"
+
+risks:
+  - severity: medium
+    description: If gh api access to the fork's dev branch fails (auth, rate limit, branch renamed) and no fallback works, this story cannot complete as scoped
+    mitigation: "Try git fetch against the fork remote as a fallback per the description; if both fail, the story should fail loudly (per this project's fail-loud discipline) rather than writing a guessed or hedged answer"
+
+references:
+  - path: .pHive/epics/minerva-value-audit/docs/design-discussion.md
+    relevant_excerpt: |
+      §6 Open Question 1: "Does plan-agnostic.mjs (fork PR #12) actually substitute for Minerva's
+      own kickoff/plan question-and-answer loop end-to-end, or does it only handle the single-shot
+      DECOMPOSE write?... materially changes how much of Minerva's plan-flow logic could ever be
+      delegated to it."

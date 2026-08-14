@@ -20,6 +20,10 @@ import {
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 
 let minervaHome: string;
+let seedRepo: string; // throwaway repo self-provisioned as MINERVA_SEED_REPO -- startRun's
+// no-target_repo path (exercised by every runHeadlessPlan call here, which never passes
+// targetRepo) falls through to run-manager's resolveSeedRepo(), which otherwise defaults to
+// ~/repos/consus-seeds and fails hard on a machine without that directory.
 let savedDriver: Driver;
 
 // Emits N agent-channel single-select gates, then writes a real epic.yaml + two stories.
@@ -54,12 +58,21 @@ class PlanScriptedDriver implements Driver {
 before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-planrunner-"));
   process.env.MINERVA_HOME = minervaHome;
+
+  seedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-planrunner-"));
+  execFileSync("git", ["init", "-q", "-b", "dev", seedRepo]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", seedRepo, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", seedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
+  process.env.MINERVA_SEED_REPO = seedRepo;
+
   savedDriver = __setDriverForTest(new PlanScriptedDriver(0));
 });
 
 after(() => {
   __setDriverForTest(savedDriver);
   rmSync(minervaHome, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
 });
 
 test("runHeadlessPlan: auto mode drives an idea to a complete epic+stories, unattended", async () => {

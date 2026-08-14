@@ -1,0 +1,16 @@
+{
+  "agent_id": "a92cd5ca863fc23d2",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a92cd5ca863fc23d2.jsonl",
+  "last_assistant_message": "Reading kickoff-engine.ts driver logic",
+  "prompt_id": "000b346d-24d2-498a-841d-da5866abfeb6",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:36:31Z"
+}

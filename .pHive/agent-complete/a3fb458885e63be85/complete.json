@@ -1,0 +1,16 @@
+{
+  "agent_id": "a3fb458885e63be85",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a3fb458885e63be85.jsonl",
+  "last_assistant_message": "Checking driver-route.test.ts git diff status",
+  "prompt_id": "b5ee8e47-33e3-4dff-8392-841c51072f3c",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T05:08:46Z"
+}

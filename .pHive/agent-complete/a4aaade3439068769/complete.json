@@ -1,0 +1,16 @@
+{
+  "agent_id": "a4aaade3439068769",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "general-purpose",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a4aaade3439068769.jsonl",
+  "last_assistant_message": "Investigation and fix complete. Summary:\n\n**Investigation** (Heimdall repo at `/Users/mdostal/Documents/work/pantheon/heimdall`):\n- `src/core/task-type.ts`: `TASK_TYPES = [\"planning\", \"build\", \"review\"] as const` — a closed enum. `\"kickoff\"` was never a valid value.\n- `README.md` (line 155): `GET /available-route?task-type=planning|build|review` — documents all three intended meanings; routing strategy tables show `planning`/`build`/`review` map to distinct provider-priority orders (`priority-strategy.ts`'s `RUNTIME_PRIORITY`).\n- `config/routing-policy.yaml` confirms the same three-way split for the scored strategy's weights.\n- No trace of \"kickoff\" anywhere in Heimdall's source, docs, or config — it's simply not a value the service has ever accepted.\n\n**Corroboration in Minerva**:\n- `src/agnostic-plan-driver.ts`'s `resolvePlanningRoute()` already calls Heimdall with `task-type=planning` and is confirmed working.\n- `src/plan-runner.ts` (lines 1-3, 46-50) explicitly documents `startRun` as driving \"kickoff+plan\" to completion — research, design discussion, story decomposition into an epic+stories — never code implementation or code review.\n\n**Conclusion**: `planning` is the evidenced, correct value (not a guess) — closed-enum elimination (only 3 options, `kickoff` isn't one) plus semantic match (`startRun` is planning-shaped, not build/review-shaped) plus working precedent in the same codebase.\n\n**Changes**:\n- `/Users/mdostal/Documents/work/pantheon/minerva/src/driver.ts`: `availableRouteUrl()` now sends `task-type=planning` instead of `task-type=kickoff`, with a comment documenting the evidence chain.\n- `/Users/mdostal/Documents/work/pantheon/minerva/src/driver-route.test.ts`: assertion updated to expect `task-type=planning`. Note: this file's edit was already swept into a concurrent sibling-story commit (`5ef5016`, `[fix-heimdall-route-fail-fast-with-fallback]`) on this shared branch before I could commit it separately — verified its content is correct and identical to what this story needed, so no further action was required there.\n\nVerified: `npx tsc --noEmit` clean; `src/driver-route.test.ts` (14 tests) and `src/driver.test.ts` (3 tests, real `claude` subprocess spawns) all pass.\n\n**Commit**: `cff7bfc1a10d89bfb085b1b9d8e6b5643896978a` — `[fix-heimdall-task-type-value] correct availableRouteUrl()'s hardcoded task-type to planning`, on branch `feat/fix-startrun-heimdall-routing`, not pushed.",
+  "prompt_id": "b5ee8e47-33e3-4dff-8392-841c51072f3c",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T05:09:41Z"
+}

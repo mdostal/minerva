@@ -1,0 +1,16 @@
+{
+  "agent_id": "aba7497c29ac474db",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-aba7497c29ac474db.jsonl",
+  "last_assistant_message": "Verifying dispatch.ts error branches",
+  "prompt_id": "616cb43a-ce84-42f0-a6a3-5014362c11c8",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:54:12Z"
+}

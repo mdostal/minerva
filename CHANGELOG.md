@@ -13,9 +13,14 @@ All notable changes to Minerva are documented in this file.
 
 - **`startRun` no longer fails end-to-end in a stock environment** (`feat/fix-startrun-heimdall-routing`): `resolveRuntimeRoute()` now fails fast with a typed `HeimdallRouteError` (mapped to a new `UPSTREAM_ERROR` ABI error code, distinct from `UNKNOWN_METHOD`) instead of an untyped, mislabeled exception — root-scoped so `SpawnDriver`, `SubagentDriver`, `ForkedHiveDriver`, and `submitAnswers` all inherit the fix. An optional operator-declared `MINERVA_FALLBACK_CLI`/`MINERVA_FALLBACK_MODEL` pair can substitute for a failed Heimdall lookup (fail loud on partial config, never inferred). The hardcoded, invalid `task-type=kickoff` Heimdall query param is corrected to `task-type=planning` (evidenced against Heimdall's own closed enum and an already-working sibling call). A run whose first drive turn fails before ever reaching a question is now automatically transitioned to `aborted` via the existing `abortRun`/`recordCleanup` mechanism (AD-4-compliant, record-and-signal only) instead of being left permanently orphaned.
 
+### Removed
+
+- **All direct Consus (renamed Delphi) coupling ripped out of Minerva's core** (`feat/rip-out-consus-coupling`): restores compliance with Minerva's own pre-existing, already-approved v1 requirement (zero dependency on Delphi/Auriga/Vulcan/Multica/votem existing). Deleted the 4 dedicated `consus-*.ts` modules and their ABI methods (`resumeFromConsusAnswer`, `resumeAnsweredConsusDecision`, `pollConsusAnswers`, `pollAndResumeConsusAnswers`). `kickoff-engine.ts`'s core turn-recording path no longer unconditionally posts every question to Consus — a real Consus service happening to be reachable used to silently flip run status to `awaiting-consus` (now removed from `RunStatus` entirely) instead of `waiting_on_human`, breaking 20 tests on at least one developer machine. `bin/minerva.ts`'s `--poll-consus`/`--poll-and-resume`/`--consus-item-file` flags are gone; its `--resume` capability (answer a parked run's question, optionally file to Multica) is rebuilt on the core provider-neutral ABI with no Consus dependency. `bin/minerva-plan.ts` and `bin/ideate-to-consus.mjs` were evaluated individually against the standalone bar: the former passes (its core function needs no sibling god) and stays as-is; the latter's entire purpose is a Consus/Janus round-trip, so it now carries an explicit header note excluding it from Minerva's standalone claim rather than being implied as part of it. Multica coupling (already flag-gated, not implicated in the test breakage) is unchanged, out of scope for this release.
+
 ### Changed
 
 - **`fix-startrun-heimdall-routing` release finalization.** `/execute` applied the planned `patch` version bump (`0.1.1` → `0.1.2`).
+- **`rip-out-consus-coupling` release finalization.** `/execute` applied the planned `patch` version bump (`0.1.2` → `0.1.3`).
 
 ## [0.1.1] - 2026-07-26
 

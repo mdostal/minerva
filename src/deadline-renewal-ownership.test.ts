@@ -31,13 +31,21 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ForkedHiveDriver, decodeEnvelopePointer, NO_PENDING_SENTINEL } from "./driver.ts";
 import { testHeimdallRouteUrl } from "./test-cli.ts";
 
-const FORK_PATH = "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork";
+// The hardcoded default below only ever matched one specific developer's home directory --
+// override it with MINERVA_HIVE_PLUGIN_DIR (the same var this test sets for the code under
+// test) to point at your own local plugin-hive-fork checkout. Skip, don't fail, when neither
+// resolves to a real checkout: this is a deliberate live integration test (AD-1, no mocking the
+// CLI boundary), not something every machine is expected to have set up.
+const FORK_PATH = process.env.MINERVA_HIVE_PLUGIN_DIR || "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork";
+const FORK_MISSING = existsSync(FORK_PATH)
+  ? false
+  : `plugin-hive-fork checkout not found at ${FORK_PATH} -- set MINERVA_HIVE_PLUGIN_DIR to a local checkout to run this live integration test`;
 let previousRouteUrl: string | undefined;
 
 before(() => {
@@ -71,7 +79,7 @@ function newScratchWorkspaceWithShortDeadline(): string {
   return dir;
 }
 
-test("an answer submitted long after the envelope's on-disk deadline has lapsed still lands correctly -- no proactive renewal needed", async () => {
+test("an answer submitted long after the envelope's on-disk deadline has lapsed still lands correctly -- no proactive renewal needed", { skip: FORK_MISSING }, async () => {
   const cwd = newScratchWorkspaceWithShortDeadline();
   const driver = new ForkedHiveDriver();
   const skillPrompt = "/plugin-hive:kickoff a tiny forked-driver test project";

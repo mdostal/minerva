@@ -1,0 +1,30 @@
+name: fix-test-suite-flakiness-t006
+title: "Fix the 7 remaining test-suite failures on this dev machine (triage t-006)"
+description: >
+  Root-caused after merging minerva-value-audit + the fix-startrun-heimdall-routing chain into
+  dev: a fresh full `npm test` run dropped from 17 to 7 failures (the rest were transient flakes
+  under load, confirmed non-reproducing). The remaining 7 split into two distinct, unrelated
+  causes, neither the "needs live Heimdall/claude" hypothesis originally suspected. One atomic
+  story: (1) src/prebaked-plan-defaults.test.ts never self-provisions MINERVA_SEED_REPO the way
+  its sibling full-loop.test.ts does (a gap in minerva-value-audit's fix-seed-repo-test-hermeticity
+  story's scope) -- fixed by matching that sibling's exact pattern; (2)
+  src/deadline-renewal-ownership.test.ts and src/real-forked-hive-driver.test.ts hardcode a
+  plugin-hive-fork checkout path under a different developer's username -- made configurable via
+  the same MINERVA_HIVE_PLUGIN_DIR the code under test already reads, with a graceful skip
+  (node:test {skip: reason}) instead of a hard failure when no real checkout is present, since
+  these are deliberately live, unmocked integration tests (AD-1) that not every machine has set
+  up for.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: classic
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+stories:
+  - id: fix-test-suite-flakiness-t006
+    title: Fix seed-repo self-provisioning gap and hardcoded fork-path skip for the 7 remaining failures
+    complexity: low
+    depends_on: []

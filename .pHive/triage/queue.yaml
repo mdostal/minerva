@@ -399,14 +399,45 @@ items:
       lost. Did not block story remove-ideate-to-consus-tool: that change is structurally unrelated
       (no import chain to any affected file) and typecheck + the specifically-touched test file
       (ForkedDriverFlow.test.ts) both passed clean in isolation.
+
+      ROOT CAUSE FOUND (2026-08-14T19:30Z): the "needs live Heimdall/claude" working hypothesis
+      was wrong. After merging minerva-value-audit + the fix-startrun-heimdall-routing chain into
+      dev, a fresh full `npm test` run showed exactly 7 failures (down from 17 -- most of the
+      original list, including every run-manager.test.ts/plan-runner.test.ts/driver.test.ts SIGINT
+      failure, did not reproduce, confirming they were transient flakes under load, not stable
+      bugs). All 7 remaining failures root-caused precisely, two distinct causes, neither related
+      to Heimdall/claude reachability:
+      1. src/prebaked-plan-defaults.test.ts (4 failures): unlike full-loop.test.ts (fixed by
+         minerva-value-audit's fix-seed-repo-test-hermeticity story), this file's before() never
+         self-provisions MINERVA_SEED_REPO via createSeedRepo() -- every startRun() in the file
+         omits target_repo, so allocateRun() falls through to run-manager's resolveSeedRepo(),
+         which defaults to ~/repos/consus-seeds and fails hard on any machine without that exact
+         directory. A gap the seed-repo-hermeticity story's scope missed, not a new bug.
+      2. src/deadline-renewal-ownership.test.ts + src/real-forked-hive-driver.test.ts (3 failures):
+         both hardcode `FORK_PATH = "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork"`
+         -- a DIFFERENT username (dostal) than this machine's actual user (mdostal). The path
+         literally does not exist here. These are deliberate, AD-1-compliant live integration
+         tests (no mocking the CLI boundary) against a local plugin-hive-fork checkout -- the
+         right fix is not to mock them but to make the path MINERVA_HIVE_PLUGIN_DIR-configurable
+         (the mechanism the code under test already uses) with the old hardcoded value as a
+         fallback default, and skip gracefully (node:test's {skip: reason} option) rather than
+         hard-fail when neither resolves to a real checkout on disk.
+
+      DECISION: fix (1) for real (self-provision, matching the sibling pattern exactly); fix (2)
+      by making the path configurable + skipping gracefully with a clear, actionable message.
+      Both are small, mechanical, fully understood -- executing directly, no research-brief/grill
+      ceremony, consistent with t-004/t-005. Fast-tracked to plan-ready.
     reporter: "mdostal"
     reported_at: "2026-08-14T16:55:00Z"
-    priority: null
-    severity: null
+    priority: p2
+    severity: low
     assignee: null
-    linked_epic: null
-    linked_story: null
+    linked_epic: fix-test-suite-flakiness-t006
+    linked_story: fix-test-suite-flakiness-t006
     closed_reason: null
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-14T16:55:00Z" }
+      - { state: clarified, at: "2026-08-14T19:30:00Z" }
+      - { state: prioritized, at: "2026-08-14T19:30:00Z" }
+      - { state: plan-ready, at: "2026-08-14T19:30:00Z" }

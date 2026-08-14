@@ -11,19 +11,32 @@ import { tmpdir } from "node:os";
 import { startRun, getQuestions, __setDriverForTest } from "./kickoff-engine.ts";
 import { getRunStatus, readRunRecord } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
+import { createSeedRepo } from "./test-cli.ts";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 
 let minervaHome: string;
+let seedRepo: string;
 let savedDriver: Driver;
+let previousSeedRepo: string | undefined;
 
 before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-prebaked-"));
   process.env.MINERVA_HOME = minervaHome;
+  // Every startRun() in this file omits target_repo, so allocateRun() falls through to
+  // run-manager's resolveSeedRepo(), which otherwise defaults to ~/repos/consus-seeds and fails
+  // hard on a machine without that directory -- self-provision a throwaway repo instead, same
+  // pattern as full-loop.test.ts.
+  seedRepo = createSeedRepo();
+  previousSeedRepo = process.env.MINERVA_SEED_REPO;
+  process.env.MINERVA_SEED_REPO = seedRepo;
 });
 
 after(() => {
   __setDriverForTest(savedDriver);
   rmSync(minervaHome, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
+  if (previousSeedRepo) process.env.MINERVA_SEED_REPO = previousSeedRepo;
+  else delete process.env.MINERVA_SEED_REPO;
 });
 
 // A scripted driver that emits N single-select agent-channel questions, then (on the completing

@@ -94,3 +94,130 @@ tooling. To recheck:
      flag `src/driver.ts`'s `pluginDirArgs()` comment and `docs/architecture.md`'s as-built note
      for a follow-up story to drop the "ahead of PR #341 merging upstream" caveat and validate
      `MINERVA_DRIVER=forked` against the real marketplace-installed plugin-hive.
+
+---
+
+## Open Question 1 (resolved): does `plan-agnostic.mjs` substitute for Minerva's full plan-flow loop?
+
+**Question, as tracked in `.pHive/epics/minerva-value-audit/docs/design-discussion.md` §6:** does
+`hive/agnostic/plan-agnostic.mjs` (fork PR #12, `mdostal/plugin-hive-fork`'s `dev` branch)
+actually substitute for Minerva's own kickoff/plan question-and-answer loop end-to-end, or does it
+only handle the single-shot DECOMPOSE write?
+
+**Answer: partial — no, `plan-agnostic.mjs` does not implement a full multi-turn Q&A loop itself.
+It is a single-shot-per-invocation CLI that Minerva's own `AgnosticPlanDriver`
+(`src/agnostic-plan-driver.ts`) wraps as one more `Driver.runTurn()` implementation, called
+repeatedly by Minerva's *own* pre-existing loop. All of the actual "loop" behavior — parking on a
+pending question, extracting one atomic question via a constrained schema, classifying it to a
+channel, applying pre-baked defaults, and resuming — lives entirely in Minerva's
+`kickoff-engine.ts` / `question-extraction.ts` / `escalation-classification.ts`, unchanged by this
+fork. `plan-agnostic.mjs` supplies none of it.**
+
+Source read directly from GitHub (`gh api
+repos/mdostal/plugin-hive-fork/contents/hive/agnostic/{plan-agnostic,adapters}.mjs?ref=dev`,
+base64-decoded), confirmed against fork commit sha `53fad6c` (`plan-agnostic.mjs`) / `5be59f2`
+(`adapters.mjs`) on the `dev` branch. Local candidate checkout paths for the fork did not exist on
+this machine, so the GitHub API was the only source used — no local `git show` fallback was
+needed.
+
+### 1. `plan-agnostic.mjs` makes exactly one spawn call per process invocation, then exits
+
+`main()` (lines 87–127) does the following, once, per invocation: resolve a single turn prompt
+(lines 91–102), spawn the target runtime as a child process (lines 118–123 → `spawnRuntime()`,
+lines 66–85), parse that one process's stdout (line 125), print one JSON line, and return (line
+126). There is no loop, no polling, and no wait for a subsequent human input from *within* this
+file — the process runs one turn and exits:
+
+```js
+// lines 118–127
+const stdout = await spawnRuntime({
+  cmd,
+  args,
+  cwd: opts.cwd || process.cwd(),
+  timeoutMs: Number(opts["timeout-ms"] || DEFAULT_TIMEOUT_MS),
+});
+
+const { session_id, result } = parseRunOutput({ runtime, stdout });
+process.stdout.write(JSON.stringify({ session_id, result }) + "\n");
+```
+
+The module docstring (lines 10–20) says this explicitly: it distinguishes a "first turn" (`--idea`
+or `--prompt`, no `--session`) from a "continuation turn" (`--session <id> --prompt "<raw
+answer>"`), and states the CLI "Prints one JSON line to stdout" per call (line 20). Continuation
+support exists (lines 89–95, and `--resume <sessionId>` passed to `claude -p` in
+`adapters.mjs` lines 52–64), so the CLI *can* be invoked again with a session id to continue a
+conversation — but doing so is entirely the caller's responsibility. Nothing in this file waits
+across invocations, decides when to invoke itself again, or has any concept of "pending question
+awaiting an answer."
+
+### 2. `adapters.mjs` does no question extraction or escalation classification at all
+
+`adapters.mjs`'s two exports are a pure arg-builder (`buildRunArgs`, lines 44–81) and a pure
+output-normalizer (`parseRunOutput`, lines 88–124). `parseRunOutput` only ever produces
+`{session_id, result}` — for the `claude` kind it's `obj.result` verbatim from the single JSON
+object `claude -p --output-format json` emits (lines 93–97); for the `opencode` kind (gemini/codex/
+etc.) it's the concatenated assistant `text` parts from the NDJSON event stream (lines 98–124).
+Neither path parses out a single atomic question, classifies it to a channel (agent vs. human), or
+applies any schema constraint. The file's own comment says as much — it surfaces raw text
+"so a caller can log it and so completion/question extraction has something to read" (lines
+102–103, emphasis on *has something to read*, i.e. the extraction itself happens elsewhere):
+
+```js
+// lines 99–103
+// opencode: NDJSON stream of events. session_id = last sessionID seen; result =
+// concatenation of the assistant `text` parts (the model's final prose). Tool-use and
+// step events are ignored for the result string (the load-bearing output is the files
+// written to disk, not this text — but we surface the text so a caller can log it and so
+// completion/question extraction has something to read).
+```
+
+There is no `--json-schema`-equivalent constraint anywhere in either file (`grep -i
+"question|classif|escalat|schema"` across both files matches only that one comment line above),
+which contrasts directly with Minerva's own `src/question-extraction.ts` (lines 18–38), whose
+`QUESTION_SCHEMA_PROPERTY` + `extractionSchemaArgs()` constrain the driven turn's own final output
+to `{"question": "<verbatim, single, atomic question>"}` via `--json-schema` — a mechanism
+`plan-agnostic.mjs`/`adapters.mjs` have no equivalent of.
+
+### 3. Minerva's own driver wraps `plan-agnostic.mjs` as a single-turn `Driver`, exactly like `SpawnDriver`
+
+`src/agnostic-plan-driver.ts`'s `AgnosticPlanDriver` class (lines 145–207) implements Minerva's
+`Driver` interface (`src/driver.ts`) with a `runTurn()` method that spawns
+`plan-agnostic.mjs` **once per call** (lines 152–200: `--idea` on the first turn with no
+`sessionId`, `--session <id> --prompt <raw>` on a continuation turn) and returns
+`{session_id, raw_result}` (lines 202–205) — the identical shape `SpawnDriver`/`SubagentDriver`/
+`ForkedHiveDriver` all return from their own `runTurn()`. Nothing about `AgnosticPlanDriver` or
+`plan-agnostic.mjs` changes how `src/kickoff-engine.ts` drives a run: `startRun()` (lines 278–336),
+`recordTurn()` (lines 150–191, which calls `extractClassifiedQuestion` from
+`escalation-classification.ts` and the `extractQuestionShape` helper on lines 197–214),
+`autoAnswerLoop()` (lines 227–276), and `submitAnswers()` (lines 375–435) are all unchanged and all
+still execute in Minerva's own process — `driverForRecord()` (lines 111–117) just picks
+`AgnosticPlanDriver` instead of the built-in `driver` when a run's `plan_runtime` is a non-Claude
+runtime, and every one of those functions calls `runTurn()` on whichever driver it gets exactly
+once per turn, exactly as before.
+
+### Conclusion
+
+`plan-agnostic.mjs` is a **per-runtime single-turn adapter** — it ports the *first-turn DECOMPOSE
+invocation and turn-resumption mechanics* of `/plugin-hive:plan` to non-Claude runtimes via
+opencode, nothing more. It does not implement, and does not need to implement, a multi-turn
+question/answer loop, because Minerva never delegated that loop to it in the first place: the loop
+(parking, question extraction, classification, channel routing, pre-baked-default auto-answering,
+resumption) is — and, per this reading of the fork source, remains entirely — Minerva's own
+`kickoff-engine.ts` + `question-extraction.ts` + `escalation-classification.ts` machinery, calling
+`AgnosticPlanDriver.runTurn()` (and thus `plan-agnostic.mjs`) the same way it calls every other
+`Driver` implementation: once per turn, from the outside. This resolves Open Question 1: the fork
+does **not** materially change how much of Minerva's plan-flow logic could ever be delegated away,
+because it was never architected to take over that logic in the first place — only the
+runtime-specific spawn/resume mechanics were ported. No further tracking item is needed for this
+question.
+
+**Sources:**
+- `https://github.com/mdostal/plugin-hive-fork/blob/dev/hive/agnostic/plan-agnostic.mjs` (sha
+  `53fad6c`, fetched via `gh api
+  repos/mdostal/plugin-hive-fork/contents/hive/agnostic/plan-agnostic.mjs?ref=dev`)
+- `https://github.com/mdostal/plugin-hive-fork/blob/dev/hive/agnostic/adapters.mjs` (sha
+  `5be59f2`, fetched via `gh api
+  repos/mdostal/plugin-hive-fork/contents/hive/agnostic/adapters.mjs?ref=dev`)
+- `src/agnostic-plan-driver.ts` (this repo, lines 145–207)
+- `src/kickoff-engine.ts` (this repo, lines 111–117, 150–191, 227–276, 278–336, 375–435)
+- `src/question-extraction.ts` (this repo, lines 18–38)

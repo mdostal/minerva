@@ -12,7 +12,10 @@ Pain points: (1) Manual per-idea kickoff via SSH doesn't scale. (2) Needs async 
 
 No PRIOR DECISIONS section — a kg_why query against the knowledge graph for this topic returned zero relevant results, clean slate.
 
-**Branch/evidence correction (mid-draft, before grill):** this epic's branch was initially created off `main` — `git_flow.mjs`'s local resolution missed `origin/dev` because it hadn't been fetched yet on this checkout. `.pHive/CONTEXT.md` is explicit that `dev` is the project's actual working branch and `main` should never be branched off directly. Once fetched, `origin/dev` turned out to be **20 commits ahead of `main`**, and two of those commits directly overturn findings in §2 below (the research brief was written against stale `main` state). The branch has been rebased onto `origin/dev`; §2 and downstream sections are corrected in place rather than re-run from scratch, with the corrections clearly marked.
+**Branch/evidence correction (mid-draft, before grill):** this epic's branch was initially created off `main`; `origin/dev` turned out to be
+**20 commits ahead**, two of which overturn findings in §2 below. The branch has been rebased onto `origin/dev`; §2 and downstream sections
+are corrected in place, with corrections clearly marked. A second correction pass, made during this grill-response revision, folds in
+direct-source reads of `src/driver.ts` and related files that reshape §2/§3/§5 further — also marked in place.
 
 ## §1. What Are We Doing?
 
@@ -21,262 +24,289 @@ This isn't a code-change epic, it's a decision epic. The user asked us to dig in
 progress toward runner-agnostic, headless pause/resume already make Minerva redundant? And if not, what exactly is left that only Minerva
 provides?
 
-The framing in the request has two halves worth separating. First, "pause and resume on the overall commands" — not just kickoff and plan,
-but execute, test, review, ship, standup, the whole surface. Second, "integrating well into more full agentic environments to wrap and force
-the usage of the plugin hive... enabling it for planning, questions, etc across the board." That second half is really asking whether
-Minerva is the thing that lets an external harness — a scheduler, another LLM, a CI job, Auriga — drive Hive without holding a terminal open
-and without being Claude Code itself.
+The framing in the request has two halves. First, "pause and resume on the overall commands" — not just kickoff and plan, but execute, test,
+review, ship, standup, the whole surface. Second, "integrating well into more full agentic environments to wrap and force the usage of the
+plugin hive... across the board." That second half is asking whether Minerva is the thing that lets an external harness — a scheduler,
+another LLM, a CI job, Auriga — drive Hive without holding a terminal open and without being Claude Code itself.
 
-"Done" here doesn't mean shipped code. It means a defensible, evidence-grounded position, one of: "Minerva is redundant, sunset it";
-"Minerva's value is narrower than the current north_star claims, here's the honest scope"; or "Minerva's value is intact, here's precisely
-why the three plugin-hive efforts don't cover it." I want to be upfront that I don't think this is a coin-flip once you actually read the PR
-states rather than the headline "plugin-hive is gaining agnostic pause/resume" narrative — the evidence leans fairly clearly one direction.
-But I want to walk the reasoning, not just assert the conclusion, and I want to flag which parts of the evidence are still soft rather than
-papering over them.
+**Vocabulary note:** CONTEXT.md's canonical term for this role is "driving agent" — the agent, Claude or otherwise, that programmatically
+starts a run, answers agent-channel questions, and polls status (v1's async mechanism). Where this document says "external harness," "actor,"
+or "orchestrator," it means that same v1 role. "Auriga-style router" is used deliberately as a broader example of who might eventually
+*occupy* that role once Auriga's own contract exists — a v2-scoped instantiation (see §3), not a synonym for the term itself.
 
-I'd also note explicitly what this epic is *not*: it's not a mandate to rebuild Minerva's ABI, and it's not a mandate to write the "wrap and
-force usage across the board" tooling the user gestured at. Those are real, large follow-on efforts if the value proposition holds — this
-document's job is to establish whether they're worth doing at all before anyone commits engineering time to them.
+"Done" here doesn't mean shipped code. It means a defensible, evidence-grounded position: "Minerva is redundant, sunset it"; "Minerva's value
+is narrower than north_star claims, here's the honest scope"; or "Minerva's value is intact, here's precisely why the three plugin-hive
+efforts don't cover it." I don't think this is a coin-flip once you read the PR states rather than the headline narrative — the evidence
+leans one direction — but I want to walk the reasoning and flag which parts are still soft rather than papering over them. This epic is not
+a mandate to rebuild Minerva's ABI or to write the "wrap and force usage across the board" tooling — those are real follow-on efforts if the
+value proposition holds; this document establishes whether they're worth doing at all.
 
 ## §2. What I Found
 
-The research brief is unambiguous that there isn't one plugin-hive effort to compare Minerva against — there are three, at three different
-maturities, and conflating them is the single easiest way to get this wrong.
+There isn't one plugin-hive effort to compare Minerva against — there are three, at three different maturities, and conflating them is the
+easiest way to get this wrong.
 
-**Upstream PR #341** (`firefly-events/plugin-hive#341`) adds a headless question protocol. `hive/lib/runtime_mode.{py,js}` detects headless
-mode from explicit env signals only — `HIVE_HEADLESS` wins if set, else `CI=true`, else interactive by default; no TTY-probe fallback.
-`hive/lib/question_gateway.{py,js}` batches all questions at a phase boundary into `.pHive/questions/<skill>-<invocation-id>.yaml`, prints
-`AWAITING_ANSWERS`, and exits; an external orchestrator writes `answer:` + `status: answered` back onto the same file, and envelopes are
-deleted on consume (a fix added in review round 3, to stop stale reuse of repeated phase ids like `1a`). The PR author's own text says this
-"mirrors Minerva's own `submitAnswers` shape" — that's a striking admission worth taking at face value. But the scope is narrow: kickoff
-gets 7 wiring points, design gets 2 (loop-aware), plan gets 2 (branch-switch-confirm, version_bump) — not execute, test, review, or ship. A
-newer plan question (step 14c, "sidecar-retention") isn't even wired because it postdates the branch the PR is built on. And the PR has been
-open 18+ days (2026-07-26 to 2026-08-13) with zero human review — only automated CodeRabbit rounds and the author's own replies. "OPEN" here
-should not be read as "actively being reviewed."
+**Upstream PR #341** (`firefly-events/plugin-hive#341`) adds a headless question protocol: `runtime_mode` detects headless mode from
+explicit env signals only (`HIVE_HEADLESS`, else `CI=true`, else interactive); `question_gateway` batches questions at a phase boundary into
+`.pHive/questions/<skill>-<invocation-id>.yaml`, prints `AWAITING_ANSWERS`, and exits — an external orchestrator writes the answer back onto
+the same file, and envelopes are deleted on consume. The author's own text says this "mirrors Minerva's own `submitAnswers` shape." Scope is
+narrow — kickoff (7 wiring points), design (2), plan (2) — not execute/test/review/ship. The PR has been open 18+ days with zero human
+review, only automated CodeRabbit rounds and the author's own replies. "OPEN" should not be read as "actively being reviewed."
 
-**Fork-only runner-agnostic dispatch work** — fork PRs #3, #6, #11, #12, covering codex/opencode/Gemini backends, a declarative process
-manifest, and the agnostic PLAN port at `hive/agnostic/plan-agnostic.mjs` — is merged to the fork's `dev` branch but gated behind fork PR
-#10 ("Promote: dev -> main," open since 2026-08-02) from reaching even the fork's own `main`, let
-alone upstream. This is the exact code Minerva's `src/agnostic-plan-driver.ts` is supposed to spawn as the "runner-agnostic PLAN driver."
-It's worth noting plugin-hive already had a multi-substrate execution concept before this fork work existed
-(`hive/references/dispatch-parity.md`, covering `default`/`multica`/`cc-workflows` with `sandcastle`/`gh-actions-legacy` planned) — the fork
-work generalizes that idea further, it isn't inventing the concept from scratch.
+**Fork-only runner-agnostic dispatch work** — fork PRs #3/#6/#11/#12, covering codex/opencode/Gemini backends and the agnostic PLAN port at
+`hive/agnostic/plan-agnostic.mjs` — is merged to the fork's `dev` but gated behind fork PR #10 ("Promote: dev -> main," open since
+2026-08-02) from reaching even the fork's own `main`. This is the code Minerva's `src/agnostic-plan-driver.ts` spawns as the "runner-agnostic
+PLAN driver." Plugin-hive already had a multi-substrate execution concept before this (`hive/references/dispatch-parity.md`) — the fork work
+generalizes it, doesn't invent it from scratch.
 
-**The native DAG-executor `pause` node type** is already shipped — plugin cache v2.15.0, installed at
-`hive/lib/dag_executor/pause/{__init__,signal,token,errors}.py`, dispatched via `executor/handlers/pause.py` and `executor/dispatcher.py`.
-It's real infrastructure: `wait_for_signal()` runs `while True: check sentinel files; sleep(poll_interval=5.0s)` until an
-`.approve`/`.reject` sentinel appears at `<runs_root>/<run_id>/pause/<node_id>.{approve,reject}`, or a hard 30-day ceiling elapses. Security
-is solid — HMAC-SHA256 resume tokens bound to `(run_id, node_id)`, signing key persisted at `<runs_root>/<run_id>/.signing_key` with mode
-0600. But architecturally it's a synchronous blocking poll loop inside one live process, not a resumable, cold-start-friendly primitive —
-and it's opt-in per workflow (`executor_default: false` per `hive/decisions/001-executor-cutover.md`), graduated only for `ui-design`,
-`design-review`, `daily-ceremony`. Kickoff and plan, as Minerva invokes them today, don't run under this executor at all.
-`run_state/resume.py`'s generic `--resume <run-id>` CLI (for replaying failed/interrupted runs) explicitly raises
-`ResumeFromInvalidStateError` on a `SUSPENDED` run — the code comment says this is by design, delegated to "the hde-8 pause-resume path"
-instead. That's confirmation these are two genuinely separate resume mechanisms, not one with two entry points.
+**The native DAG-executor `pause` node type** is already shipped (plugin cache v2.15.0): `wait_for_signal()` polls for an
+`.approve`/`.reject` sentinel file or a hard 30-day ceiling. Security is solid (HMAC-SHA256 resume tokens). But architecturally it's a
+synchronous blocking poll loop inside one live process, not a resumable, cold-start-friendly primitive, and it's opt-in per workflow
+(`executor_default: false`), graduated only for `ui-design`, `design-review`, `daily-ceremony` — not kickoff or plan. The generic
+`--resume <run-id>` CLI explicitly raises on a `SUSPENDED` run, delegating "by design" to the separate pause-resume path — confirmation
+these are two genuinely separate mechanisms.
 
-The sharpest finding, though, is about Minerva itself, not plugin-hive — and it needed correcting mid-draft. The original pass of this
-research read `agnosticPlanCliPath()` on `main`, where it checks three hardcoded candidate paths and returns `null` unless one exists,
-concluding the "bulletproof claude fallback" was silently doing all the work with no error surfaced. **That conclusion was accurate for
-`main`, but `main` is 20 commits stale relative to `dev`.** On `dev`, commit `4298ec8` ("PAN-7734: fix agnostic PLAN driver never selected
-(Claude-locked planning)", 2026-08-11) fixes exactly this bug, and its commit message confirms the failure was real and had real
-consequences: "Planning always fell back to the weekly-capped Claude SpawnDriver and exited 1, so delivery epics... never decomposed into
-child build stories and the build lane starved." Two stacked root causes: the candidate list was missing the actual checkout name used on
-the deployment host (`plugin-hive-fork-dev`, not `plugin-hive-fork`), and even a resolved path failed silently because
-`plan-agnostic.mjs`'s `main()` guard (`fileURLToPath(import.meta.url) === process.argv[1]`) breaks when the path is reached through a
-symlink — Node resolves `import.meta.url` through the symlink but `argv[1]` keeps the symlinked form, so the guard was false and the CLI
-exited 0 with empty stdout, no plan, no error. The fix adds the missing candidate and `realpathSync()`-canonicalizes every resolved path.
-The commit message documents production verification on the "hive" host: a real ticket run (`PAN-8604`) now "routes to gemini via Heimdall,
-completes, and files 4 child stories... to Multica with 0 errors," and a greenfield `--idea` run also completes.
+The sharpest finding is about Minerva itself, and needed correcting mid-draft. The original pass read `agnosticPlanCliPath()` on stale
+`main`, where it checks three hardcoded candidates and returns `null` silently otherwise — concluding the "bulletproof claude fallback" was
+doing all the work with no error surfaced. **That was accurate for `main`, but `main` is 20 commits stale.** On `dev`, commit `4298ec8`
+("PAN-7734: fix agnostic PLAN driver never selected") fixes exactly this — its message confirms the failure was real: "Planning always fell
+back to the weekly-capped Claude SpawnDriver... the build lane starved." Two stacked bugs: a missing candidate directory name, and a
+symlink-realpath mismatch in `plan-agnostic.mjs`'s `main()` guard that made the CLI exit 0 with no plan and no error. The fix adds the
+candidate and canonicalizes paths with `realpathSync()`, and the commit documents production verification on the "hive" host (`PAN-8604`
+routes through Heimdall to Gemini, files 4 child stories with 0 errors). That said, the fix's candidate list still doesn't include this
+analyst's own checkout name — on *this* machine the driver would still likely resolve to `null`. That's now a naming-convention/environment
+gap, not a fundamental unknown: the mechanism is verified working on at least one production host, materially different from "may never have
+executed for real" — but it's one host, not a general guarantee (§4).
 
-That said, the fix's candidate list (`~/code/plugin-hive-fork-dev`, `~/Code/plugin-hive-fork-dev`, `~/code/plugin-hive-fork`,
-`~/Code/plugin-hive-fork`, the installed plugin cache path) still doesn't include this analyst's actual local checkout name
-(`/Users/mdostal/Code/plugin-hive`) — so on *this specific machine*, the driver would still very likely resolve to `null` today. That's now
-understood as a naming-convention/environment gap rather than a fundamental unknown, though: the mechanism itself is proven working in
-production elsewhere, which is a materially different risk posture than "may never have executed for real outside a demo."
+A second, larger correction: **`ForkedHiveDriver` is not a stub on `dev`.** The (stale, `main`-run) project profile calls it "an intentional
+stub, throws until plugin-hive-fork exists." On `dev` it's fully implemented — `dispatchFresh()` spawns any runtime via
+`resolveRuntimeRoute()`/an adapter pattern; `answerAndContinue()` writes an answer onto a pending envelope and re-dispatches the *original*
+skill prompt once every required question is answered (a spike confirmed re-issuing the original prompt, not a generic "continue," is what
+makes the skill re-check its own on-disk state); `surfaceNextQuestion()` extracts and classifies the next unanswered question. Its
+`session_id` encodes an envelope pointer, not a live process handle — a cold-start-tolerant, runtime-agnostic pause/resume mechanism,
+already e2e tested (`PAN-8613`/`PAN-8619`) and covered for instantiation (`PAN-8616`).
 
-A second, larger correction: **`ForkedHiveDriver` is not a stub on `dev`.** The project profile's brownfield discovery (also run against
-`main`) described it as "an intentional stub, throws until plugin-hive-fork exists." On `dev`, `src/driver.ts`'s `ForkedHiveDriver` is fully
-implemented — `dispatchFresh()` spawns *any* runtime via `resolveRuntimeRoute()`/an adapter pattern (not hardcoded to claude),
-`answerAndContinue()` writes an answer onto a pending `.pHive/questions/*.yaml` envelope and re-dispatches the *original* skill prompt once
-every required question is answered (a spike apparently confirmed re-issuing the original prompt, not a generic "continue", is what makes
-the skill re-check its own on-disk state), and `surfaceNextQuestion()` extracts and classifies the next unanswered question. Its
-`session_id` encodes an envelope pointer rather than a live process handle — this is a cold-start-tolerant, runtime-agnostic pause/resume
-mechanism, already e2e tested (`PAN-8613`/`PAN-8619`, `tests/e2e/ForkedDriverFlow.test.ts`, `src/e2e-driver-validation.test.ts`) and covered
-for instantiation (`PAN-8616`). Driver selection itself (`MINERVA_DRIVER` env → `selectDriver()` factory) was wired earlier
-(`wire-forked-driver-selection`, commit `705ed97`).
+**Third correction, found after the grill pass via direct reads of `driver.ts`/`envelope-detection.ts`:** `ForkedHiveDriver` is not an
+independently-evolved lookalike of PR #341's protocol — it's a direct client of it. The class's own header says it "drives the real
+headless-question-protocol shipped in `firefly-events/plugin-hive#341`." `envelope-detection.ts`'s header agrees: the envelope format's
+"Full schema: `hive/references/question-envelope-schema.md` in plugin-hive-fork," flagged "LOAD-BEARING (confirmed via the epic's own spike
++ PR #341's review)" — Minerva's spike work and #341's review process were directly connected, not parallel. `run-manager.ts`,
+`kickoff-engine.ts`, and `deadline-renewal-ownership.test.ts` all cross-reference the same schema doc. `driver.ts`'s comments spell out the
+production consequence: the intended path is `MINERVA_HIVE_PLUGIN_DIR` unset, relying on "whatever plugin-hive is installed via the normal
+marketplace mechanism (the production case, once PR #341 ships)"; setting that env var at a local fork checkout is explicitly labeled a
+*testing* stopgap, "before PR #341 ships in a real release." Today, with #341 unmerged, the intended production path doesn't carry the
+protocol — only the local-checkout testing path does.
+
+That's one half of an independence question the grill pass raised. The other half — whether the *runtime-dispatch* layer shares any of that
+coupling — resolves the opposite way: `grep -n "^import" src/driver.ts` shows only stdlib, `yaml`, and two local Minerva modules; a
+repo-wide `grep` for `plugin-hive|codex-backend|hive/agnostic` across `driver.ts`/`agnostic-plan-driver.ts` finds plugin-hive references
+only in comments, never in an import. `resolveRuntimeRoute()`/`getAdapter()` and the `ClaudeAdapter`/`OpencodeAdapter`/`CodexAdapter`
+implementations are Minerva's own, from-scratch invention, zero code shared with the fork's runner-dispatch work. §3 treats these as two
+separate claims, not one blanket one.
+
+Last piece: `escalation-classification.ts` — composed into the same `claude -p`/`--json-schema` call as question extraction, citing AD-2
+directly — implements the agent/human channel split (`suggested_channel: "agent"|"human"`, defaulting to `human` on any parse failure, per
+AD-2/AD-5's "never guess" rule). Neither the `Envelope`/`EnvelopeQuestion` interfaces nor the file format itself carry a channel field, so
+this looks like Minerva-side logic layered on top of #341's format, not something #341 defines — best available evidence, not full
+certainty; confirming fully needs a direct read of #341's schema doc (§6 Q9).
 
 ## §3. My Proposed Approach
 
-Here's my read, and I want to be honest that this is interpretation layered on the brief, not a new fact: none of the three plugin-hive
-efforts is the thing Minerva claims to be. Minerva's own description is a `startRun`/`getRunStatus`/`submitAnswers` ABI — dispatch once,
-come back later from a cold process, no held-open terminal, no per-workflow opt-in required. PR #341 gets close in spirit (the author's
-"mirrors" comment is basically a compliment to Minerva's design), but it's scoped to 3 of 8+ skills and isn't merged. The fork dispatch work
-is about *which runner* executes a step — codex vs. Claude vs. Gemini — not about pause/resume at all; it's orthogonal, not competing, and
-shouldn't even be in the "does this replace Minerva" conversation except insofar as Minerva's own agnostic-plan-driver depends on it. The
-native `pause` node is real pause/resume, but architecturally the opposite of cold-start-tolerant: it needs a live process blocking for up
-to 30 days, which is precisely the constraint Minerva exists to route around, and it only covers three graduated workflows that aren't the
-ones Minerva primarily drives today.
+None of the three plugin-hive efforts is the thing Minerva claims to be. Minerva's own description is a `startRun`/`getRunStatus`/
+`submitAnswers` ABI — this is CONTEXT.md's "Pantheon subprocess ABI" per AD-1, the JSON-over-stdio RPC contract Minerva's CLI interface
+reuses, not a term this document coins fresh. PR #341 operates one layer down from that RPC surface: a file-based question-envelope format,
+not an RPC contract, and per §2's direct-source evidence it isn't merely "close in spirit" to Minerva's design — it's the literal protocol
+`ForkedHiveDriver` implements as a client. Stated explicitly: Minerva's external ABI (AD-1) is what other Pantheon services call;
+`ForkedHiveDriver` is the internal mechanism, built directly against #341's schema, that makes that ABI's pause/resume promise real for
+kickoff/plan today. The fork dispatch work is about *which runner* executes a step — orthogonal to pause/resume, relevant only insofar as
+Minerva's agnostic-plan-driver depends on it. The native `pause` node is real pause/resume but the opposite of cold-start-tolerant: a live
+process blocking up to 30 days, precisely the constraint Minerva exists to route around — AD-5 defines this exactly, "stall" as unbounded by
+design, never timing out into a guessed answer, the opposite operating assumption from a bounded-but-long blocking poll loop — and it only
+covers three graduated workflows that aren't the ones Minerva primarily drives.
 
-So my proposed positioning: **Minerva should narrow, not broaden, and should not fold — and the `dev`-branch correction makes this a
-stronger claim than it was on the first pass, not just an unchanged one.** Before the correction, Minerva's differentiated value rested on
-a design claim (an ABI that's supposed to be cold-start-tolerant and runtime-agnostic) with a live, undetected gap between that claim and
-what actually executed. After the correction, `ForkedHiveDriver` is proof that the design works as claimed — a real, e2e-tested,
-production-adjacent implementation of exactly the "dispatch, pause, resume from a cold process, any runtime" contract, built and validated
-entirely independent of any of plugin-hive's three efforts. That's a materially stronger position than "the design is sound but nothing
-proves it," which is where the pre-correction evidence left things.
+**Positioning: Minerva should narrow, not broaden, and should not fold** — the `dev`-branch correction plus the direct-source evidence in §2
+make this a stronger claim than the first pass found, though more specific than "independent of all three efforts." There are now two
+distinct, separately-evidenced claims where the earlier draft made one blanket one. On the runtime-dispatch layer, independence holds and is
+directly confirmed (zero imports from fork dispatch code, from-scratch, e2e-tested). On the question/pause/envelope layer, independence does
+*not* hold: `ForkedHiveDriver` is Minerva's own, working, tested client implementation of PR #341's exact protocol, built in direct
+reference to that PR's design and review. Still a materially stronger position than "the design is sound but nothing proves it" — a real,
+e2e-tested implementation exists — but the honest framing is "strong, demonstrated evidence for a design built on a specific, named external
+dependency," not "proof of full independence." A softer independence claim, paired with a sharper dependency to manage (§4/§5).
 
-The user's request bundles two ambitions — pause/resume across "the overall commands," and wrapping/forcing plugin-hive usage across
-planning, questions, execution, and so on. On the first, the honest answer given the evidence is that Minerva doesn't currently *have*
-full-command-surface pause/resume either — it has it for kickoff/plan-shaped flows, and none of the three plugin-hive efforts gets any actor
-there for execute/test/review/ship. That's not a reason to abandon Minerva; it's a shared gap both sides need to close eventually, and
-Minerva remains the only one of the four actors — the three plugin-hive efforts plus Minerva — whose stated design goal is cross-command,
-cross-runner ABI stability rather than a specific workflow's interactive UX.
+The request bundles two ambitions. On pause/resume "across the overall commands": Minerva doesn't currently have full-command-surface
+pause/resume either — only kickoff/plan-shaped flows — and none of the three plugin-hive efforts gets any driving agent there for
+execute/test/review/ship. Not a reason to abandon Minerva; a shared gap both sides need to close, and Minerva remains the only one of the
+four actors whose stated design goal is cross-command, cross-runner ABI stability rather than one workflow's interactive UX.
 
-On the second, "force the usage of the plugin hive... across the board" is exactly the wrapper role, and it's the part I'd lean into
-hardest. That's Minerva's real differentiator: not that it re-implements pause/resume internals, but that it's the stable seam other
-Pantheon services integrate against, regardless of which internal mechanism plugin-hive happens to be using this month — question-gateway
-files, DAG-executor sentinels, or neither. An Auriga-style router shouldn't need to know or care which of those three plugin-hive subsystems
-is live for a given command; it should just call Minerva's ABI.
+On "wrap and force usage... across the board": two clarifications the grill pass surfaced as missing. First, "stable seam" here means an ABI
+other services call for planning output and hand-off — start a run, poll it, answer its questions, get back a decomposed plan — not a
+routing or execution gate; CONTEXT.md is explicit Minerva must "never execute, route, or provision — it only plans," and nothing in this
+differentiator crosses that line. Second, per CONTEXT.md's v1/v2 split, every god-integration (Auriga included) is v2, "behind a contract,
+so it swaps in cleanly once that god exists" — v1 is standalone. So the Auriga-style-router framing is a v2-scope aspiration named as a
+reason not to fold Minerva, not a present-tense capability: Minerva has no Auriga contract today, and this document isn't recommending it
+build one as part of this epic's follow-on work. Once that v2 contract exists, that's Minerva's real differentiator: not re-implementing
+pause/resume internals, but becoming the stable seam other Pantheon services integrate against for planning output, regardless of which
+internal mechanism plugin-hive happens to be using — question-gateway files, DAG-executor sentinels, or neither.
 
-Concretely, I'd propose four things. First, do not deprecate Minerva on the strength of this research — the gap it fills is real, and none
-of the three efforts closes it. Second, explicitly reframe the north_star's "runner-agnostic planning" claim to be honest about the current
-fallback-only reality described in §2 and §4 — an unqualified claim of working infrastructure that silently isn't reachable is worse than a
-qualified, accurate one. Third, if PR #341 lands, Minerva should almost certainly adopt its envelope format for the skills it covers rather
-than maintain a hand-rolled parallel format — the author's "mirrors" language plus the direct file-path overlap
-(`.pHive/questions/<skill>-<invocation-id>.yaml`) make this a near-free convergence. But I don't think that lets Minerva delete its own
-protocol-translation code outright — #341 doesn't cover execute/test/review/ship, and Minerva needs to. Fourth, treat the fork's
-`dev`-to-`main` promotion (fork PR #10) as a hard precondition for any "runner-agnostic" claim — Minerva shouldn't describe that capability
-as live in any external-facing doc until the path is not just merged upstream of the fork but actually resolvable from Minerva's own
-hardcoded lookup paths, which today it isn't.
+Concretely, four recommendations, two revised here from the pre-grill draft. **First**, do not deprecate Minerva — the gap it fills is real,
+none of the three efforts closes it. **Second**, explicitly reframe north_star's "runner-agnostic planning" claim to match the fallback-only
+reality in §2/§4 — an unqualified claim of unreachable infrastructure is worse than a qualified, accurate one. **Third, corrected:** Minerva
+doesn't need to *decide whether to adopt* PR #341's envelope format if it lands — it already has, today, as its live implementation
+(`ForkedHiveDriver`). The open question isn't "should we converge," it's "what happens to that implementation if #341 never merges" (§4).
+What #341 landing *would* still change: moving Minerva off the `MINERVA_HIVE_PLUGIN_DIR` testing stopgap onto the normal
+marketplace-installed path `driver.ts` calls "the production case." It doesn't hand Minerva execute/test/review/ship coverage — #341 doesn't
+touch those skills, and Minerva's own protocol-translation code still has to. **Fourth, corrected — where the grill's contradiction finding
+(U1) most changes the picture:** fork PR #10 is *not* a hard precondition for anything Minerva's kickoff/plan pause/resume path depends on;
+treating it as one, as an earlier draft did, conflated the fork's *runner-dispatch* work with the *question/envelope* work — different PRs,
+different repos, different Minerva subsystems. The dependency actually worth naming as a precondition is upstream PR #341 itself: until it
+ships (or an equivalent reaches the normal marketplace mechanism), `ForkedHiveDriver`'s intended production path doesn't exist, and Minerva
+runs its pause/resume-capable driver only via the local-checkout testing stopgap. Minerva shouldn't describe question/envelope pause-resume
+as fully production-ready externally until that's resolved.
 
-One thing I'd deliberately resist: having Minerva "absorb" the DAG-executor's `pause` primitive wholesale. It's the wrong tool for
-cold-start dispatch by design, not by oversight — there's conceptual validation to take from it (pause/resume-as-a-concept, HMAC-signed
-tokens as a security pattern) but not code to reuse, given the fundamentally different process-lifetime assumption.
+One thing I'd deliberately resist: having Minerva "absorb" the DAG-executor's `pause` primitive wholesale. Wrong tool for cold-start dispatch
+by design, not oversight — conceptual validation to take (pause/resume-as-a-concept, HMAC-signed tokens as a security pattern), not code to
+reuse, given the fundamentally different process-lifetime assumption.
 
 ## §4. What Could Go Wrong
 
 **Downgraded to Medium (was High pre-correction) — Minerva's agnostic-plan-driver fallback can still silently mask a broken dependency on
-hosts whose checkout doesn't match the candidate-path naming convention.** The underlying bug was real, confirmed by `PAN-7734`'s own commit
-message, and is now fixed and production-verified on at least one host ("hive"). The residual risk is narrower than originally assessed:
-`agnosticPlanCliPath()`'s candidate list is still a fixed set of directory names (`plugin-hive-fork-dev`, `plugin-hive-fork`, the installed
-plugin cache path), and any host — including this analyst's own machine — whose local checkout uses a different name will still resolve to
-`null` with the same silent, no-error fallback behavior. The fix closed the two specific bugs it targeted; it didn't add the loud
-log-line/metric this document still recommends for every fallback firing, so a *new* naming mismatch on a *different* host would reproduce
-the same silent failure mode PAN-7734 just spent real effort diagnosing. I'd still treat "add visibility when the fallback fires" as a
-concrete, cheap fix worth doing now that the mechanism is proven to matter in production.
+hosts whose checkout doesn't match the candidate-path naming convention.** The bug was real (confirmed by `PAN-7734`'s commit) and is now
+fixed and production-verified on at least one host. Residual risk: the candidate list is still a fixed set of directory names, and any host
+— including this analyst's own machine — with a different local checkout name resolves to `null` with the same silent fallback. The fix
+didn't add the loud log-line/metric this document still recommends for every fallback firing, so a *new* naming mismatch on a *different*
+host reproduces the same silent failure PAN-7734 just spent effort diagnosing. Worth doing now that the mechanism is proven to matter.
 
-**Medium — conflating the three plugin-hive efforts in any external comms.** The brief is explicit that this is "easy to conflate": PR #341
-(questions), fork dispatch work (runner backend selection), and native `pause` (DAG executor) are unrelated in mechanism and maturity. If
-this epic's conclusion gets summarized upward as "plugin-hive now has agnostic pause/resume" without the caveats, someone will reasonably
-ask "so why does Minerva still exist" from an inaccurate premise. The write-up needs to keep these three distinct every time they're
-referenced going forward.
+**Medium — conflating the three plugin-hive efforts in any external comms.** PR #341 (questions), fork dispatch work (runner selection), and
+native `pause` (DAG executor) are unrelated in mechanism and maturity. If this epic's conclusion gets summarized as "plugin-hive now has
+agnostic pause/resume" without caveats, someone will reasonably ask why Minerva still exists from an inaccurate premise.
 
-**Medium — PR #341 stalling indefinitely.** 18+ days open, zero human review, only bot/author comments. If Minerva plans any convergence
-work around adopting its envelope format, that plan is hostage to a PR that may never land. I'd treat "align with #341" as opportunistic
-follow-on work, not something to schedule against a timeline.
+**Upgraded to High (was Medium) — PR #341 stalling indefinitely, now that §2's direct-source evidence shows Minerva's production pause/resume
+path is directly gated on it landing.** 18+ days open, zero human review — unchanged facts, but changed weight: not "if we ever want to
+converge formats, that plan is hostage to an unowned PR," but "the intended production path for `ForkedHiveDriver` doesn't exist until #341
+ships or an equivalent lands." Today every real invocation runs through the `MINERVA_HIVE_PLUGIN_DIR` local-checkout path `driver.ts` itself
+documents as testing-only. If #341 stalls indefinitely, that stopgap either becomes the de facto production mechanism (undocumented as such)
+or Minerva needs its own way to install/vendor the protocol independent of the marketplace. This is now the single most load-bearing
+external dependency in this document.
 
-**Medium — fork PR #10 (dev-to-main promotion) staying open indefinitely.** Same shape of risk as above but for the runner-dispatch work
-specifically — open since 2026-08-02 with no resolution noted in the brief, and it's the one thing currently blocking Minerva's own
-dependency from resolving at all.
+**Sharper still, per architect review:** running with `MINERVA_HIVE_PLUGIN_DIR` unset against a real marketplace-installed plugin-hive that
+predates #341 doesn't error at all — `dispatchFresh()` runs the skill, no envelope ever gets written (the underlying plugin-hive has no code
+to write one), and `surfaceNextQuestion()` falls through to the `NO_PENDING_SENTINEL` "run may be complete" placeholder, which is silently
+indistinguishable from a legitimate completion. That means the failure mode isn't just "the stopgap becomes de facto production" — it's that
+running the intended production configuration *today*, before #341 ships, looks exactly like success while silently never pausing for a
+single question. Same root dependency, but this sharpens why observability (§4's first risk item) needs to cover this path specifically, not
+just the agnostic-plan-driver fallback it was originally scoped to.
 
-**Low — native `pause`'s fail-closed-by-default behavior surprising a non-interactive caller.** `under_scheduler.auto_approve` needs
-explicit configuration or the executor fails closed rather than adapting, for a caller that isn't the one that originally blocked. This
-mostly matters if Minerva or another Pantheon service ever tries to drive DAG-executor-backed workflows directly instead of going through
-Minerva's own ABI — worth flagging so nobody builds against `pause` expecting Minerva-like semantics for free.
+**Downgraded to Low (was Medium; corrected per §5 and the U1 grill finding) — fork PR #10 staying open indefinitely.** Not the blocker on
+Minerva's agnostic-plan-driver path — §5 already established `PAN-7734`'s fix resolves the `plugin-hive-fork-dev` candidate directly,
+independent of PR #10 — and it's a separate PR, in the fork repo, gating a separate subsystem (runtime-dispatch, not question/envelope
+pause-resume) from the PR #341 risk above. Remaining risk is upstream visibility only. Real, not urgent, not blocking.
 
-**Low — scope creep in "across the board."** The user's request explicitly wants pause/resume and enforcement across *all* Hive commands.
-Neither Minerva nor any of the three plugin-hive efforts is there today. That's a real, large gap worth naming, but it's future-scope, not a
-defect in this audit — I don't want it silently assumed as already solved by this document.
+**Low — native `pause`'s fail-closed-by-default behavior surprising a non-interactive caller.** `under_scheduler.auto_approve` needs explicit
+configuration or the executor fails closed for a caller that isn't the one that originally blocked — matters if Minerva or another Pantheon
+service ever drives DAG-executor-backed workflows directly instead of through Minerva's own ABI.
+
+**Low — scope creep in "across the board."** Neither Minerva nor any of the three plugin-hive efforts covers all Hive commands today. A
+real, large gap worth naming, but future-scope — not silently assumed as already solved here.
 
 ## §5. Dependencies and Constraints
 
-**Correction:** the pre-correction draft treated fork PR #10 (`mdostal/plugin-hive-fork#10`, "Promote: dev -> main," open since 2026-08-02)
-as a hard precondition for Minerva's runner-agnostic planning claim. That's weaker than originally stated — `PAN-7734`'s fix resolves
-`plugin-hive-fork-dev` as a candidate directly, meaning a host with the fork's `dev` branch checked out under that name gets the working
-path today, independent of whether `dev` has been promoted to the fork's own `main`. Fork PR #10 matters for other reasons (getting this
-work upstream-visible, eventually to `firefly-events/plugin-hive` proper) but it is not, as previously stated, the single blocker standing
-between Minerva and a working agnostic-plan path — that blocker was PAN-7734's two bugs, and those are now fixed on `dev`. The remaining
-real dependency is narrower: whichever host runs Minerva needs *some* local checkout of the fork (any of the five candidate names) with
-`hive/agnostic/plan-agnostic.mjs` present — a deployment/provisioning concern, not an upstream-PR-timeline concern.
+**Correction:** the pre-correction draft treated fork PR #10 as a hard precondition for Minerva's runner-agnostic planning claim. Weaker
+than stated — `PAN-7734`'s fix resolves `plugin-hive-fork-dev` as a candidate directly, independent of whether `dev` has been promoted to
+the fork's own `main`. PR #10 matters for other reasons (upstream visibility) but isn't the single blocker — that was PAN-7734's two bugs,
+now fixed. The remaining real dependency: whichever host runs Minerva needs *some* local fork checkout (any of five candidate names) with
+`plan-agnostic.mjs` present — a deployment/provisioning concern, not an upstream-PR-timeline one. (Distinct PR, distinct repo, from the PR
+#341 dependency below — not substitutes for one another.)
 
-Separately, any convergence with PR #341's envelope format depends on that PR actually landing upstream in `firefly-events/plugin-hive`,
-which per the brief has had no human reviewer engagement in 18+ days — an external, unowned timeline neither Minerva nor this epic controls.
+Separately, and sharper than the pre-grill draft had it: Minerva's production pause/resume path for kickoff/plan is not merely "would
+benefit from converging with" PR #341's envelope format — per §2, it *is* PR #341's envelope format, implemented client-side in
+`ForkedHiveDriver`. That makes PR #341 landing upstream (or an equivalent reaching the normal marketplace mechanism) the real dependency
+gating `ForkedHiveDriver`'s intended production path, not an optional nice-to-have. No human reviewer engagement in 18+ days — an external,
+unowned timeline. Until it resolves, Minerva's only working path is the `MINERVA_HIVE_PLUGIN_DIR` local-checkout testing stopgap `driver.ts`
+itself documents as pre-production.
 
 The native DAG-executor `pause` primitive is constrained to whichever workflows are graduated onto the executor (`ui-design`,
-`design-review`, `daily-ceremony` per `hive/decisions/001-executor-cutover.md`) — it's opt-in per workflow, not a platform-wide default, so
-it can't be relied on as a general substrate even if Minerva wanted to build on it later.
+`design-review`, `daily-ceremony`) — opt-in per workflow, not a platform-wide default, so it can't be relied on as a general substrate.
 
-There's also an environment constraint worth naming explicitly: the reachability gap in §2/§4 was found on one researcher's machine. Before
-treating it as universal and acting on it broadly, it's worth confirming the same three lookup paths are absent in Minerva's actual
-deployment environment(s), not just locally — the fix (accurate north_star wording, visibility logging) is cheap either way, but the framing
-changes if it turns out to be a local-only gap.
+There's also an environment constraint worth naming: the reachability gap in §2/§4 was found on one researcher's machine. Before treating it
+as universal, it's worth confirming the same lookup paths are absent in Minerva's actual deployment environment(s) — the fix is cheap
+either way, but the framing changes if it's local-only.
 
 ## §6. Open Questions
 
-1. Does `hive/agnostic/plan-agnostic.mjs` (fork PR #12) actually substitute for Minerva's own kickoff/plan question-and-answer loop
-   end-to-end, or does it only handle the single-shot DECOMPOSE write? The brief notes only the PR description/proof snippet was checked,
-   not the full `adapters.mjs`/`plan-agnostic.mjs` source — this materially changes how much of Minerva's plan-flow logic could ever be
-   delegated to it.
-2. Can `node_type: pause`'s sentinel-file protocol actually be driven end-to-end by a non-Claude-Code, non-interactive harness in practice,
-   or does `under_scheduler.auto_approve`'s fail-closed default mean it effectively can't without custom integration work? No real
-   non-interactive caller example was found in the brief's research window.
-3. Does PR #341's prose (`hive/references/kickoff-protocol.md`, `question-envelope-schema.md`) document interop guidance for an external
-   ABI consumer like Minerva, or does it only describe plugin-hive-internal behavior? This determines whether adopting its envelope format
-   is a documented, supported integration path or something Minerva would be reverse-engineering from source.
-4. What is actual maintainer sentiment on PR #341 — is it stalled awaiting a specific reviewer, deprioritized, or genuinely expected to
-   land soon? Only GitHub PR comments were checked; no issue tracker or other discussion channel was consulted.
-5. Should Minerva file its own PR against `firefly-events/plugin-hive` proposing explicit envelope-format alignment with #341, rather than
-   silently maintaining a parallel format and hoping for eventual convergence? This wasn't in the original brief but falls directly out of
-   the "mirrors" language in §2 — if the two formats are this close already, formalizing the convergence might be cheaper long-term than
-   two teams independently maintaining lookalike protocols.
-6. Given the reachability gap in §2/§4, should Minerva's north_star language be corrected now, independent of this epic's broader
-   recommendation, since it currently describes working infrastructure that isn't reachable in at least one real environment?
-7. Is there an owner and timeline for fork PR #10 (dev-to-main promotion)? Its blocking role turned out to be smaller than first assessed
-   (see §5 correction), but it's still the path to getting this work upstream-visible.
-8. `.pHive/project-profile.yaml` (written by this project's `/hive:kickoff`, run against `main`) still describes `ForkedHiveDriver` as "an
-   intentional stub, throws until plugin-hive-fork exists" and doesn't reflect `dev`'s actual, fully-implemented state. Should that profile
-   be corrected as a direct follow-up of this epic, or left for the next kickoff re-run? Leaving it stale risks future planning work
-   under-scoping stories that touch the driver layer.
+1. Does `plan-agnostic.mjs` (fork PR #12) actually substitute for Minerva's own kickoff/plan question-and-answer loop end-to-end, or only
+   handle the single-shot DECOMPOSE write? Only the PR description/proof snippet was checked, not the full `adapters.mjs`/`plan-agnostic.mjs`
+   source — materially changes how much of Minerva's plan-flow logic could ever be delegated to it (see §8's qualification of this).
+2. Can `node_type: pause`'s sentinel-file protocol actually be driven end-to-end by a non-Claude-Code, non-interactive harness, or does
+   `under_scheduler.auto_approve`'s fail-closed default mean it effectively can't without custom integration work? No real non-interactive
+   caller example was found.
+3. **Sharper post-correction:** does #341's own `question-envelope-schema.md` document its schema as a supported, stable external-consumer
+   contract, or is `ForkedHiveDriver`'s reliance on it an informal coupling to an unstable, unmerged branch schema that could still change
+   before merge? Matters more now — Minerva isn't choosing whether to adopt this format, it's already built against it.
+4. **Now the single most urgent open question, given §4's upgraded risk:** what is actual maintainer sentiment on PR #341 — stalled awaiting
+   a specific reviewer, deprioritized, or genuinely expected to land soon? Only GitHub PR comments were checked; Minerva's production
+   readiness now hinges on the answer.
+5. **Revised:** given the coupling in §2 is already real, should Minerva proactively engage on PR #341 — flagging that a downstream consumer
+   already implements its schema — to get advance notice of breaking changes, rather than silently depending on an unmerged branch it
+   doesn't influence?
+6. Given the reachability gap in §2/§4, should north_star language be corrected now, independent of this epic's broader recommendation?
+7. Is there an owner and timeline for fork PR #10? Smaller blocking role than first assessed (§5), now clearly the lower-stakes of the two
+   open-PR dependencies (§4) — but still the path to upstream visibility.
+8. `.pHive/project-profile.yaml` still describes `ForkedHiveDriver` as "an intentional stub" and doesn't reflect `dev`'s actual,
+   fully-implemented state. Corrected as a direct follow-up, or left for the next kickoff re-run? Leaving it stale risks under-scoping future
+   driver-layer work.
+9. **New, from the `escalation-classification.ts` read in §2 (H5):** is the agent/human channel split (AD-2) fully and only a Minerva-side
+   concern layered on top of #341's envelope format, or does #341's own schema carry a channel-adjacent field this pass missed?
+   Best-available evidence says the former, but full certainty needs a direct read of `question-envelope-schema.md` and
+   `escalation-classification.ts` in full, out of this revision's scope.
 
 ## §7. Verification Strategy
 
-This is a research/decision epic — there's no feature to test, so "verification" means validating that the conclusions above are actually
-true rather than artifacts of one pass of research, and specifically closing the reachability-gap risk from §4 rather than leaving it as a
-citation someone has to trust.
+This is a research/decision epic — "verification" means validating the conclusions above rather than leaving them as one pass of research,
+and specifically closing the reachability-gap risk from §4.
 
-**Partially resolved by the correction above.** `PAN-7734`'s own commit message already documents the load-bearing check this section
-originally proposed — an actual invocation on the "hive" host, confirmed working (`PAN-8604` routes through Heimdall to Gemini, files child
-stories with 0 errors). That's real evidence, from a real run, not an inference from static path checks. What's still unverified is
-specifically *this* analyst's/machine's behavior (and, more generally, any future deployment host's), since the candidate list doesn't cover
-every possible checkout name. The remaining concrete check is narrower than originally scoped: confirm on each host that actually runs
-Minerva in production whether its local checkout name matches one of the five candidates, rather than re-verifying the mechanism itself.
+**Partially resolved.** `PAN-7734`'s commit message already documents the load-bearing check this section originally proposed — an actual
+invocation on the "hive" host, confirmed working. Real evidence from a real run, not an inference from static path checks. Still unverified:
+*this* analyst's/machine's behavior, and any future deployment host's, since the candidate list doesn't cover every checkout name. **Also
+resolved by the grill-driven direct-source read:** the independence question (H3) and "is #341 actually load-bearing" (U1) are no longer
+open items needing separate verification — answered by directly reading `driver.ts`, `envelope-detection.ts`, and
+`escalation-classification.ts` on `dev`, cited throughout §2/§3. What's genuinely still unverified: #341's maintainer sentiment/timeline (§6
+Q4, now the most urgent item), and whether its schema doc documents Minerva's usage as a supported contract (§6 Q3/Q9).
 
 ```
 VERIFICATION PLAN:
-  Tools: Manual invocation of Minerva's plan flow with a temporary log line or breakpoint added at resolveAgnosticPlanDriver() in src/agnostic-plan-driver.ts; gh CLI re-checks of PR #341 / fork PR #10 / fork PR #12 status at decision time, since state may have moved since 2026-08-13; direct read of hive/agnostic/adapters.mjs and plan-agnostic.mjs source (not yet read per Open Question 1) once fork PR #10 lands or a fork dev checkout is available locally.
-  Platforms: N/A -- this is a documentation/protocol investigation, not a UI or multi-platform surface.
-  Automated: None planned -- this is a one-time decision investigation, not a recurring test surface, so there's nothing to keep passing in CI.
-  Manual: (1) [Superseded by PAN-7734's own production verification on the "hive" host -- see §2/§5 correction.] Confirm instead, per production host that runs Minerva, whether its local checkout name matches one of agnosticPlanCliPath()'s five candidates. (2) Re-check PR #341 and fork PR #10 status immediately before finalizing any recommendation that depends on their landing. (3) Read the full plan-agnostic.mjs/adapters.mjs source to resolve Open Question 1 before committing to any envelope-convergence work. (4) Update .pHive/project-profile.yaml's structure/code_quality notes, which still describe ForkedHiveDriver as "an intentional stub" -- stale as of this epic's dev-branch correction (see Open Question 8).
-  Not verifying: Maintainer sentiment on PR #341 beyond what's visible in PR comments (Open Question 4) -- no access to private review channels; whether node_type: pause can be driven by a real non-Claude-Code caller (Open Question 2) -- would require standing up a throwaway harness, which is out of scope for a decision document unless the answer turns out to gate the recommendation itself.
+  Tools: Manual invocation of Minerva's plan flow with a temporary log line at resolveAgnosticPlanDriver() in src/agnostic-plan-driver.ts; gh CLI re-checks of PR #341 / fork PR #10 / fork PR #12 status at decision time; direct read of hive/agnostic/adapters.mjs and plan-agnostic.mjs source (Open Question 1); direct read of firefly-events/plugin-hive#341's question-envelope-schema.md source itself (Open Question 3/9) to confirm external-consumer support and any channel-classification field.
+  Platforms: N/A -- documentation/protocol investigation, not a UI or multi-platform surface.
+  Automated: None planned -- one-time decision investigation, not a recurring test surface.
+  Manual: (1) [Superseded by PAN-7734's own production verification on "hive" -- see §2/§5.] Confirm instead, per production host, whether its local checkout name matches one of agnosticPlanCliPath()'s five candidates. (2) Re-check PR #341 status immediately before finalizing any recommendation -- now the single highest-priority re-check given §4's upgraded risk, distinct from and more urgent than fork PR #10. (3) Read the full plan-agnostic.mjs/adapters.mjs source to resolve Open Question 1. (4) Update .pHive/project-profile.yaml's stale "intentional stub" description (Open Question 8). (5) Read question-envelope-schema.md and escalation-classification.ts in full to close Open Question 9 (H5) with certainty.
+  Not verifying: Maintainer sentiment on PR #341 beyond visible PR comments (Open Question 4) -- no access to private review channels; whether node_type: pause can be driven by a real non-Claude-Code caller (Open Question 2) -- out of scope unless it turns out to gate the recommendation itself.
 ```
 
 ## §8. Scale Assessment
 
 This epic is a research-and-decide exercise. The deliverable is this document plus whatever follow-on decision it produces — narrowing
-Minerva's north_star claims, filing an alignment PR against #341, adding a fallback-visibility log line — not a feature build. Any code
-touched as a direct consequence of this document's conclusions is small and localized: correcting the north_star wording, and adding
-observability so the fallback-masking risk in §4 can't recur silently without anyone noticing.
+north_star claims, documenting the PR #341 production-path dependency explicitly, adding a fallback-visibility log line — not a feature
+build. Any code touched as a direct consequence is small and localized.
 
 ```
 SCALE ASSESSMENT:
   Files affected: ~2-3 (project-profile.yaml north_star correction, agnostic-plan-driver.ts fallback-visibility logging, possibly this design-discussion.md itself as the decision record)
-  Subsystems: Minerva's agnostic-plan-driver / Heimdall routing layer only -- no plugin-hive code changes proposed here, that work belongs upstream and in the fork, outside Minerva's control
+  Subsystems: Minerva's agnostic-plan-driver / Heimdall routing layer, plus documentation-only corrections to how driver.ts/ForkedHiveDriver's PR #341 dependency is described externally -- no plugin-hive code changes proposed here, that work belongs upstream and in the fork
   Migration required: no
-  Cross-team coordination: no new infra required, but the recommendation's durability depends on external, unowned timelines (PR #341 review, fork PR #10 promotion) that Minerva cannot control or schedule against
-  Unknowns: 8 (see §6 open questions)
+  Cross-team coordination: no new infra required, but the recommendation's durability depends on external, unowned timelines -- PR #341 landing is now the sharpest of these (§4/§5), fork PR #10 much less so
+  Unknowns: 9 (see §6 open questions)
 
   RECOMMENDATION: Proceed to stories
-  RATIONALE: The core decision is answerable from this document -- the evidence doesn't support deprecating Minerva, and after the dev-branch correction the case is stronger than the initial pass found: ForkedHiveDriver is proof, not just a claim, that Minerva's cold-start-tolerant, runtime-agnostic pause/resume design works, independent of any of plugin-hive's three efforts. What follow-on work exists is still small, mechanical, and doesn't touch architecture: correcting north_star and project-profile.yaml claims to match dev's actual reachable reality, and adding observability so the (now narrower, host-naming-specific) fallback-masking risk in §4 can't recur silently. A structured outline would be overkill for work this contained; a handful of stories decomposed directly from this document is sufficient to carry it forward.
+  RATIONALE: The core decision is answerable from this document -- the evidence doesn't support deprecating Minerva. After the dev-branch correction and the direct-source evidence folded in during grill revision, the case is stronger than the initial pass found, but on more specific grounds than "independent of all three efforts": ForkedHiveDriver is strong, demonstrated evidence -- e2e-tested, production-adjacent -- that Minerva's cold-start-tolerant, runtime-agnostic dispatch layer is a genuine, independent invention, while its question/pause/envelope layer is a working, tested client implementation of PR #341's own protocol, not independent of it. That reframing sharpens which follow-on work matters rather than weakening "don't fold, don't broaden." Follow-on work stays small and mechanical: correcting north_star/project-profile.yaml claims, adding fallback-visibility observability, and -- new relative to the pre-grill draft -- documenting the PR #341 production-path dependency explicitly rather than leaving it implicit in code comments. On architecture specifically: Open Question 1 (whether plan-agnostic.mjs substitutes for Minerva's plan-flow loop) remains genuinely unread and could in principle change how much of that flow gets delegated -- "doesn't touch architecture" describes the stories recommended here (documentation/observability only), not a guarantee about what a future epic might find once Q1 is resolved. None of this stories batch is gated on Q1, so it can be answered in parallel without blocking this handoff. A structured outline would be overkill for work this contained; a handful of stories decomposed directly from this document is sufficient to carry it forward.
 ```
+
+**Story sequencing note (from TPM collaborative review):** the follow-on stories this document recommends are content-coupled, not
+independent, so they should not be decomposed as unordered parallel tickets. The north_star/project-profile.yaml correction depends on the
+PR #341 production-path dependency being documented first (or in the same story) — otherwise it ships an incomplete "corrected" claim and
+needs immediate rework. Similarly, the fallback-visibility observability story changes the fact pattern the profile correction describes
+(silent fallback → logged fallback), so it should land before or alongside the profile correction, not after. Separately: since §4 upgraded
+PR #341 to this document's single highest external risk with no natural resolution date, Phase C should add a lightweight checkpoint (a
+dated re-check, not just "monitor an unowned PR" left implicit) so the risk doesn't silently go stale if #341 is still open in 30-60 days.
+And Open Question 1 should be filed as its own tracked, owned item rather than left as prose in this document — if `plan-agnostic.mjs` turns
+out to substitute for Minerva's plan-flow loop, that finding should surface as a new epic, not get lost once this one closes.
 
 SCOPE_CLASS: single-epic

@@ -91,12 +91,18 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
   const previousTestMode = process.env.MINERVA_TEST_MODE;
   const previousCli = process.env.HIVE_PLAN_AGNOSTIC_CLI;
   const previousOpencode = process.env.OPENCODE_BIN;
+  // startRun's no-target_repo path (this test never passes target_repo, only the unused
+  // repo_url) falls through to run-manager's resolveSeedRepo(), which otherwise defaults to
+  // ~/repos/consus-seeds and fails hard on a machine without that directory. Self-provision the
+  // same throwaway repo createSeedRepo() already built above as MINERVA_SEED_REPO.
+  const previousSeedRepo = process.env.MINERVA_SEED_REPO;
 
   process.env.MINERVA_HEIMDALL_URL = heimdall.url;
   delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  delete process.env.MINERVA_TEST_MODE; 
+  delete process.env.MINERVA_TEST_MODE;
   process.env.OPENCODE_BIN = "echo";
   process.env.HIVE_PLAN_AGNOSTIC_CLI = fakeCli;
+  process.env.MINERVA_SEED_REPO = seedRepo;
 
   const consus = await mockConsusServer();
   process.env.MINERVA_CONSUS_DECISIONS_URL = consus.url;
@@ -136,6 +142,7 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
     if (previousTestMode) process.env.MINERVA_TEST_MODE = previousTestMode; else delete process.env.MINERVA_TEST_MODE;
     if (previousCli) process.env.HIVE_PLAN_AGNOSTIC_CLI = previousCli; else delete process.env.HIVE_PLAN_AGNOSTIC_CLI;
     if (previousOpencode) process.env.OPENCODE_BIN = previousOpencode; else delete process.env.OPENCODE_BIN;
+    if (previousSeedRepo) process.env.MINERVA_SEED_REPO = previousSeedRepo; else delete process.env.MINERVA_SEED_REPO;
   }
 });
 
@@ -148,12 +155,14 @@ test("fallback path: Heimdall down -> claude/claude gracefully degrades", async 
   const previousTestMode = process.env.MINERVA_TEST_MODE;
   const previousCli = process.env.HIVE_PLAN_AGNOSTIC_CLI;
   const previousOpencode = process.env.OPENCODE_BIN;
+  const previousSeedRepo = process.env.MINERVA_SEED_REPO;
 
-  process.env.MINERVA_HEIMDALL_URL = "http://localhost:1"; 
+  process.env.MINERVA_HEIMDALL_URL = "http://localhost:1";
   delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  delete process.env.MINERVA_TEST_MODE; 
+  delete process.env.MINERVA_TEST_MODE;
   process.env.OPENCODE_BIN = "echo";
   process.env.HIVE_PLAN_AGNOSTIC_CLI = fakeCli;
+  process.env.MINERVA_SEED_REPO = seedRepo;
 
   class FallbackDriver {
     turns = 0;
@@ -199,5 +208,6 @@ test("fallback path: Heimdall down -> claude/claude gracefully degrades", async 
     if (previousTestMode) process.env.MINERVA_TEST_MODE = previousTestMode; else delete process.env.MINERVA_TEST_MODE;
     if (previousCli) process.env.HIVE_PLAN_AGNOSTIC_CLI = previousCli; else delete process.env.HIVE_PLAN_AGNOSTIC_CLI;
     if (previousOpencode) process.env.OPENCODE_BIN = previousOpencode; else delete process.env.OPENCODE_BIN;
+    if (previousSeedRepo) process.env.MINERVA_SEED_REPO = previousSeedRepo; else delete process.env.MINERVA_SEED_REPO;
   }
 });

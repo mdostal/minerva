@@ -20,9 +20,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call } from "./test-cli.ts";
+import { call, createSeedRepo } from "./test-cli.ts";
 
 let minervaHome: string;
+let seedRepo: string;
 
 const TEST_DRIVE_PROMPT =
   "You are running headlessly for idea '{idea}'. You need one piece of information from the " +
@@ -32,6 +33,7 @@ const TEST_DRIVE_PROMPT =
 function env() {
   return {
     MINERVA_HOME: minervaHome,
+    MINERVA_SEED_REPO: seedRepo,
     MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
     MINERVA_TEST_DRIVE_PROMPT: TEST_DRIVE_PROMPT,
   };
@@ -39,10 +41,12 @@ function env() {
 
 before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-completeness-"));
+  seedRepo = createSeedRepo();
 });
 
 after(() => {
   rmSync(minervaHome, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
 });
 
 test("PRD anchored success metric: >=3 ideas in flight concurrently, each progressing idea->spec independently, zero hand-run commands per idea", () => {

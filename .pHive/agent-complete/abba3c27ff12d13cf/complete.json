@@ -1,0 +1,16 @@
+{
+  "agent_id": "abba3c27ff12d13cf",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-abba3c27ff12d13cf.jsonl",
+  "last_assistant_message": "Ripping Consus coupling out of Minerva per your directive; the core code changes are done but uncommitted, and I'm verifying tests pass before committing. Next: check verification results, commit, then run the docs story and final live PoC.",
+  "prompt_id": "339e2e4f-90ca-4050-894b-6652556d9782",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T16:02:49Z"
+}

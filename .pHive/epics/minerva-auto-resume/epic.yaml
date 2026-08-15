@@ -1,0 +1,23 @@
+name: minerva-auto-resume
+title: Minerva AUTO-RESUME
+description: Poll Consus for parked-question answers and automatically resume the Minerva run with the answer.
+target_codebase: /Users/dostal/.minerva/runs/07f8d897-ee95-4ee7-bd9b-f1796cfc8d8f/workspace
+methodology: classic
+version_bump: minor
+stories:
+  - id: store-parked-mapping
+    title: Store mapping between Consus question ID and Minerva run ID
+    complexity: low
+    depends_on: []
+  - id: poll-consus-answers
+    title: Poll Consus API for parked question status
+    complexity: medium
+    depends_on: [store-parked-mapping]
+  - id: resume-run-execution
+    title: Feed answer back and resume the parked run
+    complexity: high
+    depends_on: [poll-consus-answers]
+  - id: e2e-verification
+    title: End-to-end integration and verification
+    complexity: medium
+    depends_on: [resume-run-execution]

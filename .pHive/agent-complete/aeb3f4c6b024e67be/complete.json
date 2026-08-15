@@ -1,0 +1,16 @@
+{
+  "agent_id": "aeb3f4c6b024e67be",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-aeb3f4c6b024e67be.jsonl",
+  "last_assistant_message": "Counting final line count in design-discussion.md",
+  "prompt_id": "e69c2ad1-0cdb-41f3-8624-f8e634b0bb17",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:57:00Z"
+}

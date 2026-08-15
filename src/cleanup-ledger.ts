@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { MinervaError } from "./errors.ts";
-import { readRunRecord, updateRunRecord, type RunStatus } from "./run-manager.ts";
+import { finalizeRunMetrics, readRunRecord, updateRunRecord, type RunStatus } from "./run-manager.ts";
 
 function minervaHome(): string {
   return process.env.MINERVA_HOME ?? join(homedir(), ".minerva");
@@ -71,6 +71,7 @@ export function abortRun(params: Record<string, unknown>): Record<string, unknow
   }
 
   updateRunRecord(runId, { status: "aborted" });
+  finalizeRunMetrics(runId);
   recordCleanup(runId, "aborted");
   return { result: {} };
 }

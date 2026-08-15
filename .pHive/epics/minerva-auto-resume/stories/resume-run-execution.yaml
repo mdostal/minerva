@@ -1,0 +1,45 @@
+id: resume-run-execution
+epic: minerva-auto-resume
+title: Feed answer back and resume the parked run
+status: pending
+complexity: high
+methodology: classic
+depends_on:
+  - poll-consus-answers
+
+description: |
+  Wire the received human answer from Consus back into the Minerva run context.
+  Once the poller detects an answer, it must change the run's state from parked to active, inject the answer into the agent's context, and resume execution (compatible with the agnostic-driver / task#26).
+
+acceptance_criteria:
+  - "Given an answered question from Consus, when the answer is retrieved, then the answer text is injected into the parked run's state."
+  - "Given the injected answer, when state is updated, then the run is transitioned from parked to active and resumes execution."
+
+metric:
+  applies: false
+  justification: This is a complex state transition and workflow integration story, not a statistically measurable component.
+
+steps:
+  - id: step-1
+    description: Research how the agnostic-driver and run states handle resuming with new context.
+    agent: researcher
+  - id: step-2
+    description: Implement logic to update the run state from parked to active and format the answer for the agent.
+    agent: developer
+  - id: step-3
+    description: Trigger the resume routine so the runner continues execution from the exact parked point.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/07f8d897-ee95-4ee7-bd9b-f1796cfc8d8f/workspace
+  tech_stack: {}
+  key_files: []
+
+design_decisions:
+  - decision: Rely on agnostic-driver
+    rationale: Ensures the resume logic works across different runtimes and is not tied strictly to Claude-specific execution.
+
+risks:
+  - severity: high
+    description: The restored context might be incomplete, causing the agent to forget its prior plan.
+    mitigation: Strictly rely on existing plan state loading mechanisms and verify state integrity upon resume.

@@ -1,0 +1,43 @@
+id: add-route-parser-tests
+epic: fix-route-response-contract
+title: Add unit tests for route payload runtime mapping
+status: pending
+complexity: low
+methodology: classic
+depends_on: [refactor-route-payload-parser]
+
+description: |
+  Create unit tests to verify the `parseAvailableRoutePayload` mapping logic.
+  Ensure that all expected Heimdall runtimes (gemini, claude, codex) are correctly mapped to their respective CLIs.
+
+acceptance_criteria:
+  - "Given test inputs of different runtimes, when validated, then the correct CLI is mapped and returned."
+  - "Given invalid runtimes, when validated, then an appropriate error is thrown."
+
+metric:
+  applies: false
+  justification: The story strictly adds test coverage for a specific parser mapping, which is a binary pass/fail condition.
+
+steps:
+  - id: step-1
+    description: Find or create the test file for the route parser.
+    agent: tester
+  - id: step-2
+    description: Add test cases for gemini -> opencode, claude -> claude, and codex -> codex.
+    agent: tester
+
+context:
+  codebase: /Users/dostal/.minerva/runs/1956b8aa-4d02-4901-977a-0e3fedac37b1/workspace
+  tech_stack: {}
+  key_files:
+    - path: src/driver.ts
+      purpose: The target file containing the parsing logic to be tested.
+
+design_decisions:
+  - decision: Use isolated unit tests for the parser
+    rationale: Allows validating the mapping contract quickly without spinning up a full Heimdall mock.
+
+risks:
+  - severity: low
+    description: Test coverage might miss edge cases like missing both runtime and cli.
+    mitigation: Explicitly add a test case for invalid/empty inputs to ensure expected throws occur.

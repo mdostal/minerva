@@ -1,0 +1,28 @@
+name: remove-ideate-to-consus
+title: "Remove bin/ideate-to-consus.mjs -- the idea<->Consus round trip is Pantheon-layer glue, not Minerva"
+description: >
+  Follow-on to rip-out-consus-coupling (triage t-002). That epic removed Consus coupling from
+  Minerva's core ABI/engine/CLI but deliberately kept bin/ideate-to-consus.mjs as an excluded,
+  boundary-noted sibling script, since its entire purpose is a Consus/Janus round-trip. Per
+  operator direction ("the ideas from consus to minerva and back and forth is a layer living in
+  the pantheon for a decision surface to be able to be made visible and the plugins work it, i'll
+  navigate that soonish"), that round-trip loop belongs at the Pantheon integration layer, not
+  inside Minerva's repo even as an opt-in excluded utility. One atomic story: delete the tool, its
+  demo artifacts, and one dead leftover env-var reference; amend the still-Unreleased CHANGELOG
+  entry that described the now-superseded boundary-note approach. Scope is small and fully
+  operator-directed in chat -- executed directly per triage t-005's DECISION note, no separate
+  research-brief/grill ceremony.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: classic
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+stories:
+  - id: remove-ideate-to-consus-tool
+    title: Delete ideate-to-consus.mjs, its demo artifacts, and the last dead Consus env-var reference
+    complexity: low
+    depends_on: []

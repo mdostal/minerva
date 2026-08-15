@@ -1,0 +1,31 @@
+id: fix-test-suite-flakiness-t006
+epic: fix-test-suite-flakiness-t006
+title: Fix seed-repo self-provisioning gap and hardcoded fork-path skip for the 7 remaining failures
+complexity: low
+depends_on: []
+
+description: >
+  Two independent, fully root-caused fixes:
+  1. src/prebaked-plan-defaults.test.ts's before()/after() now self-provision MINERVA_SEED_REPO
+     via createSeedRepo() from test-cli.ts, matching src/full-loop.test.ts's existing pattern,
+     restoring the previous env var on cleanup.
+  2. src/deadline-renewal-ownership.test.ts and src/real-forked-hive-driver.test.ts resolve
+     FORK_PATH from process.env.MINERVA_HIVE_PLUGIN_DIR with the old hardcoded value as a
+     fallback default, compute a FORK_MISSING message via existsSync(), and pass
+     {skip: FORK_MISSING} to every test() in each file so they skip with a clear, actionable
+     message instead of hard-failing when no real plugin-hive-fork checkout is present.
+
+acceptance_criteria:
+  - All 4 prebaked-plan-defaults.test.ts tests pass without requiring ~/repos/consus-seeds to exist.
+  - deadline-renewal-ownership.test.ts and real-forked-hive-driver.test.ts's 3 tests SKIP (not
+    fail) with a message naming MINERVA_HIVE_PLUGIN_DIR, when no real fork checkout is present.
+  - Setting MINERVA_HIVE_PLUGIN_DIR to a real local plugin-hive-fork checkout still runs those 3
+    tests live, unmocked (AD-1 preserved).
+  - npm run typecheck and the full test suite pass (skips, not failures, for the 3 fork tests).
+  - Triage t-006 advances to plan-ready with a DECISION note recording the root causes.
+
+out_of_scope:
+  - Any change to the fork-dependent tests' actual assertions or live behavior.
+  - Investigating whether the other tests in t-006's original 17-failure list (run-manager.test.ts,
+    plan-runner.test.ts, driver.test.ts SIGINT) are flaky under load -- they did not reproduce on
+    a fresh full run and are treated as confirmed-transient, not a new finding to chase here.

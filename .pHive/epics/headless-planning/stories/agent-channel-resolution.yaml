@@ -1,0 +1,25 @@
+id: agent-channel-resolution
+epic: headless-planning
+title: Enable auto-resolution of agent-channel questions using defaults
+status: open
+complexity: medium
+methodology: tdd
+depends_on: [pre-baked-defaults-config]
+
+description: |
+  Hook the loaded pre-baked defaults into the question extraction and routing loop. 
+  When a question is classified as 'agent' and matches a known default, it should be 
+  automatically resolved, effectively advancing the turn without human intervention.
+
+acceptance_criteria:
+  - "Given a question classified as 'agent', when a matching pre-baked default exists, then the question is automatically answered using the default and is NOT surfaced via getQuestions."
+  - "Given a question classified as 'agent', when NO matching default exists, then the question is escalated to the 'human' channel and surfaced via getQuestions."
+  - "Given a question classified as 'human', when a matching default exists, then the default is ignored and the question is escalated to the 'human' channel."
+  - "Given an auto-resolved question, when the run advances, then the metric 'auto_resolutions' increments by 1."
+
+scope_boundaries:
+  do:
+    - "Integrate the pre-baked defaults into the dispatch/planning engine."
+    - "Implement the auto-submission of answers for agent-channel matched questions."
+  do_not:
+    - "Do not change the fundamental kickoff-engine loop, only the routing logic for answering."

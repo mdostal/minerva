@@ -144,6 +144,10 @@ async function main(): Promise<void> {
     targetRepoSlug = checkout.slug;
   }
 
+  // WARNING: keep this an inline object literal, not an intermediate variable. Passing it inline
+  // lets TypeScript's excess-property check catch a stale/removed PlanRequest field at compile
+  // time (this call site has drifted before); extracting it into a `const req = {...}` first
+  // would silently defeat that check and let a stale field pass through unnoticed.
   const result = await runHeadlessPlan({
     idea,
     ...(targetRepoPath ? { targetRepo: targetRepoPath } : {}),

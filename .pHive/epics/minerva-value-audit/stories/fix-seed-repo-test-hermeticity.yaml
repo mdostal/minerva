@@ -1,0 +1,124 @@
+id: fix-seed-repo-test-hermeticity
+epic: minerva-value-audit
+title: Make full-loop.test.ts and plan-runner.test.ts self-provision their seed repo
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+parallel_allowed: true
+parallel_rationale: bounded-slice
+files_to_modify:
+  - file: src/full-loop.test.ts
+    change: "add a before()/beforeEach() that mkdtempSync's a throwaway git repo and injects it as MINERVA_SEED_REPO in the test env, mirroring run-manager.test.ts's existing pattern"
+  - file: src/plan-runner.test.ts
+    change: "same self-provisioning pattern, injected wherever this file builds its test env"
+
+description: |
+  Discovered while establishing a clean baseline for this epic: `npm run ci` on `dev` fails 18
+  tests. 15 of those 18 fail with an identical error — "Seed repo does not exist:
+  /Users/mdostal/repos/consus-seeds" — because src/full-loop.test.ts and src/plan-runner.test.ts
+  are the only 2 of 14 test files that reference MINERVA_SEED_REPO-dependent behavior without
+  self-provisioning a repo. 12 other test files (src/run-manager.test.ts, src/cleanup-ledger.test.ts,
+  src/completeness.test.ts, src/consus-decisions.test.ts, src/consus-poller.test.ts,
+  src/e2e-driver-validation.test.ts, src/kickoff-engine.test.ts, src/planning-metrics.test.ts,
+  src/turn-timeout.test.ts, src/output-emitter.test.ts, src/subagent-driver.test.ts,
+  src/types.test.ts) already do this correctly: mkdtempSync a throwaway directory, `git init` it,
+  set `user.name`/`user.email`, commit `--allow-empty`, and point `MINERVA_SEED_REPO` at it —
+  fully self-contained, works on any machine with zero external setup.
+
+  This story brings the 2 outlier files into line with the already-correct, already-dominant
+  pattern. It does NOT touch any src/*.ts (non-test) production code, and it is unrelated to the
+  separate Consus-coupling architectural question filed as triage t-002 — this is purely a
+  test-fixture hygiene fix.
+
+  DO NOT: change resolveSeedRepo()'s behavior in src/run-manager.ts, change the real default path
+  (~/repos/consus-seeds), or touch anything about how Minerva resolves seed repos in production.
+  This story only changes how these 2 test files set up their OWN test fixtures.
+
+acceptance_criteria:
+  - "Given a machine with no ~/repos/consus-seeds directory (this machine, verified), when `npm test` runs src/full-loop.test.ts, then no test in that file fails with 'Seed repo does not exist'"
+  - "Given the same machine, when `npm test` runs src/plan-runner.test.ts, then no test in that file fails with 'Seed repo does not exist'"
+  - "Given `npm run ci`, when run after this story, then the only remaining failures (if any) are the 3 already-known non-seed-repo failures (#45 deadline-renewal-ownership, #114/#117 kickoff-engine plan_runtime) — explicitly out of scope for this story"
+  - "Given the new setup code, when compared to run-manager.test.ts's existing pattern, then it follows the same mkdtempSync + git init + git config + git commit --allow-empty shape (no new pattern invented)"
+
+metric:
+  applies: true
+  name: test.seed_repo_env_dependent_failures
+  direction: down
+  unit: count
+  baseline: 15
+  target: 0
+  window: "story integrate step"
+  source:
+    kind: manual
+    ref: "Run `npm run ci` before and after this story and grep the output for 'Seed repo does not exist' — count should go from 15 to 0"
+  verify_at: "story integrate step"
+  owner: developer
+
+steps:
+  - id: research
+    description: Read run-manager.test.ts's exact seed-repo setup pattern (mkdtempSync/git init/config/commit), and read full-loop.test.ts and plan-runner.test.ts's current before()/env() setup to find the right insertion point in each.
+    agent: researcher
+  - id: test-spec
+    description: Confirm (do not yet fix) that both files currently fail this way — run `npm test -- src/full-loop.test.ts src/plan-runner.test.ts` and capture the "Seed repo does not exist" failures as the baseline this story eliminates.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the self-provisioning seed-repo setup to both files' test fixtures, mirroring run-manager.test.ts's pattern exactly.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm no production (non-test) code changed, confirm the pattern matches the existing correct one rather than inventing a new one, confirm the 3 known-unrelated failures are untouched.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  tech_stack:
+    language: typescript
+    test_runner: "node:test via tsx --test"
+  key_files:
+    - path: src/run-manager.test.ts
+      purpose: "Reference implementation of the correct self-provisioning seed-repo pattern (lines ~20-35 in its before() hook)"
+    - path: src/full-loop.test.ts
+      purpose: "One of the 2 files to fix — currently has zero MINERVA_SEED_REPO references"
+    - path: src/plan-runner.test.ts
+      purpose: "The other file to fix — currently has zero MINERVA_SEED_REPO references"
+
+code_examples:
+  - title: The correct, existing pattern to mirror (do not invent a new one)
+    file: src/run-manager.test.ts
+    snippet: |
+      before(() => {
+        minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-"));
+        existingRepo = mkdtempSync(join(tmpdir(), "minerva-target-repo-"));
+        execFileSync("git", ["init", "-q", "-b", "dev", existingRepo]);
+        execFileSync("git", ["-C", existingRepo, "config", "user.name", "Test User"]);
+        execFileSync("git", ["-C", existingRepo, "config", "user.email", "test@example.com"]);
+        execFileSync("git", ["-C", existingRepo, "commit", "-q", "--allow-empty", "-m", "init"]);
+        seedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-"));
+        // ... seedRepo gets the same git init/config/commit treatment, then:
+        // env() returns { ...other vars, MINERVA_SEED_REPO: seedRepo }
+      });
+
+design_decisions:
+  - decision: Mirror the existing pattern exactly rather than extracting a shared test helper
+    rationale: Minimal, low-risk change matching this story's small scope; extracting a shared helper across 13 test files would be a separate, larger refactor not asked for here
+
+cross_cutting:
+  - concern: documentation
+    action: "No doc changes needed — this is a test-fixture-only fix"
+
+risks:
+  - severity: low
+    description: The two test files might have other latent assumptions beyond just the seed repo (e.g. assuming a specific branch name or commit history) that only surface once the seed-repo error is no longer masking them
+    mitigation: "Acceptance criteria explicitly scope this story to eliminating the 15 seed-repo failures only; if new, different failures surface once unmasked, treat those as a new, separate finding rather than silently patching around them in this story"
+
+references:
+  - path: .pHive/audits/post-run/plan-minerva-value-audit-20260814T010712Z.yaml
+    relevant_excerpt: "Baseline audit predates this discovery — npm run ci was not run before that audit was written."

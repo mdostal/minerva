@@ -116,6 +116,14 @@ architecture should be built to expect, or wait for, autonomous movement between
   `--plugin-dir` (`MINERVA_HIVE_PLUGIN_DIR`), not the marketplace-installed plugin-hive, ahead of
   PR #341 merging upstream.
 
+  **Production dependency (tracked, dated recheck):** `ForkedHiveDriver`'s intended production
+  path — `MINERVA_HIVE_PLUGIN_DIR` unset, relying on the normal marketplace-installed plugin-hive
+  — does not yet carry the headless-question protocol, because `firefly-events/plugin-hive#341`
+  is still unmerged; only the `MINERVA_HIVE_PLUGIN_DIR` local-fork-checkout path above (explicitly
+  a testing stopgap) actually carries it today. See
+  `docs/decisions/002-pr341-production-dependency.md` for the full writeup, the exact code
+  citations, and the dated recheck procedure (`recheck_by: 2026-09-13`).
+
   **Known scope boundary (confirmed live, not a bug):** the existing `MINERVA_TEST_DRIVE_PROMPT`
   synthetic-prompt regression suite (kickoff-engine, output-emitter, cleanup-ledger,
   completeness — 17 tests) was re-run once with `MINERVA_DRIVER=forked`: 14/17 pass unmodified,

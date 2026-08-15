@@ -7,29 +7,48 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ForkedHiveDriver, decodeEnvelopePointer, NO_PENDING_SENTINEL } from "./driver.ts";
+import { testHeimdallRouteUrl } from "./test-cli.ts";
 
-const FORK_PATH = "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork";
+// The hardcoded default below only ever matched one specific developer's home directory --
+// override it with MINERVA_HIVE_PLUGIN_DIR (the same var this test sets for the code under
+// test) to point at your own local plugin-hive-fork checkout. Skip, don't fail, when neither
+// resolves to a real checkout: this is a deliberate live integration test (AD-1, no mocking the
+// CLI boundary), not something every machine is expected to have set up.
+const FORK_PATH = process.env.MINERVA_HIVE_PLUGIN_DIR || "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork";
+const FORK_MISSING = existsSync(FORK_PATH)
+  ? false
+  : `plugin-hive-fork checkout not found at ${FORK_PATH} -- set MINERVA_HIVE_PLUGIN_DIR to a local checkout to run this live integration test`;
+let previousRouteUrl: string | undefined;
 
 before(() => {
+  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
   process.env.MINERVA_HIVE_PLUGIN_DIR = FORK_PATH;
 });
 
 after(() => {
+  if (previousRouteUrl === undefined) {
+    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  } else {
+    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+  }
   delete process.env.MINERVA_HIVE_PLUGIN_DIR;
 });
 
 function newScratchWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "minerva-forked-driver-test-"));
   execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "config", "user.name", "Test User"]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
   execFileSync("git", ["-C", dir, "commit", "-q", "--allow-empty", "-m", "scratch init"]);
   return dir;
 }
 
-test("ForkedHiveDriver.runTurn with sessionId: null dispatches fresh and surfaces the first question, classified", async () => {
+test("ForkedHiveDriver.runTurn with sessionId: null dispatches fresh and surfaces the first question, classified", { skip: FORK_MISSING }, async () => {
   const cwd = newScratchWorkspace();
   const driver = new ForkedHiveDriver();
 
@@ -78,7 +97,7 @@ test("ForkedHiveDriver.runTurn with sessionId: null dispatches fresh and surface
 // present) and walks generically until it either observes the specific invariant under test --
 // at least one interim answer that does NOT trigger a new dispatch (same envelope path back) --
 // or the run completes.
-test("ForkedHiveDriver.runTurn walks a real multi-turn kickoff run, surfacing interim answers within the same envelope and only re-dispatching on closure", async () => {
+test("ForkedHiveDriver.runTurn walks a real multi-turn kickoff run, surfacing interim answers within the same envelope and only re-dispatching on closure", { skip: FORK_MISSING }, async () => {
   const cwd = newScratchWorkspace();
   const driver = new ForkedHiveDriver();
   const skillPrompt = "/plugin-hive:kickoff a tiny forked-driver test project";

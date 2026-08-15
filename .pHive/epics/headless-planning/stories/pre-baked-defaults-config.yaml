@@ -1,0 +1,25 @@
+id: pre-baked-defaults-config
+epic: headless-planning
+title: Introduce pre-baked question defaults in configuration
+status: open
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Read from a configuration source (e.g., plan-defaults.yaml or integrated into hive.config.yaml) 
+  to supply safe, pre-baked defaults for common planning questions. This is the foundation for 
+  resolving agent-channel questions headlessly without escalating to a human.
+
+acceptance_criteria:
+  - "Given a valid configuration file with pre-baked defaults, when Minerva initializes, then the defaults are loaded into a strongly-typed structure in memory."
+  - "Given an invalid or missing configuration file, when Minerva initializes, then it logs a warning but proceeds safely with an empty defaults map (no crash)."
+  - "Given a configuration object, when queried by a question signature/pattern, then it returns the mapped default answer if a match is found."
+
+scope_boundaries:
+  do:
+    - "Define the schema and type for pre-baked question defaults."
+    - "Implement the loading mechanism from a configuration file."
+  do_not:
+    - "Do not implement the actual auto-resolution logic yet (handled in agent-channel-resolution)."
+    - "Do not change the ABI contract."

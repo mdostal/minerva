@@ -1,0 +1,108 @@
+id: document-pr341-production-dependency
+epic: minerva-value-audit
+title: Document ForkedHiveDriver's production dependency on plugin-hive PR #341
+status: pending
+complexity: low
+methodology: classic
+depends_on: []
+
+parallel_allowed: true
+parallel_rationale: bounded-slice
+files_to_modify:
+  - file: docs/decisions/002-pr341-production-dependency.md
+    change: create — the decision record documenting the dependency
+  - file: docs/architecture.md
+    change: add a one-paragraph cross-reference to the new decision doc near the Driver/ABI section
+
+description: |
+  This epic's research (design-discussion.md, §2/§5) found that ForkedHiveDriver's *intended*
+  production path never carries the question/pause/envelope protocol until firefly-events/
+  plugin-hive#341 ships (or an equivalent lands via the normal marketplace mechanism) — today,
+  only the MINERVA_HIVE_PLUGIN_DIR local-fork-checkout path (explicitly commented in driver.ts as
+  a *testing* stopgap) actually carries it. This is currently documented only in code comments
+  (src/driver.ts lines ~699-745, src/envelope-detection.ts header). Write it down where an
+  operator or a future planning epic will actually see it before depending on ForkedHiveDriver in
+  production: a dedicated decision record, cross-linked from docs/architecture.md.
+
+  Include a `recheck_by` date (30 days from this story's integrate step) and an explicit
+  instruction for what "recheck" means: re-run `gh pr view 341 --repo firefly-events/plugin-hive
+  --json state,reviewDecision,updatedAt` and update this doc's status line. This satisfies the
+  TPM collaborative-review finding that the epic's highest risk (§4 of design-discussion.md) had
+  no dated checkpoint, without inventing new tooling — it's a documented, operator-driven
+  re-check per this project's existing convention (see triage-queue-schema.md's explicit
+  "time-based auto-advance is operator-driven by design" position; this follows the same posture).
+
+acceptance_criteria:
+  - "Given docs/decisions/002-pr341-production-dependency.md does not exist, when this story completes, then it exists and cites firefly-events/plugin-hive#341, the two production-path code locations (src/driver.ts ForkedHiveDriver class comment, src/envelope-detection.ts header), and states plainly which path (MINERVA_HIVE_PLUGIN_DIR unset vs set) is production vs testing today"
+  - "Given the new doc, when read, then it includes a `recheck_by:` dated field (30 days from integrate) and the exact gh CLI command to re-check PR #341's status"
+  - "Given docs/architecture.md, when read, then it contains a one-paragraph cross-reference to the new decision doc, placed near wherever the Driver/ABI contract is currently described"
+
+metric:
+  applies: false
+  justification: "Pure-doc story; no observable runtime surface. The dependency it documents is tracked qualitatively via the recheck_by date and PR #341's own state, not a metric."
+
+steps:
+  - id: research
+    description: Read src/driver.ts (ForkedHiveDriver class + its header comment), src/envelope-detection.ts (header comment), and docs/architecture.md's current structure to find the right insertion point for the cross-reference.
+    agent: researcher
+  - id: implement
+    description: Write docs/decisions/002-pr341-production-dependency.md per the description above; add the cross-reference paragraph to docs/architecture.md.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Verify the new doc exists and contains the required citations; verify the cross-reference was added to docs/architecture.md.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm the decision doc accurately reflects driver.ts/envelope-detection.ts (no paraphrase drift) and that the recheck_by date/command are concrete and runnable.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  tech_stack:
+    language: typescript
+  key_files:
+    - path: src/driver.ts
+      purpose: "Lines ~699-745: ForkedHiveDriver class header comment states it drives PR #341's protocol and that MINERVA_HIVE_PLUGIN_DIR is a testing-only stopgap; this is the primary source to cite verbatim"
+    - path: src/envelope-detection.ts
+      purpose: "Header comment: 'Full schema: hive/references/question-envelope-schema.md in plugin-hive-fork' and 'LOAD-BEARING (confirmed via the epic's own spike + PR #341's review)'"
+    - path: docs/architecture.md
+      purpose: "Existing architecture doc (referenced by CONTEXT.md as the full API contract) — add the cross-reference here, do not duplicate content"
+    - path: docs/decisions/kickoff-review.md
+      purpose: "Existing decision-record convention to follow for format/tone (this project already has docs/decisions/)"
+
+code_examples:
+  - title: The exact ForkedHiveDriver header comment to cite verbatim (do not paraphrase)
+    file: src/driver.ts
+    snippet: |
+      // ForkedHiveDriver (forked-driver-integration epic) -- drives the real headless-question-
+      // protocol shipped in firefly-events/plugin-hive#341 (branch feat/headless-question-protocol).
+      // ...
+      // TESTING: point MINERVA_HIVE_PLUGIN_DIR at a local plugin-hive-fork checkout to test/drive
+      // against the fork directly (via `claude --plugin-dir`) before PR #341 ships in a real release
+      // -- unset in production once the protocol is installed via the normal marketplace mechanism.
+
+design_decisions:
+  - decision: Use a dedicated decision record (docs/decisions/002-*.md) rather than only expanding docs/architecture.md
+    rationale: Matches this project's existing convention (docs/decisions/kickoff-review.md already exists as decision-record #1-equivalent); keeps architecture.md from growing a dependency-tracking section that isn't really architecture
+
+cross_cutting:
+  - concern: documentation
+    action: "This story IS the documentation update the cross-cutting concern would otherwise flag separately — no additional doc updates needed beyond what's scoped here"
+
+risks:
+  - severity: low
+    description: The recheck_by date could be missed if no one re-reads this doc in 30 days
+    mitigation: This is an accepted, explicitly-scoped limitation per the operator-driven-recheck posture described above — automating it is out of scope for this story
+
+references:
+  - path: .pHive/epics/minerva-value-audit/docs/design-discussion.md
+    relevant_excerpt: |
+      §4: "Upgraded to High (was Medium) — PR #341 stalling indefinitely... This is now the single
+      most load-bearing external dependency in this document." §5 has the full dependency writeup
+      this story formalizes into a standalone doc.

@@ -1,0 +1,46 @@
+id: driver-integration
+epic: agnostic-driver-args
+title: Wire RuntimeAdapters into SpawnDriver, SubagentDriver, and ForkedHiveDriver
+status: pending
+complexity: high
+methodology: classic
+depends_on: [claude-adapter, opencode-adapter]
+
+description: |
+  Update `spawnRuntime` and the three driver classes to dynamically look up the correct `RuntimeAdapter` based on `route.cli`. Replace all hardcoded argument lists with calls to the adapter's format methods.
+
+acceptance_criteria:
+  - "Given a route with cli='opencode', when SpawnDriver runs, then it uses OpencodeAdapter and succeeds without Claude flags."
+  - "Given a route with cli='claude', when SubagentDriver runs, then it uses ClaudeAdapter and succeeds."
+  - "Given spawnRuntime, when reading child output, it uses `adapter.parseTurnResult` instead of hardcoded `JSON.parse(stdout)`."
+
+metric:
+  applies: false
+  justification: This is the final wiring step of a structural refactoring, verified by unit/integration tests rather than a runtime metric.
+
+steps:
+  - id: step-1
+    description: Create a `getAdapter(cli: string): RuntimeAdapter` factory in `driver.ts`.
+    agent: developer
+  - id: step-2
+    description: Update `spawnRuntime` signature to accept a `parseOutput: (stdout: string) => TurnResult` callback, replacing hardcoded JSON.parse.
+    agent: developer
+  - id: step-3
+    description: Refactor `SpawnDriver`, `SubagentDriver`, and `ForkedHiveDriver` to fetch the adapter, format args, and pass the parser to `spawnRuntime` or utility runners.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/02e0ab45-c5fa-4113-bdeb-cae587723e3f/workspace
+  tech_stack: { "language": "TypeScript" }
+  key_files:
+    - path: src/driver.ts
+      purpose: The drivers and spawnRuntime live here.
+
+design_decisions:
+  - decision: Pass `parseOutput` callback into `spawnRuntime` instead of the whole adapter.
+    rationale: Keeps `spawnRuntime` focused on process management, agnostic to *how* the output is parsed, honoring single-responsibility.
+
+risks:
+  - severity: high
+    description: We might miss a hardcoded Claude flag in `ForkedHiveDriver` or `SubagentDriver`.
+    mitigation: Do a careful sweep of all string arrays in `driver.ts` containing `-p`, `--model`, `--output-format`, etc.

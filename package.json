@@ -1,6 +1,6 @@
 {
   "name": "minerva",
-  "version": "0.1.1",
+  "version": "0.1.6",
   "description": "Minerva — the Pantheon's Planner. Agent-drivable idea-to-spec engine.",
   "type": "module",
   "bin": {
@@ -10,7 +10,7 @@
     "node": ">=20.19"
   },
   "scripts": {
-    "test": "tsx --test --test-force-exit --test-concurrency=1 \"src/**/*.test.ts\" \"bin/**/*.test.ts\"",
+    "test": "tsx --test --test-force-exit --test-concurrency=1 \"src/**/*.test.ts\" \"bin/**/*.test.ts\" \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "ci": "npm test && npm run typecheck"
   },

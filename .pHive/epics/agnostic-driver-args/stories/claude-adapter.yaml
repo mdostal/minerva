@@ -1,0 +1,42 @@
+id: claude-adapter
+epic: agnostic-driver-args
+title: Implement ClaudeAdapter preserving existing logic
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [define-runtime-adapter]
+
+description: |
+  Create `ClaudeAdapter` implementing `RuntimeAdapter` that encapsulates all the hardcoded Claude flags (e.g., `-p`, `--output-format json`, `--permission-mode bypassPermissions`, `--bg`) and JSON parsing logic currently scattered across `driver.ts`.
+
+acceptance_criteria:
+  - "Given the ClaudeAdapter, when formatting turn args, then it includes `-p`, `--output-format json`, etc."
+  - "Given the ClaudeAdapter, when parsing a valid Claude JSON stdout, then it returns a properly typed TurnResult."
+
+metric:
+  applies: false
+  justification: This story moves existing logic into a new class without changing its external behavior or performance.
+
+steps:
+  - id: step-1
+    description: Implement `ClaudeAdapter` conforming to `RuntimeAdapter` in `driver.ts`.
+    agent: developer
+  - id: step-2
+    description: Move the JSON parsing from `spawnRuntime`'s exit handler into `ClaudeAdapter.parseTurnResult`.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/02e0ab45-c5fa-4113-bdeb-cae587723e3f/workspace
+  tech_stack: { "language": "TypeScript" }
+  key_files:
+    - path: src/driver.ts
+      purpose: Contains the existing logic to be extracted.
+
+design_decisions:
+  - decision: Isolate all string literals like `--output-format json` into this adapter.
+    rationale: Ensures no Claude-specific flags leak into the generic driver logic.
+
+risks:
+  - severity: medium
+    description: Might break existing Claude functionality if parsing logic is subtly changed.
+    mitigation: Strictly copy the existing `JSON.parse` and regex logic from `spawnRuntime` and utility functions.

@@ -1,0 +1,45 @@
+id: poll-consus-answers
+epic: minerva-auto-resume
+title: Poll Consus API for parked question status
+status: pending
+complexity: medium
+methodology: classic
+depends_on:
+  - store-parked-mapping
+
+description: |
+  Implement a polling mechanism (or integrate into the main plan-runner loop) to periodically check the status of parked runs.
+  It should query the Consus API (`GET /api/questions/:id` or check parked_workflow status) using the saved question IDs to see if they have been answered or resumed by a human.
+
+acceptance_criteria:
+  - "Given a parked run with an associated Consus question ID, when the polling interval occurs, then the system queries Consus for the latest status."
+  - "Given the Consus API returns an 'answered' status, when the system receives it, then it successfully extracts the human's answer."
+
+metric:
+  applies: false
+  justification: This story implements a deterministic polling loop where pass/fail logic takes precedence over performance metrics.
+
+steps:
+  - id: step-1
+    description: Determine the best place to run the polling loop (e.g., background poller or within an active runner loop).
+    agent: researcher
+  - id: step-2
+    description: Create an HTTP client or use an existing one to query `GET /api/questions/:id` from Consus.
+    agent: developer
+  - id: step-3
+    description: Implement the polling logic to identify unresolved run-question mappings and fetch their status.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/07f8d897-ee95-4ee7-bd9b-f1796cfc8d8f/workspace
+  tech_stack: {}
+  key_files: []
+
+design_decisions:
+  - decision: Poll vs Webhook
+    rationale: Requirements specifically requested polling the Consus API to avoid needing inbound network access for Minerva instances.
+
+risks:
+  - severity: medium
+    description: Excessive polling could rate-limit against the Consus API.
+    mitigation: Implement reasonable polling intervals (e.g., 5-30 seconds) and exponential backoff on errors.

@@ -1,0 +1,23 @@
+name: agnostic-driver-args
+title: Agnostic CLI Args for Drivers
+description: Refactor Minerva's driver layer to support agnostic arguments and output parsing for opencode and codex, removing hardcoded claude flags.
+target_codebase: /Users/dostal/.minerva/runs/02e0ab45-c5fa-4113-bdeb-cae587723e3f/workspace
+methodology: classic
+version_bump: minor
+stories:
+  - id: define-runtime-adapter
+    title: Define RuntimeAdapter interface and TurnResult
+    complexity: low
+    depends_on: []
+  - id: claude-adapter
+    title: Implement ClaudeAdapter preserving existing logic
+    complexity: medium
+    depends_on: [define-runtime-adapter]
+  - id: opencode-adapter
+    title: Implement OpencodeAdapter for opencode and codex
+    complexity: medium
+    depends_on: [define-runtime-adapter]
+  - id: driver-integration
+    title: Wire RuntimeAdapters into SpawnDriver, SubagentDriver, and ForkedHiveDriver
+    complexity: high
+    depends_on: [claude-adapter, opencode-adapter]

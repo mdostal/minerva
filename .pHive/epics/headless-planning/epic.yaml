@@ -1,0 +1,45 @@
+name: headless-planning
+title: Slice-3 Delivery Epic - Headless Planning with Defaults & Metrics
+target_codebase: /Users/dostal/multica_workspaces_dostal/7feca4c9-01be-4b1a-826f-50c560a58d43/13e0028c/workdir/minerva
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [headless-agent-driven, metrics, planning-defaults, no-ui]
+  roster: [researcher, developer, reviewer]
+  per_tag_reasoning:
+    headless-agent-driven: "Core objective of Slice-3 is headless execution with agent fallback."
+    metrics: "Includes emit planning metrics logic (turns, escalations, time-to-spec, driver)."
+    planning-defaults: "Introduces pre-baked defaults configuration for standard questions."
+    no-ui: "Backend ABI enhancement, no UI work required."
+  confidence: high
+  gate_decisions:
+    scale_assessment: "Proceed straight to stories -- established architectural direction."
+    collaborative_review: "orchestrator-narrated"
+    plan_gate: "user-confirmed"
+
+source:
+  brief: "Slice-3 Delivery Epic for Minerva: Headless defaults & metrics."
+
+stories:
+  - id: pre-baked-defaults-config
+    title: "Introduce pre-baked question defaults in configuration"
+    complexity: low
+    depends_on: []
+  - id: agent-channel-resolution
+    title: "Enable auto-resolution of agent-channel questions using defaults"
+    complexity: medium
+    depends_on: [pre-baked-defaults-config]
+  - id: emit-planning-metrics
+    title: "Capture and emit core planning metrics per run (turns, escalations, driver, elapsed)"
+    complexity: medium
+    depends_on: []
+  - id: metrics-abi-integration
+    title: "Surface metrics summary in getRunStatus and getOutput ABI responses"
+    complexity: low
+    depends_on: [emit-planning-metrics]

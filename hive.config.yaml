@@ -1,6 +1,15 @@
 metrics:
   enabled: true
 
+git_flow:
+  # This project's default working branch is `dev` (see .pHive/CONTEXT.md branching
+  # convention), not the generic Hive git-flow helper's expected `develop`. Without this
+  # override, hive/lib/git_flow.mjs's `auto` probe only checks for `origin/develop`, misses
+  # `origin/dev` entirely, and silently falls back to `main` -- which is how epic
+  # minerva-value-audit was initially (incorrectly) branched off main instead of dev.
+  default_pr_base: dev
+  branch_strategy: per-epic
+
 execution:
   default_methodology: tdd    # fixed by README discipline: named -> interfaced -> full TDD -> locked
 

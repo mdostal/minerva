@@ -1,3 +1,4 @@
+import { createSeedRepo } from "./test-cli.ts";
 // output-emitter.test.ts — output-emitter story (REQ-04)
 // Spawns real bin/minerva.ts subprocesses, which spawn real `claude -p` subprocesses. Confirms
 // completion is detected as a FILESYSTEM fact (an epic.yaml appearing under the workspace's
@@ -17,7 +18,9 @@ import { findCompletedEpic, findCompletedEpics, ensureEpicNotGitIgnored, commitA
 import { allocateRun, readRunRecord } from "./run-manager.ts";
 import { parse as parseYaml } from "yaml";
 
+
 let minervaHome: string;
+let seedRepo: string;
 
 const TEST_DRIVE_PROMPT =
   "You are running headlessly for idea '{idea}'. You need one piece of information from the " +
@@ -27,6 +30,7 @@ const TEST_DRIVE_PROMPT =
 function env() {
   return {
     MINERVA_HOME: minervaHome,
+    MINERVA_SEED_REPO: seedRepo,
     MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
     MINERVA_TEST_DRIVE_PROMPT: TEST_DRIVE_PROMPT,
   };
@@ -34,10 +38,12 @@ function env() {
 
 before(() => {
   minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-output-"));
+  seedRepo = createSeedRepo();
 });
 
 after(() => {
   rmSync(minervaHome, { recursive: true, force: true });
+  rmSync(seedRepo, { recursive: true, force: true });
 });
 
 test("getOutput on an incomplete run returns NOT_READY, never a partial artifact", () => {
@@ -88,6 +94,22 @@ test("a run that writes epic.yaml + story files is detected as complete and serv
   assert.equal(output.result.epic.stories.length, 1);
   assert.equal(output.result.epic.stories[0].id, "story-1");
   assert.match(output.result.epic.stories[0].content, /Build the recipe list view/);
+
+  // PAN-6746: checkAndMarkComplete must auto-commit the epic dir into the workspace's own git
+  // history -- no manual commit step should be required before a build agent can read the plan.
+  const runRecord = JSON.parse(readFileSync(join(minervaHome, "runs", runId, "run.yaml"), "utf8"));
+  const log = execFileSync(
+    "git",
+    ["-C", runRecord.workspace_path, "log", "--oneline", "-1", "--", ".pHive/epics/recipe-organizer"],
+    { encoding: "utf8" },
+  );
+  assert.match(log, /plan\(.*?\): commit planned work so build agents can execute/);
+  const statusAfter = execFileSync(
+    "git",
+    ["-C", runRecord.workspace_path, "status", "--porcelain", "--", ".pHive/epics/recipe-organizer"],
+    { encoding: "utf8" },
+  );
+  assert.equal(statusAfter.trim(), "", "epic dir should be fully committed, nothing left pending");
 });
 
 test("findCompletedEpic also finds an epic written inside a claude --bg auto-created worktree, not just directly under workspace_path", () => {
@@ -560,5 +582,6 @@ test("checkAndMarkComplete auto-commits+pushes the plan for a worktree run (gree
     rmSync(home, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
     rmSync(bare, { recursive: true, force: true });
+
   }
 });

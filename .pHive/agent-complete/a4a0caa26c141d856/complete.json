@@ -1,0 +1,16 @@
+{
+  "agent_id": "a4a0caa26c141d856",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a4a0caa26c141d856.jsonl",
+  "last_assistant_message": "Counting design-discussion.md line total",
+  "prompt_id": "be0b6bc5-5497-4793-a029-4c34dd55d693",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T00:10:35Z"
+}

@@ -1,0 +1,97 @@
+id: add-upstream-error-code
+epic: fix-startrun-heimdall-routing
+title: Add a distinct ErrorCode for internal/upstream failures instead of mislabeling them UNKNOWN_METHOD
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [fix-heimdall-route-fail-fast-with-fallback]
+
+description: |
+  `src/dispatch.ts`'s handler catch-all (lines 71-85) coerces ANY exception thrown by a dispatched
+  method's handler into `{code: "UNKNOWN_METHOD", message: e.message}` -- indistinguishable from
+  the genuine "no such method" case (lines 60-69). This was confirmed live: both a Heimdall
+  ECONNREFUSED and a Heimdall 400 surfaced to the ABI caller as `UNKNOWN_METHOD`, even though
+  `startRun` is a real, correctly-dispatched method.
+
+  This story depends on `fix-heimdall-route-fail-fast-with-fallback` because it needs that story's
+  new typed error (the "Heimdall routing failed" error class/type) to exist before it can be
+  mapped to a new ErrorCode.
+
+  Add a new `ErrorCode` value to `src/errors.ts`'s closed 5-value union (currently `NOT_FOUND`,
+  `VALIDATION_FAILED`, `WRONG_CHANNEL`, `NOT_READY`, `UNKNOWN_METHOD`) -- e.g. `UPSTREAM_ERROR`
+  (pick the exact name; `UPSTREAM_ERROR` or `INTERNAL_ERROR` both read as reasonable, choose one
+  and be consistent). In `src/dispatch.ts`'s handler-catch branch, map the typed error from the
+  previous story to this new code specifically; keep the existing `UNKNOWN_METHOD` mapping as the
+  fallback for genuinely-uncaught, unexpected exceptions (conservative blast radius -- do not
+  reclassify every possible exception, only the ones from the new typed error).
+
+  DO NOT: touch the genuine "no such method" branch (dispatch.ts:60-69) -- that stays UNKNOWN_METHOD,
+  it's correct. DO NOT: attempt to resolve whether downstream Pantheon consumers need advance
+  notice of the new ErrorCode value (Open Question 6 in the design discussion) -- that's explicitly
+  flagged as needing an owner/decision outside this story's scope; just implement the code addition
+  and note the open question in your integrate-step summary for visibility.
+
+acceptance_criteria:
+  - "Given a Heimdall routing failure (the typed error from fix-heimdall-route-fail-fast-with-fallback), when startRun or submitAnswers hits it, then the ABI caller receives {error: {code: <the new ErrorCode value>}}, not UNKNOWN_METHOD"
+  - "Given a call to a genuinely nonexistent method name, when dispatched, then the ABI caller still receives {error: {code: 'UNKNOWN_METHOD'}} -- this path is unchanged"
+  - "Given src/errors.ts, when read after this story, then the ErrorCode union has exactly 6 values (the original 5 plus the new one), with no other values added or removed"
+  - "Given npx tsc --noEmit, when run, then it passes with zero errors"
+
+metric:
+  applies: true
+  name: dispatch.upstream_errors_correctly_labeled
+  direction: up
+  unit: bool
+  baseline: 0
+  target: 1
+  window: "story integrate step"
+  source:
+    kind: manual
+    ref: "Trigger a Heimdall routing failure (e.g. via a test double or by unsetting fallback config with Heimdall unreachable) and confirm the ABI response's error.code is the new value, not UNKNOWN_METHOD"
+  verify_at: "story integrate step"
+  owner: developer
+
+steps:
+  - id: research
+    description: Read src/errors.ts's ErrorCode union and MinervaError class, and src/dispatch.ts's dispatch() function (both branches, 60-69 and 71-85), plus the typed error class/type added by fix-heimdall-route-fail-fast-with-fallback.
+    agent: researcher
+  - id: test-spec
+    description: Write a failing test asserting a Heimdall routing failure surfaces as the new ErrorCode (not UNKNOWN_METHOD), and a second test confirming the genuine unknown-method path is unchanged.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the new ErrorCode value to errors.ts; update dispatch.ts's handler-catch branch to map the typed Heimdall-routing error to it, falling back to UNKNOWN_METHOD for everything else.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm exactly one new ErrorCode value was added (not a restructured Response type), confirm the genuine unknown-method path is untouched, confirm the mapping is conservative (only the specific typed error is reclassified).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. Note Open Question 6 (downstream Pantheon consumer sign-off on the new ErrorCode value) in the commit/summary for visibility, without attempting to resolve it.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/errors.ts
+      purpose: "Closed 5-value ErrorCode union to extend to 6 values; single in-repo consumer is dispatch.ts (grep-confirmed)"
+    - path: src/dispatch.ts
+      purpose: "Lines 60-69 (genuine unknown method, unchanged) vs 71-85 (handler-catch, where the new mapping goes)"
+
+design_decisions:
+  - decision: Add a new ErrorCode value rather than restructure the Response type
+    rationale: "dispatch.ts already has the two branches split structurally; the only missing piece is a code that means 'recognized handler failed against an internal/upstream dependency' -- smallest change that fixes the actual complaint (design-discussion.md §3c)"
+
+risks:
+  - severity: low
+    description: Downstream Pantheon consumers that pattern-match on the exact 5-value ErrorCode union could be surprised by a 6th value
+    mitigation: Flagged as Open Question 6 in the design discussion, explicitly out of this story's scope to resolve -- noted for epic-owner visibility, not silently ignored
+
+references:
+  - path: .pHive/epics/fix-startrun-heimdall-routing/docs/design-discussion.md
+    relevant_excerpt: |
+      §3(c): "I'd add a new ErrorCode value rather than restructure the Response type... Something
+      like UPSTREAM_ERROR or INTERNAL_ERROR added to the 5-value union... falling back to
+      UNKNOWN_METHOD only for genuinely-uncaught unexpected exceptions."

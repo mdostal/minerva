@@ -1,0 +1,123 @@
+id: fix-heimdall-task-type-value
+epic: fix-startrun-heimdall-routing
+title: Correct the hardcoded Heimdall task-type value (confirmed invalid) to a real, evidenced value
+status: pending
+complexity: low
+methodology: classic
+depends_on: []
+
+parallel_allowed: true
+parallel_rationale: bounded-slice
+files_to_modify:
+  - file: src/driver.ts
+    change: "correct availableRouteUrl()'s hardcoded task-type=kickoff query param to a valid Heimdall task type"
+  - file: src/driver-route.test.ts
+    change: "update/add a test asserting the corrected task-type value is sent"
+
+description: |
+  `src/driver.ts`'s `availableRouteUrl()` (lines 119-124) hardcodes `task-type=kickoff` in its
+  query string to Heimdall's `/available-route` endpoint. This was confirmed live, against a real
+  running Heimdall instance, to be rejected: `HTTP 400 {"error":"invalid_task_type",
+  "allowed_task_types":["planning","build","review"]}`. `"kickoff"` is not a valid Heimdall task
+  type today.
+
+  This story is independent of the other three (fixes a different, narrower bug in the same file)
+  and can proceed in parallel with them -- it touches `availableRouteUrl()` specifically, not
+  `resolveRuntimeRoute()`'s error-handling shape.
+
+  **Investigate before guessing.** Do not pick a value arbitrarily. Working hypothesis to verify,
+  not assume: Minerva's kickoff phase (what `startRun`/`SpawnDriver` drives) runs plugin-hive's
+  kickoff+plan skills -- research, design discussion, and story decomposition -- which is
+  fundamentally a *planning* activity, not code implementation (`build`) or code review (`review`).
+  Minerva's own `src/agnostic-plan-driver.ts` already calls Heimdall with `task-type=planning`
+  (`resolvePlanningRoute()`, line 88) for its own planning-flavored turns, and that call is
+  confirmed working (not rejected) against the live Heimdall instance tested during this epic's
+  research. This makes `planning` a well-evidenced candidate for `startRun`'s task type too, but it
+  is NOT confirmed -- verify it, don't assume it transfers just because both are "planning-shaped."
+
+  Steps to resolve, in order:
+  1. Check the sibling Heimdall repo (`/Users/mdostal/Documents/work/pantheon/heimdall`) for any
+     documentation describing what `planning`/`build`/`review` task types mean and are intended
+     for -- README, docs/, or source comments near the `/available-route` handler. This may
+     directly confirm or rule out the `planning` hypothesis without needing to ask anyone.
+  2. If step 1 is inconclusive, check whether Heimdall's repo has any existing consumer/caller
+     code (grep for `available-route` or `task-type=` across the Heimdall repo, or any known
+     Pantheon service source you have access to) that already calls it with a task type for a
+     kickoff-shaped or research-shaped activity, as corroborating evidence.
+  3. If steps 1-2 together produce a confident answer, implement it and write a test.
+  4. **If genuinely still ambiguous after 1-2, do not guess.** Per this epic's own "fail loudly,
+     never guess" philosophy (consistent with the other 3 stories), stop and report clearly: what
+     was checked, what remains unconfirmed, and that this specific piece requires input from
+     Heimdall's owners before it can be safely implemented. Do not ship a guessed value -- per the
+     design discussion's risk analysis, guessing wrong here silently misroutes production traffic
+     to the wrong Heimdall-side capacity pool rather than failing loudly, which is a worse outcome
+     than today's clear 400.
+
+  Note: even with the correct task-type value, this story alone will NOT make `startRun` succeed
+  end-to-end in every environment -- the live test also found the local `claude@mathew.dostal`
+  Heimdall lane reporting `"down"`/`"unconfigured"`, which is a Heimdall-side/deployment-side
+  configuration gap outside Minerva's code and explicitly out of scope for this story.
+
+acceptance_criteria:
+  - "Given step 1-2 investigation produces a confident, evidenced answer, when this story completes, then availableRouteUrl() sends that value instead of 'kickoff', and a test asserts it"
+  - "Given the corrected value, when tested against a live Heimdall instance (manually, not necessarily in the automated test suite), then /available-route no longer returns invalid_task_type for this call"
+  - "Given the investigation is genuinely inconclusive, when this story completes, then it reports exactly what was checked and why it remains unconfirmed, and does NOT ship a guessed value -- this is an acceptable, correct outcome for this story, not a failure to fix"
+
+metric:
+  applies: true
+  name: driver.heimdall_task_type_valid
+  direction: up
+  unit: bool
+  baseline: 0
+  target: 1
+  window: "story integrate step"
+  source:
+    kind: manual
+    ref: "curl or invoke Heimdall's /available-route?task-type=<new value> directly and confirm it does not return HTTP 400 invalid_task_type (skip this verification and report inconclusive if the investigation in steps 1-2 could not confirm a value)"
+  verify_at: "story integrate step"
+  owner: developer
+
+steps:
+  - id: research
+    description: Investigate the correct task-type value per steps 1-2 in the description -- check the Heimdall repo's docs/source for task-type definitions and any existing planning/kickoff-shaped callers.
+    agent: researcher
+  - id: implement
+    description: If research produced a confident answer, correct availableRouteUrl()'s hardcoded value and add a test. If inconclusive, write a clear report instead (do not guess) and stop here without editing driver.ts.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Confirm either (a) the fix is evidenced and tested, not guessed, or (b) the inconclusive report clearly states what was checked and what's still needed.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch (even if the outcome is a documented "inconclusive" report rather than a code change -- that's still a valid, valuable story outcome).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/driver.ts
+      purpose: "availableRouteUrl() (119-124) hardcodes the invalid 'kickoff' value -- the fix target"
+    - path: src/agnostic-plan-driver.ts
+      purpose: "resolvePlanningRoute() (line 88) already calls Heimdall with task-type=planning, confirmed working -- the evidenced hypothesis to verify, not assume"
+  external_repos:
+    - path: /Users/mdostal/Documents/work/pantheon/heimdall
+      purpose: "Sibling Heimdall repo -- check its own docs/source for task-type definitions before guessing"
+
+design_decisions:
+  - decision: Investigate the planning hypothesis rather than treating this as purely externally blocked
+    rationale: "There's real, already-confirmed evidence (agnostic-plan-driver.ts's working planning call) worth checking before escalating to Heimdall's owners -- but the story must still fail loud rather than guess if that evidence doesn't hold up under investigation"
+
+risks:
+  - severity: medium
+    description: Guessing wrong among planning/build/review would silently misroute production traffic to the wrong Heimdall-side capacity/eligibility pool rather than fail loudly -- a worse outcome than today's clear 400 error
+    mitigation: Acceptance criteria explicitly make "investigated and reported inconclusive" a valid, non-failing outcome -- the story must not ship an unverified guess under time pressure
+
+references:
+  - path: .pHive/epics/fix-startrun-heimdall-routing/docs/design-discussion.md
+    relevant_excerpt: |
+      §6 Open Question 1: "What is the correct Heimdall task-type value for startRun's kickoff/drive
+      turn? ... This needs an answer from Heimdall's API contract/owners, not a guess from Minerva's
+      side." Suggested story sequencing (§8): S4 = task-type fix, independent/parallel track,
+      externally blocked pending confirmation.

@@ -1,0 +1,16 @@
+{
+  "agent_id": "a9aaa1fe7b0be42c3",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a9aaa1fe7b0be42c3.jsonl",
+  "last_assistant_message": "Listing PRs in mdostal/plugin-hive-fork",
+  "prompt_id": "44a44e07-f999-4cb8-89be-03a1d934364c",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-13T23:46:46Z"
+}

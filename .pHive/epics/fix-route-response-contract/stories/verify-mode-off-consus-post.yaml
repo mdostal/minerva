@@ -1,0 +1,46 @@
+id: verify-mode-off-consus-post
+epic: fix-route-response-contract
+title: Ensure mode=off triggers PARK and POST to Consus
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [refactor-route-payload-parser]
+
+description: |
+  After fixing the contract mismatch, verify that running minerva-plan.ts with `--mode off` successfully completes its flow.
+  The flow must: resolve route -> generate plan -> transition to PARK -> POST to Consus `/api/questions`.
+
+acceptance_criteria:
+  - "Given the repro command with `--mode off`, when executed, then the system reaches the PARK state."
+  - "Given the system reaches PARK state, when finishing, then it correctly POSTs to the Consus `/api/questions` endpoint."
+
+metric:
+  applies: false
+  justification: End-to-end integration verification is a functional requirement, not a measurable optimization.
+
+steps:
+  - id: step-1
+    description: Run the provided repro command (`MINERVA_SEED_REPO=~/repos/consus-seeds tsx bin/minerva-plan.ts --ticket PAN-8446 --mode off --file-to-multica --json`).
+    agent: developer
+  - id: step-2
+    description: Monitor logs or intercept network requests to verify the POST to Consus `/api/questions`.
+    agent: developer
+  - id: step-3
+    description: Fix any residual blockers preventing the POST to Consus during a mode=off execution.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/1956b8aa-4d02-4901-977a-0e3fedac37b1/workspace
+  tech_stack: {}
+  key_files:
+    - path: bin/minerva-plan.ts
+      purpose: Entry point for the mode=off planning flow that needs to be tested.
+
+design_decisions:
+  - decision: End-to-end testing
+    rationale: Testing against the Consus mock/real endpoint guarantees the integration is fully solid for the mode=off requirement.
+
+risks:
+  - severity: high
+    description: The POST to Consus might fail due to missing payload fields required by Consus.
+    mitigation: Verify the POST request body payload matches Consus's expected schema in the logs before declaring success.

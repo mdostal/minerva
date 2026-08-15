@@ -1,0 +1,48 @@
+name: fix-startrun-heimdall-routing
+title: "Fix startRun's Heimdall Routing Failure Chain"
+description: >
+  Fix Minerva's startRun (default SpawnDriver), which fails end-to-end in a stock environment via
+  four coupled defects, confirmed by a live black-box functional test earlier in the same session
+  that produced epic minerva-value-audit: (1) resolveRuntimeRoute() is not fail-open and has no
+  operator-declared fallback, shared unguarded across SpawnDriver/SubagentDriver/ForkedHiveDriver/
+  submitAnswers; (2) a hardcoded task-type=kickoff value that Heimdall's real API rejects; (3) all
+  failures mislabeled as UNKNOWN_METHOD by dispatch.ts's generic catch-all; (4) orphaned in_progress
+  runs on first-turn failure with no automatic cleanup. Locked design decision: fail-fast by
+  default with an optional operator-declared MINERVA_FALLBACK_CLI/MODEL fallback (modeled on the
+  existing MINERVA_TURN_TIMEOUT_MS precedent), root-scoped inside resolveRuntimeRoute() so all
+  call sites inherit it.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: tdd
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture]
+  roster: [researcher, technical-writer, tpm, architect]
+  per_tag_reasoning:
+    architecture: "Requirement involves cross-system integration reconciliation (Minerva <-> Heimdall) and a real architectural judgment call (fail-open vs. fail-fast-with-operator-fallback) that shapes the fix's design, not just a mechanical bug patch."
+  confidence: matched
+  gate_decisions:
+    architecture: included
+
+stories:
+  - id: fix-heimdall-route-fail-fast-with-fallback
+    title: Make resolveRuntimeRoute() fail loudly with a typed error, or use an explicit operator fallback
+    complexity: high
+    depends_on: []
+  - id: add-upstream-error-code
+    title: Add a distinct ErrorCode for internal/upstream failures instead of mislabeling them UNKNOWN_METHOD
+    complexity: low
+    depends_on: [fix-heimdall-route-fail-fast-with-fallback]
+  - id: auto-cleanup-orphaned-runs-on-first-turn-failure
+    title: Transition a run to aborted automatically when its first drive turn fails
+    complexity: medium
+    depends_on: [fix-heimdall-route-fail-fast-with-fallback]
+  - id: fix-heimdall-task-type-value
+    title: Correct the hardcoded Heimdall task-type value (confirmed invalid) to a real, evidenced value
+    complexity: low
+    depends_on: []

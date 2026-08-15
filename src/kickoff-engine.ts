@@ -4,12 +4,24 @@
 // "No Autonomous Progress" and AD-2.
 
 import { MinervaError } from "./errors.ts";
-import { allocateRun, readRunRecord, updateRunRecord, normalizeQuestionKind, type Question, type Channel } from "./run-manager.ts";
+import {
+  allocateRun,
+  readRunRecord,
+  updateRunRecord,
+  normalizeQuestionKind,
+  recordDriverTurn,
+  recordHumanEscalation,
+  recordAutoResolution,
+  updateRunMetricsDriver,
+  type Question,
+  type Channel,
+  type RunRecord,
+} from "./run-manager.ts";
+import { abortRun } from "./cleanup-ledger.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, ForkedHiveDriver, type Driver } from "./driver.ts";
-import { resolveAgnosticPlanDriver, agnosticPlanDriverFromRecord } from "./agnostic-plan-driver.ts";
-import type { RunRecord } from "./run-manager.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
+import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
 
@@ -43,6 +55,49 @@ export function __setDriverForTest(d: Driver): Driver {
   const prev = driver;
   driver = d;
   return prev;
+}
+
+// Goblin PAN-7572 (turn-timeout-SIGKILLs-long-plans-loses-work): a turn that simply ran longer
+// than MINERVA_TURN_TIMEOUT_MS (a large architectural planning turn is the reported case) used
+// to propagate straight out of startRun/submitAnswers as an uncaught rejection -- the whole run
+// died with no resume, even though the run's own session_id was still perfectly valid to
+// --resume against. MINERVA_TURN_RETRY_LIMIT bounds how many additional attempts a genuinely
+// timed-out turn (TurnTimeoutError specifically -- never a different failure) gets before
+// giving up for real; default 2 (never guess/never silently disable, matching MINERVA_DRIVER's
+// own "fail loudly on an invalid value" pattern). 0 disables retrying entirely.
+const DEFAULT_TURN_RETRY_LIMIT = 2;
+function resolveTurnRetryLimit(): number {
+  const raw = process.env.MINERVA_TURN_RETRY_LIMIT;
+  if (raw === undefined) return DEFAULT_TURN_RETRY_LIMIT;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Invalid MINERVA_TURN_RETRY_LIMIT value "${raw}" -- expected a non-negative integer`,
+    );
+  }
+  return parsed;
+}
+const TURN_RETRY_LIMIT = resolveTurnRetryLimit();
+
+// Every driver.runTurn() call in this file goes through here instead of calling it directly.
+// A TurnTimeoutError means the turn was killed only because it ran long, not because it failed
+// -- the SAME input (crucially, the same sessionId) is still a valid thing to try again: for a
+// non-null sessionId that's a real --resume against the live conversation; for the very first
+// turn (sessionId: null) it's a fresh restart, still strictly better than losing the run
+// outright. Any other error (malformed output, non-zero exit, genuine crash) is never retried
+// here -- it propagates immediately, unchanged, exactly as before this fix.
+async function runTurnResumable(d: Driver, input: DriverInput): Promise<DriverResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= TURN_RETRY_LIMIT; attempt++) {
+    try {
+      return await d.runTurn(input);
+    } catch (e) {
+      if (!(e instanceof TurnTimeoutError)) throw e;
+      lastError = e;
+    }
+  }
+  throw lastError;
 }
 
 // Resolve the driver for a given run. When runner-agnostic planning was selected at startRun
@@ -92,7 +147,7 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
 // skill has actually finished and written its epic.yaml would otherwise still be forced to
 // emit SOME filler question text -- the filesystem check routes around that entirely, ignoring
 // whatever the schema-forced response said once completion is detected.
-function recordTurn(runId: string, rawResult: string): void {
+export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
     return; // run is complete -- no pending question to append, ever
   }
@@ -170,7 +225,17 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     if (!pending) return; // nothing to answer (shouldn't happen while waiting_on_human, but safe)
 
     const answer = resolveDefaultAnswer(pending, defaults, record.idea ?? "");
-    if (answer === null) return; // no pre-baked default -> genuine human gate; leave it parked
+    if (answer === null) {
+      // An agent-routed question without a matching default is no longer useful on the agent
+      // queue: the driver cannot answer it, so escalate it to the human queue and leave it parked.
+      if (pending.channel === "agent") {
+        const escalatedQuestions = record.questions.map((q) =>
+          q.id === pending.id ? { ...q, channel: "human" as const } : q,
+        );
+        updateRunRecord(runId, { questions: escalatedQuestions, status: "waiting_on_human" });
+      }
+      return;
+    }
 
     if (!record.session_id) return; // no live session to resume against -- cannot drive further
 
@@ -182,13 +247,15 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result } = await driverForRecord(record).runTurn({
+    const { session_id, raw_result } = await runTurnResumable(driverForRecord(record), {
       cwd: record.workspace_path,
       sessionId: record.session_id,
       prompt: answerPrompt,
     });
+    recordDriverTurn(runId);
+    recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
-    recordTurn(runId, raw_result);
+    await recordTurn(runId, raw_result);
     answered++;
   }
   // Guardrail tripped: leave whatever recordTurn last set (waiting_on_human or complete). Bounded,
@@ -228,21 +295,49 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   const planDriver = await resolveAgnosticPlanDriver();
   if (planDriver) {
     updateRunRecord(runId, { plan_runtime: planDriver.runtime, plan_model: planDriver.model });
+    updateRunMetricsDriver(runId, planDriver.runtime);
   }
+
   const record = readRunRecord(runId);
+  const driver = driverForRecord(record);
 
   // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
   // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
   const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults);
-  const { session_id: sessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
-    cwd: record.workspace_path,
-    sessionId: null,
-    prompt: drivePrompt,
-  });
+
+  // auto-cleanup-orphaned-runs-on-first-turn-failure: allocateRun() above already durably wrote
+  // this run's record (status "in_progress") and its workspace/worktree, BEFORE this very first
+  // drive turn is attempted. If this turn throws (any error -- e.g. the HeimdallRouteError the
+  // fix-heimdall-route-fail-fast-with-fallback story now throws when routing fails with no
+  // operator fallback configured), the run would otherwise be left permanently stuck at
+  // "in_progress" with no ledger entry -- an orphan. This run has not yet reached
+  // "waiting_on_human" -- no question has ever been surfaced -- so it has no human-facing state
+  // to preserve, and auto-terminating it here is not the kind of autonomous forward-advancement
+  // "No Autonomous Progress" / AD-5's stall invariant guard against: it happens synchronously,
+  // inside this same failed startRun() call, not on a later autonomous tick (see this story's
+  // spec / design-discussion.md §3d). abortRun()/recordCleanup() (cleanup-ledger.ts) is the
+  // existing, idempotent, AD-4-compliant mechanism (record + signal only, never deletes
+  // workspace_path/state_path) -- reused here unmodified. The original error is always re-thrown
+  // after cleanup so the caller still learns the run failed, never silence. This hook must NEVER
+  // be applied to any later-turn failure (e.g. inside submitAnswers, after waiting_on_human has
+  // been reached) -- that is a stall, explicitly protected by AD-5 and out of scope here.
+  let sessionId: string;
+  let rawResult: string;
+  try {
+    ({ session_id: sessionId, raw_result: rawResult } = await runTurnResumable(driver, {
+      cwd: record.workspace_path,
+      sessionId: null,
+      prompt: drivePrompt,
+    }));
+  } catch (err) {
+    abortRun({ run_id: runId });
+    throw err;
+  }
+  recordDriverTurn(runId);
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   // Auto-answer any routine gate questions from the pre-baked defaults so a fresh headless run
   // drives itself forward instead of hanging on the first gate. No-op when mode is "off".
@@ -262,6 +357,9 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
   }
   const record = readRunRecord(runId);
   const questions = record.questions.filter((q) => q.status === "pending" && q.channel === channel);
+  if (channel === "human" && questions.length > 0) {
+    recordHumanEscalation(runId);
+  }
   return { questions };
 }
 
@@ -328,15 +426,16 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult } = await driverForRecord(record).runTurn({
+  const { session_id: newSessionId, raw_result: rawResult } = await runTurnResumable(driverForRecord(record), {
     cwd: record.workspace_path,
     sessionId: record.session_id,
     prompt: answerPrompt,
   });
+  recordDriverTurn(runId);
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });
-  recordTurn(runId, rawResult);
+  await recordTurn(runId, rawResult);
 
   // After a human (or agent) answers an escalated question, resume auto-answering any further
   // routine gates from the pre-baked defaults, so answering one strategic question doesn't leave

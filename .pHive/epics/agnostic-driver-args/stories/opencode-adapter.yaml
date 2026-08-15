@@ -1,0 +1,46 @@
+id: opencode-adapter
+epic: agnostic-driver-args
+title: Implement OpencodeAdapter for opencode and codex
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [define-runtime-adapter]
+
+description: |
+  Create `OpencodeAdapter` for `opencode` and `codex` CLIs. Unlike Claude, opencode doesn't support `--output-format json` natively in the same way, nor does it support background tracking via `--bg`. This adapter must format clean arguments and wrap the raw output into a `TurnResult`.
+
+acceptance_criteria:
+  - "Given OpencodeAdapter, when formatting turn args, then it omits `-p`, `--output-format`, and `--permission-mode`."
+  - "Given OpencodeAdapter, when formatting background args, then it throws a NotSupportedError."
+  - "Given OpencodeAdapter, when parsing output, then it safely wraps the raw string into a TurnResult with a generated session_id if none was provided."
+
+metric:
+  applies: false
+  justification: Metric-driven validation doesn't apply to a structural adapter implementation before integration.
+
+steps:
+  - id: step-1
+    description: Implement `OpencodeAdapter` in `driver.ts`.
+    agent: developer
+  - id: step-2
+    description: Throw `Error("Background agents not supported")` for all background-related methods.
+    agent: developer
+  - id: step-3
+    description: For `parseTurnResult`, wrap the raw stdout in a `TurnResult` object.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/02e0ab45-c5fa-4113-bdeb-cae587723e3f/workspace
+  tech_stack: { "language": "TypeScript" }
+  key_files:
+    - path: src/driver.ts
+      purpose: Where the adapter will be implemented.
+
+design_decisions:
+  - decision: Fall back to generating a random UUID for session_id if opencode doesn't supply one in the output.
+    rationale: The Driver contract requires a fresh session_id on every turn.
+
+risks:
+  - severity: low
+    description: Opencode might output extra debug information that pollutes the result.
+    mitigation: Ensure `parseTurnResult` captures the full stdout as `result.result`, relying on Heimdall's downstream parsing to extract what it needs if necessary.

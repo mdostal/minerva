@@ -16,12 +16,14 @@
 // planning NEVER breaks on an unavailable route or port.
 
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { Driver, DriverInput, DriverResult } from "./driver.ts";
+import { TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 
-const HEIMDALL_URL = process.env.HEIMDALL_URL ?? "http://localhost:4870";
+function getHeimdallUrl() {
+  return process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? "http://localhost:4870";
+}
 const ROUTE_TIMEOUT_MS = Number(process.env.MINERVA_PLAN_ROUTE_TIMEOUT_MS ?? 2000);
 const TURN_TIMEOUT_MS = Number(process.env.MINERVA_TURN_TIMEOUT_MS ?? 600_000);
 
@@ -32,14 +34,50 @@ export interface PlanningRoute {
 
 /** Candidate locations for the ported CLI; env override wins. First existing path is used. */
 export function agnosticPlanCliPath(): string | null {
+  // Resolve every hit to its REAL path (following symlinks). The ported CLI guards its main()
+  // on `fileURLToPath(import.meta.url) === process.argv[1]`. Node resolves import.meta.url
+  // THROUGH symlinks, but process.argv[1] keeps whatever path we spawn it with, so invoking the
+  // CLI via a symlinked directory (this host's ~/code -> ~/Documents/work/dostal/code) makes
+  // that guard FALSE: main() never runs, the CLI exits 0 with empty stdout, no .pHive plan is
+  // written, and the run parks with 0 stories. Canonicalizing here makes the spawned argv[1] the
+  // realpath, so the guard holds and the planner actually runs.
+  const canon = (p: string): string | null => {
+    if (!existsSync(p)) return null;
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
   const override = process.env.HIVE_PLAN_AGNOSTIC_CLI;
-  if (override) return existsSync(override) ? override : null;
+  if (override) return canon(override);
   const candidates = [
+    // plugin-hive-fork-dev is where the merged agnostic-planning port actually lives on this
+    // host; plugin-hive-fork carries the branch but its working tree has hive/agnostic empty.
+    join(homedir(), "code", "plugin-hive-fork-dev", "hive", "agnostic", "plan-agnostic.mjs"),
+    join(homedir(), "Code", "plugin-hive-fork-dev", "hive", "agnostic", "plan-agnostic.mjs"),
     join(homedir(), "code", "plugin-hive-fork", "hive", "agnostic", "plan-agnostic.mjs"),
     join(homedir(), "Code", "plugin-hive-fork", "hive", "agnostic", "plan-agnostic.mjs"),
     join(homedir(), ".claude", "plugins", "plugin-hive", "hive", "agnostic", "plan-agnostic.mjs"),
   ];
-  return candidates.find((p) => existsSync(p)) ?? null;
+  for (const p of candidates) {
+    const r = canon(p);
+    if (r) return r;
+  }
+  // Silent-null-fallback observability (PAN-7734 starved a build lane before anyone noticed
+  // this): one structured JSON line to stderr, naming every candidate checked, so a real
+  // deployment can grep/alert on this instead of the fallback being invisible. Does NOT change
+  // behavior -- resolveAgnosticPlanDriver() still falls back to the built-in claude SpawnDriver.
+  process.stderr.write(
+    JSON.stringify({
+      level: "warn",
+      event: "agnostic_plan_cli_unresolved",
+      message:
+        "agnosticPlanCliPath: none of the candidate ported-CLI paths exist; falling back to the built-in claude driver",
+      checked_paths: candidates,
+    }) + "\n",
+  );
+  return null;
 }
 
 function opencodeAvailable(): boolean {
@@ -60,7 +98,7 @@ export async function resolvePlanningRoute(): Promise<PlanningRoute | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ROUTE_TIMEOUT_MS);
   try {
-    const res = await fetch(`${HEIMDALL_URL}/available-route?task-type=planning`, {
+    const res = await fetch(`${getHeimdallUrl()}/available-route?task-type=planning`, {
       signal: controller.signal,
     });
     if (!res.ok) return null;
@@ -134,7 +172,14 @@ export class AgnosticPlanDriver implements Driver {
       const child = spawn(process.execPath, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
       let out = "";
       let err = "";
-      const timer = setTimeout(() => child.kill("SIGKILL"), TURN_TIMEOUT_MS);
+      // See driver.ts's TurnTimeoutError -- same "our own timer, not an external signal" flag
+      // so a turn that just ran long (goblin PAN-7572) is retryable, distinct from a genuine
+      // crash.
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, TURN_TIMEOUT_MS);
       child.stdout.on("data", (d) => (out += d));
       child.stderr.on("data", (d) => (err += d));
       child.on("error", (e) => {
@@ -143,7 +188,12 @@ export class AgnosticPlanDriver implements Driver {
       });
       child.on("exit", (code, signal) => {
         clearTimeout(timer);
-        if (signal) return reject(new Error(`plan-agnostic killed by ${signal}${err ? `: ${err.slice(-500)}` : ""}`));
+        if (signal) {
+          if (timedOut) {
+            return reject(new TurnTimeoutError(`plan-agnostic did not complete within ${TURN_TIMEOUT_MS}ms and was killed`, TURN_TIMEOUT_MS));
+          }
+          return reject(new Error(`plan-agnostic killed by ${signal}${err ? `: ${err.slice(-500)}` : ""}`));
+        }
         if (code !== 0) return reject(new Error(`plan-agnostic exited ${code}${err ? `: ${err.slice(-500)}` : ""}`));
         resolve(out);
       });

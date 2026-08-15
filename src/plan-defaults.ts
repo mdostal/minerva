@@ -215,19 +215,34 @@ function readConfigFile(path: string): unknown {
   }
 }
 
+function warningMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function warnInvalidConfigFile(path: string, e: unknown): void {
+  console.warn(`[minerva] Ignoring plan-defaults config file ${path}: ${warningMessage(e)}`);
+}
+
 // Resolve the effective config from three layers, lowest-to-highest priority:
 //   1. built-in defaults (mode: off)
 //   2. MINERVA_PLAN_DEFAULTS  — path to a YAML/JSON config file (per-deployment)
 //   3. MINERVA_PLAN_DEFAULTS_MODE — a bare mode override (per-deployment quick switch)
 //   4. perRun — the `defaults` object passed to startRun (per-run, highest priority)
 // Later layers override earlier ones field-by-field; `answers` accumulate (higher priority
-// first). Any invalid value fails loudly rather than being silently dropped, matching this
-// project's "never guess" discipline (cf. MINERVA_TURN_TIMEOUT_MS in driver.ts).
+// first). The optional file layer is best-effort: missing, unreadable, unparsable, or schema-
+// invalid files warn and are ignored so Minerva can initialize safely with the built-in empty
+// defaults. Direct env/per-run overrides still fail loudly because they are explicit inputs.
 export function loadPlanDefaults(perRun?: unknown): PlanDefaults {
   let cfg = { ...BUILTIN_PLAN_DEFAULTS };
 
   const filePath = process.env.MINERVA_PLAN_DEFAULTS;
-  if (filePath) cfg = mergeLayer(cfg, readConfigFile(filePath), `MINERVA_PLAN_DEFAULTS (${filePath})`);
+  if (filePath) {
+    try {
+      cfg = mergeLayer(cfg, readConfigFile(filePath), `MINERVA_PLAN_DEFAULTS (${filePath})`);
+    } catch (e) {
+      warnInvalidConfigFile(filePath, e);
+    }
+  }
 
   const modeEnv = process.env.MINERVA_PLAN_DEFAULTS_MODE;
   if (modeEnv) cfg = mergeLayer(cfg, { mode: modeEnv }, "MINERVA_PLAN_DEFAULTS_MODE");
@@ -312,16 +327,17 @@ export function resolveDefaultAnswer(
   const text = q.text ?? "";
   const lower = text.toLowerCase();
 
-  // 1. Explicit operator-pre-decided answers win over everything, regardless of channel or mode
-  //    -- this is the "I already decided this" override the whole feature exists to serve.
+  // 1. In "agent" mode, only agent-channel questions are eligible for auto-resolution. A
+  //    human-channel question is already a strategic/ambiguous gate, so matching defaults are
+  //    ignored and the run remains parked for a human. "auto" mode intentionally continues past
+  //    this check and may answer human-channel questions.
+  if (d.mode === "agent" && q.channel === "human") return null;
+
+  // 2. Explicit operator-pre-decided answers win over all remaining defaults.
   for (const rule of d.answers) {
     if (rule.qid !== undefined && q.qid !== undefined && rule.qid === q.qid) return rule.answer;
     if (rule.match !== undefined && lower.includes(rule.match.toLowerCase())) return rule.answer;
   }
-
-  // 2. In "agent" mode, a human-channel question with no explicit answer is a genuine strategic
-  //    gate -- park it (AD-5). "auto" mode intentionally continues past this to answer everything.
-  if (d.mode === "agent" && q.channel === "human") return null;
 
   // 3. Sign-off / approval gate -> affirm.
   if (d.skip_sign_off && isSignOffQuestion(text)) {

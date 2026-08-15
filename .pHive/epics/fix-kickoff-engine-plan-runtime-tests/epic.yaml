@@ -1,0 +1,32 @@
+name: fix-kickoff-engine-plan-runtime-tests
+title: "Fix two stale plan_runtime='gemini' expectations in kickoff-engine.test.ts (triage t-004)"
+description: >
+  Root-caused: not a bug in the plan_runtime-freezing code path. src/agnostic-plan-driver.ts's
+  resolveAgnosticPlanDriver() has a deliberate "bulletproof claude fallback" test seam
+  (`if (process.env.MINERVA_TEST_DRIVE_PROMPT) return null;`, added by the runner-agnostic PLAN
+  driver work, commit 9b79947 / PR #22) that short-circuits before ever reaching a resolved
+  Heimdall route. kickoff-engine.test.ts's env() helper sets MINERVA_TEST_DRIVE_PROMPT
+  unconditionally for every test in the file, so the two tests asserting
+  record.plan_runtime === 'gemini' against a mocked non-claude Heimdall response can never
+  actually reach that code path -- they were stale against a feature that landed after they were
+  written. One atomic story: rewrite both tests to assert the current, deliberate behavior
+  (bulletproof fallback holds regardless of what Heimdall returns, in this file's test-mode
+  fixture) rather than delete them, so the guard itself stays regression-tested. The deeper gap
+  this surfaced -- zero test coverage anywhere for resolveAgnosticPlanDriver's actual
+  positive-path runtime resolution -- is filed separately as triage t-007, out of scope here (it
+  needs either a DI refactor or an environment-gated live test, a real design decision, not a
+  drive-by fix).
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: classic
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+stories:
+  - id: fix-kickoff-engine-plan-runtime-tests
+    title: Rewrite the two stale plan_runtime='gemini' tests to assert the current bulletproof-fallback behavior
+    complexity: low
+    depends_on: []

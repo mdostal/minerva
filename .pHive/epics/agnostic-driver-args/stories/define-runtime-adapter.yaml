@@ -1,0 +1,42 @@
+id: define-runtime-adapter
+epic: agnostic-driver-args
+title: Define RuntimeAdapter interface and TurnResult
+status: pending
+complexity: low
+methodology: classic
+depends_on: []
+
+description: |
+  Extract the implicit assumptions about CLI arguments and JSON output from driver.ts into an explicit `RuntimeAdapter` interface. Rename `ClaudePResult` to `TurnResult`. The interface should abstract argument generation and output parsing for both foreground and background turns.
+
+acceptance_criteria:
+  - "Given driver.ts, when defining the interface, then `RuntimeAdapter` and `TurnResult` are exported."
+  - "Given the interface, when inspected, then it contains methods for formatting turn args, parsing turn results, and handling background utility commands."
+
+metric:
+  applies: false
+  justification: This is a purely structural refactoring to establish an interface, not changing runtime behavior.
+
+steps:
+  - id: step-1
+    description: Create `RuntimeAdapter` interface with methods for formatTurnArgs, parseTurnResult, formatBackgroundArgs, parseBackgroundDispatch, formatListAgentsArgs, parseListAgents, and formatStopAgentArgs.
+    agent: developer
+  - id: step-2
+    description: Rename `ClaudePResult` to `TurnResult` in `driver.ts`.
+    agent: developer
+
+context:
+  codebase: /Users/dostal/.minerva/runs/02e0ab45-c5fa-4113-bdeb-cae587723e3f/workspace
+  tech_stack: { "language": "TypeScript" }
+  key_files:
+    - path: src/driver.ts
+      purpose: The file where the interface will be defined.
+
+design_decisions:
+  - decision: Place the interface in `driver.ts` initially.
+    rationale: Keeps the refactoring contained before splitting files, as driver.ts is already the single source of truth for execution.
+
+risks:
+  - severity: low
+    description: Interface might miss a parameter needed by a specific driver.
+    mitigation: Review the current `SpawnDriver`, `SubagentDriver`, and `ForkedHiveDriver` argument shapes to ensure the interface is comprehensive.

@@ -1,0 +1,16 @@
+{
+  "agent_id": "ac6daf675c55361d8",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-ac6daf675c55361d8.jsonl",
+  "last_assistant_message": "Reading resolveRuntimeRoute in driver.ts",
+  "prompt_id": "29b5370c-9b6a-4336-a386-2310476cc004",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:11:57Z"
+}

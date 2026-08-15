@@ -1,0 +1,101 @@
+id: document-consus-ripout-and-standalone-boundary
+epic: rip-out-consus-coupling
+title: Document the rip-out end state and draw an explicit standalone-boundary line around ideate-to-consus.mjs
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [core-rip-out-consus-coupling]
+
+description: |
+  Depends on core-rip-out-consus-coupling because this story documents the ACTUAL end state that
+  story produces — writing it first would describe a state that doesn't exist yet.
+
+  Two distinct pieces of work:
+
+  1. **Fix documentation drift the rip-out creates or exposes.** docs/architecture.md's API
+     Contract table currently documents pollConsusAnswers/pollAndResumeConsusAnswers as real ABI
+     methods with full signatures — remove those two rows. Also check docs/architecture.md's
+     "No Autonomous Progress" section prose (not just the table) — it name-checks
+     pollConsusAnswers/pollAndResumeConsusAnswers by name in a paragraph, separate from the table;
+     that prose reference needs the same correction, not just the table (this is easy to miss
+     since it's prose, not tabular — confirmed by architect review as a real gap in the first
+     draft's scoping). docs/minerva-dev-agent-instructions.md describes a LIVE, currently-used
+     operational workflow for a "minerva-dev" agent persona — READ IT END TO END (do not
+     grep-and-strip Consus mentions mechanically) and confirm/fix that it accurately describes
+     the post-rip-out CLI (--file-to-multica still works, unchanged; any Consus-specific flag or
+     step must be removed, not just reworded).
+
+  2. **Add an explicit standalone-boundary header note to bin/ideate-to-consus.mjs.** This file's
+     entire documented purpose is a Consus/Janus round-trip ("FILE them into CONSUS as a decision
+     item... WAIT for the human to answer") — it fails the operator's "process piece or a flag"
+     test that bin/minerva-plan.ts passes. Relocating it out of this repo would be the cleanest
+     resolution but is a repo-topology decision beyond this epic's authority. The achievable
+     action: add a clear header comment to the file itself stating plainly that this is a
+     separate, optional, Consus/Janus-dependent integration utility that does NOT participate in,
+     and is explicitly excluded from, Minerva's "genuinely standalone" claim. Do not change any
+     logic in this file — comment-only edit, since the file has zero test coverage and any
+     behavioral change would ship with no regression backing at all.
+
+  DO NOT: leave README.md, VISION.md, .pHive/CONTEXT.md, or .pHive/project-profile.yaml
+  untouched-but-unreviewed — per the design discussion's explicit scoping (§3f), these already
+  describe the correct end state or are low-priority pre-existing drift that predates this epic;
+  confirm this is still true (a quick read, not a rewrite) but do not spend story time rewriting
+  them unless you find something genuinely broken by the rip-out specifically.
+
+acceptance_criteria:
+  - "Given docs/architecture.md's API Contract table, when read after this story, then it contains no pollConsusAnswers or pollAndResumeConsusAnswers rows"
+  - "Given docs/architecture.md's 'No Autonomous Progress' section prose, when read, then it no longer name-checks pollConsusAnswers/pollAndResumeConsusAnswers by name"
+  - "Given docs/minerva-dev-agent-instructions.md, when read end-to-end (not grepped) after this story, then every instruction in it accurately reflects the post-rip-out CLI -- no dead flags referenced, --file-to-multica references unchanged"
+  - "Given bin/ideate-to-consus.mjs, when read after this story, then it has a new header comment explicitly stating it is a separate, optional, Consus/Janus-dependent utility excluded from Minerva's standalone claim, and NO other line in the file changed (verify via diff: comment-only)"
+  - "Given README.md, VISION.md, .pHive/CONTEXT.md, .pHive/project-profile.yaml, when reviewed, then either confirmed already accurate (no edit needed) or a specific, narrow fix is made and noted in the commit message -- not a speculative rewrite"
+
+metric:
+  applies: false
+  justification: "Pure documentation and comment-only story; no observable runtime behavior to measure. Verified by direct read/diff inspection per the acceptance criteria, not a metric."
+
+steps:
+  - id: research
+    description: Read docs/architecture.md's API Contract table AND its "No Autonomous Progress" prose section in full, docs/minerva-dev-agent-instructions.md end to end, bin/ideate-to-consus.mjs's existing header comment, and the sibling core-rip-out-consus-coupling story's actual committed diff (not just its spec) to confirm what the real end state is before documenting it.
+    agent: researcher
+  - id: implement
+    description: Make the documentation edits and add the header comment to bin/ideate-to-consus.mjs per the description above.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Confirm every acceptance criterion via direct read (not assumption), confirm bin/ideate-to-consus.mjs's diff is comment-only with zero logic changes, confirm docs/minerva-dev-agent-instructions.md was actually read end-to-end and not just pattern-matched.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: docs/architecture.md
+      purpose: "API Contract table (~lines 197-202) AND 'No Autonomous Progress' prose section (~lines 44-49) both reference the removed methods -- fix both, not just the table"
+    - path: docs/minerva-dev-agent-instructions.md
+      purpose: "Live operational instruction set -- requires an actual end-to-end read, not mechanical grep-and-strip"
+    - path: bin/ideate-to-consus.mjs
+      purpose: "Header comment addition only -- zero test coverage exists for this file, so no logic may change"
+
+design_decisions:
+  - decision: Comment-only edit to bin/ideate-to-consus.mjs, no logic changes
+    rationale: "Zero test coverage exists for this file -- any behavioral change ships with no regression backing at all (design-discussion.md §4, Low risk item)"
+  - decision: Require an actual end-to-end read of docs/minerva-dev-agent-instructions.md rather than a mechanical Consus-reference strip
+    rationale: "TPM collaborative review escalation: this is a live, currently-used instruction set another agent persona executes against -- a pattern-matched edit risks leaving it subtly wrong in ways a grep wouldn't catch"
+
+risks:
+  - severity: low
+    description: A rewrite of README.md/VISION.md/CONTEXT.md/project-profile.yaml beyond what's needed could introduce new drift or scope creep
+    mitigation: Acceptance criteria explicitly require confirming-not-rewriting these files unless a specific, narrow, rip-out-caused break is found
+
+references:
+  - path: .pHive/epics/rip-out-consus-coupling/docs/design-discussion.md
+    relevant_excerpt: |
+      §3(f): "Must-fix: docs/architecture.md's API Contract table... and
+      docs/minerva-dev-agent-instructions.md if it describes --file-to-multica/Multica workflows
+      as primary." Architect review: "the 'No Autonomous Progress' section's own prose paragraph
+      isn't explicitly called out alongside [the table] -- easy to miss since it's prose, not
+      the table."

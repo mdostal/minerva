@@ -20,6 +20,16 @@ export type Channel = "agent" | "human";
 // internal Question type never carries anything outside this set.
 export type QuestionKind = "single-select" | "multi-select" | "free-text";
 
+export interface RunMetrics {
+  turns: number;
+  escalations: number;
+  auto_resolutions: number;
+  driver: string;
+  started_at: string;
+  elapsed_ms?: number;
+  finalized_at?: string;
+}
+
 // Never throws, never guesses a channel-like value -- any value outside the three documented
 // kinds defaults to "free-text" (the least-structured, always-safe interpretation). Confirmed
 // necessary empirically: the gateway's own code does not validate `kind`, so a malformed or
@@ -102,8 +112,13 @@ export interface RunRecord {
   // AgnosticPlanDriver and continues the same runtime session. Absent => the built-in claude
   // SpawnDriver drives the run (fully backwards-compatible). Persisted so a run's runtime never
   // changes mid-flight even across process restarts.
+
+  // Runner-agnostic planning (agnostic-plan-driver.ts). When present, these identify the
+  // runtime + model chosen for the run's planning turns. Absent keeps the existing claude
+  // driver behavior.
   plan_runtime?: string;
   plan_model?: string;
+  metrics?: RunMetrics;
 }
 
 function minervaHome(): string {
@@ -120,6 +135,21 @@ function runDir(runId: string): string {
 
 function runRecordPath(runId: string): string {
   return join(runDir(runId), "run.yaml");
+}
+
+export function defaultSeedRepoPath(): string {
+  return join(homedir(), "repos", "consus-seeds");
+}
+
+function resolveSeedRepo(): string {
+  const seedRepo = process.env.MINERVA_SEED_REPO || defaultSeedRepoPath();
+  if (!existsSync(seedRepo)) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Seed repo does not exist: ${seedRepo}. Set MINERVA_SEED_REPO to a local git repo path, or set up the default with: git clone git@github.com:mdostal/consus-seeds.git ${defaultSeedRepoPath()}`,
+    );
+  }
+  return seedRepo;
 }
 
 function writeRunRecord(record: RunRecord): void {
@@ -142,6 +172,64 @@ export function updateRunRecord(runId: string, patch: Partial<RunRecord>): RunRe
   const record = { ...readRunRecord(runId), ...patch };
   writeRunRecord(record);
   return record;
+}
+
+function fallbackMetrics(record: RunRecord): RunMetrics {
+  return {
+    turns: 0,
+    escalations: 0,
+    auto_resolutions: 0,
+    driver: record.plan_runtime ?? "spawn",
+    started_at: record.created_at,
+  };
+}
+
+function normalizeMetrics(metrics: RunMetrics): RunMetrics {
+  return { ...metrics, auto_resolutions: metrics.auto_resolutions ?? 0 };
+}
+
+export function updateRunMetricsDriver(runId: string, driverName: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
+  return updateRunRecord(runId, { metrics: { ...metrics, driver: driverName } });
+}
+
+export function recordDriverTurn(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
+  return updateRunRecord(runId, { metrics: { ...metrics, turns: metrics.turns + 1 } });
+}
+
+export function recordHumanEscalation(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
+  return updateRunRecord(runId, { metrics: { ...metrics, escalations: metrics.escalations + 1 } });
+}
+
+export function recordAutoResolution(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
+  return updateRunRecord(runId, {
+    metrics: { ...metrics, auto_resolutions: metrics.auto_resolutions + 1 },
+  });
+}
+
+export function finalizeRunMetrics(runId: string): RunRecord {
+  const record = readRunRecord(runId);
+  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
+  if (metrics.finalized_at !== undefined && metrics.elapsed_ms !== undefined) return record;
+
+  const finalizedAt = new Date().toISOString();
+  const startedMs = Date.parse(metrics.started_at);
+  const finalizedMs = Date.parse(finalizedAt);
+  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, finalizedMs - startedMs) : 0;
+  return updateRunRecord(runId, {
+    metrics: {
+      ...metrics,
+      elapsed_ms: elapsedMs,
+      finalized_at: finalizedAt,
+    },
+  });
 }
 
 function allocateWorktreeWorkspace(targetRepo: string, runId: string, workspacePath: string): void {
@@ -203,8 +291,8 @@ export function allocateRun(
     allocateWorktreeWorkspace(targetRepo, runId, workspacePath);
     workspaceKind = "worktree";
   } else {
-    allocateFreshInitWorkspace(runId, workspacePath);
-    workspaceKind = "fresh_init";
+    allocateWorktreeWorkspace(resolveSeedRepo(), runId, workspacePath);
+    workspaceKind = "worktree";
   }
 
   const statePath = join(workspacePath, ".pHive");
@@ -225,6 +313,13 @@ export function allocateRun(
     baseline_epic_ids: baselineEpicIds,
     idea,
     defaults,
+    metrics: {
+      turns: 0,
+      escalations: 0,
+      auto_resolutions: 0,
+      driver: process.env.MINERVA_DRIVER ?? "spawn",
+      started_at: new Date().toISOString(),
+    },
     // Persist the resolved repo only for worktree workspaces -- a fresh_init scratch has no real
     // repo to record, and its absence is what output-emitter's push step keys off (PAN-6745).
     ...(workspaceKind === "worktree" && targetRepo ? { target_repo: targetRepo, repo_source: repoSource } : {}),
@@ -239,7 +334,7 @@ export function getRunStatus(params: Record<string, unknown>): Record<string, un
     throw new MinervaError("VALIDATION_FAILED", "getRunStatus requires a string run_id");
   }
   const record = readRunRecord(runId);
-  return { status: record.status };
+  return { status: record.status, metrics: record.metrics ?? null };
 }
 
 export function listRuns(_params: Record<string, unknown>): Record<string, unknown> {

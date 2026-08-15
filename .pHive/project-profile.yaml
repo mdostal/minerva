@@ -1,7 +1,7 @@
 project_name: "minerva"
-type: greenfield
-discovered: "2026-07-24"
-source: "README.md + docs/north-star.md"
+type: brownfield
+discovered: "2026-08-13"
+source: "CLAUDE.md absent; README.md + VISION.md + docs/ + codebase scan (re-kickoff from greenfield 2026-07-24)"
 
 project_type: service
 has_ui: false
@@ -20,50 +20,267 @@ tech_stack:
   languages:
     - typescript
   frameworks: []
-  build_tools: []
-  package_managers: []
-  versions: {}
+  build_tools:
+    - tsx
+    - typescript
+  package_managers:
+    - npm
+  versions:
+    node: ">=20.19"
+    typescript: "^5.7.0"
+    tsx: "^4.23.1"
 
 claude_md_summary: |
-  No CLAUDE.md yet. Project conventions so far (from README.md / docs/north-star.md):
-  - TS by default; Pantheon subprocess ABI is interchangeable/any-language.
-  - Full TDD discipline: named -> interfaced -> full TDD -> locked.
-  - Local CI only, no GitHub Actions.
+  No CLAUDE.md yet. Project conventions so far (from README.md / VISION.md / docs/):
+  - TS by default (ES2022, NodeNext, strict, noUncheckedIndexedAccess); Pantheon subprocess ABI is interchangeable/any-language.
+  - Full TDD discipline: named -> interfaced -> full TDD -> locked. Near-1:1 test-to-source ratio (22 test files / 21 source files), co-located *.test.ts.
+  - Test runner is Node's native node:test via `tsx --test` (not Jest/Vitest) -- forced single-concurrency + force-exit because tests spawn real subprocesses.
+  - `npm run ci` (test + typecheck) is the authoritative local gate; .github/workflows/{ci,promote}.yml are Pantheon's shared cross-repo scaffolding layered on top, not app-specific.
+  - No lint/format/pre-commit tooling configured yet -- tsc --strict + tests are the only quality gate.
+  - Fail-loud discipline: invalid config (e.g. MINERVA_DRIVER, MINERVA_TURN_TIMEOUT_MS) throws rather than silently defaulting.
   - Rogue-overwrite guardrails expected.
-  - Minerva is headless: it drives Delphi (the human surface) rather than rendering its own UI.
+  - Minerva is headless: it drives the Hive plugin commands (kickoff+plan today; VISION.md scopes it toward any Hive command) via a JSON-over-stdio subprocess ABI, park/resume at breakpoints, no daemon -- state lives on the filesystem under ~/.minerva/runs. It is not wired into a specific UI surface (e.g. Delphi/Consus); the human/agent surface is whatever harness calls it.
 
 discovery_brief: "docs/initial-info.md"  # resolved/refined source of truth: v1 = agent-drivable, standalone; Delphi/Auriga/Vulcan/Multica/votem are v2 behind contracts
 
+structure:
+  modules:
+    - name: dispatch
+      purpose: "Flat method-registry dispatcher (capabilities, startRun, getRunStatus, listRuns, getQuestions, submitAnswers, getOutput, abortRun) -> {result}/{error} envelope"
+      source: src/dispatch.ts
+    - name: kickoff-engine
+      purpose: Drives plugin-hive's kickoff+plan skills headlessly
+      source: src/kickoff-engine.ts
+      tests: src/kickoff-engine.test.ts
+    - name: plan-runner
+      purpose: Runs the PLAN driver, files decomposed stories into the seed's target project, carries depends_on
+      source: src/plan-runner.ts
+      tests: src/plan-runner.test.ts
+    - name: agnostic-plan-driver
+      purpose: Runner-agnostic PLAN driver with Heimdall route + bulletproof claude fallback (newest subsystem)
+      source: src/agnostic-plan-driver.ts
+      tests: src/agnostic-plan-driver.test.ts
+    - name: driver
+      purpose: "Swappable Driver abstraction (single runTurn method): SpawnDriver (default, claude -p/--resume, real SIGINT/SIGTERM hardening), SubagentDriver (claude --bg + poll + stop + resume), ForkedHiveDriver (fully implemented, e2e-tested (PAN-8613/PAN-8619); Minerva's own working client of plugin-hive PR #341's headless-question protocol -- see docs/decisions/002-pr341-production-dependency.md for the one real gap: its intended production path, MINERVA_HIVE_PLUGIN_DIR unset against a marketplace-installed plugin-hive, doesn't carry the protocol until PR #341 merges; only the MINERVA_HIVE_PLUGIN_DIR local-fork-checkout testing path has been exercised end-to-end)"
+      source: src/driver.ts
+      tests: src/driver.test.ts, src/driver-sigint-harness.ts, src/subagent-driver-sigkill-harness.ts
+    - name: run-manager
+      purpose: Per-run isolated git workspace management under ~/.minerva/runs; getRunStatus/listRuns
+      source: src/run-manager.ts
+      tests: src/run-manager.test.ts
+    - name: repo-resolution
+      purpose: Resolve/stamp the real target repo per seed (worktree from dev branch, or fresh git init for greenfield)
+      source: src/repo-resolution.ts, src/target-repo-signal.ts
+      tests: src/repo-resolution.test.ts, src/target-repo-signal.test.ts
+    - name: envelope-detection
+      purpose: Read-only detection of .pHive/questions/*.yaml structured envelopes
+      source: src/envelope-detection.ts
+      tests: src/envelope-detection.test.ts
+    - name: escalation-classification
+      purpose: Classifies extracted questions agent vs human channel
+      source: src/escalation-classification.ts
+      tests: src/escalation-classification.test.ts
+    - name: question-extraction
+      purpose: Pulls a turn's question via constrained --json-schema call
+      source: src/question-extraction.ts
+      tests: src/question-extraction.test.ts
+    - name: completeness / deadline-renewal-ownership
+      purpose: Governance around when a run is "done enough" / renewal ownership rules
+      source: src/completeness.test.ts, src/deadline-renewal-ownership.test.ts
+    - name: output-emitter
+      purpose: Emits approved epic/stories; detects flat + multi-epic plugin-hive layout to auto-fire filing
+      source: src/output-emitter.ts
+      tests: src/output-emitter.test.ts
+    - name: cleanup-ledger
+      purpose: Append-only ledger for external GC -- Minerva itself never deletes a workspace
+      source: src/cleanup-ledger.ts
+      tests: src/cleanup-ledger.test.ts
+    - name: plan-defaults
+      purpose: Pre-baked default answers so headless plan runs don't hang
+      source: src/plan-defaults.ts
+      tests: src/plan-defaults.test.ts, src/prebaked-plan-defaults.test.ts
+    - name: shared-contracts
+      purpose: Shared capability/error contract types
+      source: src/capabilities.ts, src/errors.ts, src/types.test.ts
+    - name: test-cli
+      purpose: Shared in-house test harness (call()) used across most *.test.ts files
+      source: src/test-cli.ts
+  entry_points:
+    - bin/minerva.ts        # ABI entry: reads one JSON request from stdin, dispatches, writes response, exit 0/1
+    - bin/minerva-plan.ts   # Auriga-invokable direct plan entry point
+    - bin/ideate-to-consus.mjs  # ideation loop (idea -> questions+wireframe+PRD -> Consus), --scan autopilot/auto-resume
+
+architecture:
+  pattern: "Flat method-registry dispatch + swappable Driver strategy abstraction; no framework, no DI container"
+  di_framework: "manual (plain function imports wired directly into dispatch registry)"
+  state_management: "Filesystem-only, no DB, no server/port -- per-run state under ~/.minerva/runs; no daemon, every dispatch is a fresh process"
+  navigation: "N/A (headless subprocess ABI, not a UI)"
+  data_layer: "JSON-over-stdio request/response envelope ({result}/{error}); MinervaError typed with ErrorCode union"
+
+conventions:
+  naming: "kebab-case .ts files; *.test.ts co-located with source; *-harness.ts suffix for standalone empirical-proof scripts (e.g. signal-handling)"
+  file_organization: "Flat src/ (no subdirectories), 1:1 co-located tests, bin/ for process entry points"
+  branching: "feat/<slug-or-ticket> (e.g. feat/PAN-8562), generated run/<uuid> and recovered/<sha> branches from Minerva's own dogfooded runs; main + dev both long-lived, dev -> main via promote.yml"
+  commit_messages: "Conventional Commits (feat(scope):, fix(scope):, docs:, ci:), often referencing Linear ticket IDs (PAN-6745, pan-6965) and epic/story bracket tags"
+
+test_infrastructure:
+  unit:
+    framework: "Node native node:test via tsx --test"
+    location: "src/**/*.test.ts, bin/**/*.test.ts (co-located, no separate test dir)"
+    count: "22 test files vs 21 non-test source files -- near 1:1"
+    coverage_tool: none
+  integration:
+    framework: "Same node:test harness; several tests spawn real subprocesses/child processes (hence --test-concurrency=1 --test-force-exit)"
+    location: src/*.test.ts
+  e2e:
+    framework: none
+    location: null
+    count: 0
+  mocking: "None -- no mocking library; tests exercise real subprocess/filesystem behavior via the shared src/test-cli.ts call() harness"
+  test_commands:
+    - "npm test"
+    - "npm run typecheck"
+    - "npm run ci"
+
+ci_cd:
+  platform: "GitHub Actions"
+  workflows:
+    - name: ci.yml
+      purpose: "Standard reusable Pantheon-wide gate: auto-detects stack (node/python/go), runs install+build+test on PRs into dev/main/master + workflow_dispatch"
+    - name: promote.yml
+      purpose: "On push to dev, opens (or idempotently reuses) a dev -> default-branch PR; deliberately does not auto-merge so GITHUB_TOKEN can't bypass the CI gate on bot-opened PRs"
+  gating: "npm run ci (test + typecheck) is the authoritative app-level gate; the two workflows above are shared Pantheon scaffolding layered on top, not Minerva-specific"
+
+documentation_found:
+  - path: README.md
+    content_summary: "The Pantheon's Planner -- headless idea-to-approved-spec engine via JSON-over-stdio subprocess ABI, no daemon, state on filesystem"
+  - path: VISION.md
+    content_summary: "v0.1.1, status 'working (wip)'; 3 rungs: current (subprocess ABI + drivers e2e), near-term (headless pre-baked defaults, ForkedHiveDriver, decision surface, planning metrics), long-term (methodology auto-detect, plan-quality metrics, plan A/B, parallel self-tuning)"
+  - path: docs/architecture.md
+    content_summary: "Full API contract referenced by dispatch.ts"
+  - path: docs/initial-info.md
+    content_summary: "Discovery brief source of truth: v1 agent-drivable standalone; Delphi/Auriga/Vulcan/Multica/votem deferred to v2 behind contracts"
+  - path: docs/north-star.md
+    content_summary: "Original north-star planning doc"
+  - path: docs/prd.md
+    content_summary: "Product requirements doc"
+  - path: docs/product-brief.md
+    content_summary: "Product brief"
+  - path: docs/minerva-next-tests-and-driver-paths.md
+    content_summary: "ForkedHiveDriver R&D trail -- next tests and driver paths"
+  - path: docs/scope/forked-driver-integration-next-phase.md
+    content_summary: "Scoping doc for the next ForkedHiveDriver integration phase"
+  - path: docs/spike-plugin-hive-drivability-findings.md
+    content_summary: "Spike findings on driving plugin-hive headlessly (+ paired spike test)"
+  - path: docs/decisions/kickoff-review.md
+    content_summary: "Decision record from a kickoff review"
+  - path: docs/decisions/002-pr341-production-dependency.md
+    content_summary: >
+      Records ForkedHiveDriver's one real external dependency: its intended production path
+      (MINERVA_HIVE_PLUGIN_DIR unset, marketplace-installed plugin-hive) doesn't yet carry the
+      headless-question protocol because firefly-events/plugin-hive#341 is unmerged -- only the
+      MINERVA_HIVE_PLUGIN_DIR local-fork-checkout testing path has been exercised end-to-end.
+      Dated recheck via `gh pr view 341 --repo firefly-events/plugin-hive ...` (recheck_by:
+      2026-09-13). Source of truth for this dependency -- link here rather than re-deriving it.
+  - path: docs/ideation/pan-6963/, docs/ideation/pan-6965/
+    content_summary: "Real dogfooded ideation-loop artifacts (ingested-context, design-discussion, prd, wireframe.html, questions.json, flow.mmd) proving bin/ideate-to-consus.mjs works on real tickets"
+  - path: docs/plan-defaults.example.yaml
+    content_summary: "Example config for pre-baked plan defaults"
+
+existing_knowledge:
+  mcp_servers: []
+  existing_skills: []
+  existing_hooks: []
+
+project_maturity: "actively_growing"  # ~7000 LOC across 43 TS files, near-1:1 test coverage, versioned release (0.1.1), working 8-method ABI, 3 working Drivers (SpawnDriver, SubagentDriver, ForkedHiveDriver -- all fully implemented and e2e-tested; ForkedHiveDriver's remaining gap is external, not internal: PR #341, see docs/decisions/002-pr341-production-dependency.md), empirically-validated signal-handling hardening, working CI/promote pipeline, dogfooded on real tickets. Not yet mature/stable: VISION.md self-describes "working (wip)", no lint/format/coverage tooling.
+
 north_star:
-  goal: "Turn an idea into an approved, planned spec autonomously by running kickoff+plan. v1: an agent operator drives the Q&A and escalates strategic decisions to a human gate; v2 upgrades the human surface to Delphi and wires Auriga/Vulcan/Multica/votem behind contracts. See docs/initial-info.md."
-  audience: "Both the human operator (the user) and other Pantheon services -- Minerva is invoked directly by a person AND by Auriga's routing."
+  goal: >
+    Enable the idea -> plan -> ticket-decomposition -> Multica-execution pipeline to run
+    fully asynchronously under agentic harnesses, not just interactive sessions. Minerva's
+    scope was always "drive any Hive plugin command headlessly," but the concrete driving
+    goal is: fire an idea in, run the Hive commands (kickoff+plan today, any command per
+    VISION.md's long-term rungs), pause at a question/decision point, forward that question
+    out to whatever is calling Minerva, then resume exactly where it left off once an answer
+    comes back -- across any harness that can pause and be picked back up again. With Claude
+    this can be as simple as `--resume`, but production issues with that path were the actual
+    reason plugin-hive itself is being made runner-agnostic (see agnostic-plan-driver, Heimdall
+    route, PAN work in git history).
+    OPEN STRATEGIC QUESTION (unresolved, explicitly deferred by the user 2026-08-13): "plugin-hive
+    gaining agnostic pause/resume" is not one unified capability -- per minerva-value-audit's
+    design-discussion.md (§2), it's three separate efforts at three different maturities: (1)
+    upstream `firefly-events/plugin-hive#341`, a file-based headless-question protocol for
+    kickoff/plan -- the one Minerva's own ForkedHiveDriver is a working, e2e-tested client of, not
+    a bystander waiting on; (2) fork-only runner-agnostic dispatch work (fork PRs #3/#6/#11/#12,
+    gated behind fork PR #10 reaching the fork's own main), which is about *which runner* executes
+    a step, orthogonal to pause/resume, and is what src/agnostic-plan-driver.ts spawns; and (3) the
+    native DAG-executor `pause` node type (shipped, plugin cache v2.15.0), a synchronous
+    long-blocking poll loop opt-in per workflow (ui-design/design-review/daily-ceremony only, not
+    kickoff/plan) -- architecturally the opposite of Minerva's cold-start-tolerant design. None of
+    the three, individually or combined, currently closes the question of whether Minerva remains
+    necessary as a separate layer -- that judgment call the user has not yet made. This kickoff
+    does not resolve it; future planning/execution work on Minerva should stay aware this question
+    is open rather than assume Minerva's continued existence is settled.
+  audience: >
+    Both the human operator directly, and other Pantheon services (invoked as a plugin via
+    Auriga-style routing). Unchanged from the original kickoff, but sharpened 2026-08-13:
+    Minerva itself must stay harness/UI-agnostic -- it provides the pause/resume/question-
+    extraction *capability* only. It does not know about, integrate with, or surface anything
+    through Consus (Pantheon's renamed Delphi) or any other specific UI. When Minerva runs as
+    a Pantheon plugin, surfacing questions through Consus (or any other surface) is entirely
+    Pantheon/the calling integration's responsibility -- never Minerva's concern.
   expected_scale: "Low concurrency per instance, but must support spinning up many separate Minerva instances in parallel (one per repo / one per idea-intake session) so a person can push many ideas through at once instead of hand-running kickoff+plan per idea in separate terminals."
-  pain_points: "(1) Manual per-idea kickoff -- currently means SSHing into a box and hand-running the flow per idea, which doesn't scale. (2) Needs to run asynchronously, without an SSH session, with compute pushed onto other boxes via Multica -- Minerva should be the persona/toolset that drives kickoff+plan remotely on Multica-managed compute."
+  pain_points: >
+    (1) Manual per-idea kickoff -- historically meant SSHing into a box and hand-running the
+    flow per idea, which doesn't scale.
+    (2) Needs to run asynchronously, without an SSH session, with compute pushed onto other
+    boxes via Multica -- Minerva should be the persona/toolset that drives Hive commands
+    remotely on Multica-managed compute.
+    (3) Prior attempts at simple session-resume (e.g. Claude's own --resume) hit real
+    production issues when moving from a normal interactive session to agentic-tool-driven
+    pause/resume; the fix in progress is making plugin-hive itself fully runner-agnostic
+    (agnostic-plan-driver + Heimdall route, landed 2026-08-12) -- which is also what raises
+    the open strategic question above about whether Minerva remains necessary as a separate
+    layer once that agnosticism is complete. Note this is distinct from the ForkedHiveDriver/
+    PR #341 dependency below: agnostic-plan-driver's runner selection and ForkedHiveDriver's
+    question/pause protocol are two of the three separate plugin-hive efforts referenced above,
+    not the same thing.
+    (4) ForkedHiveDriver's intended production path (MINERVA_HIVE_PLUGIN_DIR unset, relying on
+    a marketplace-installed plugin-hive) does not yet carry PR #341's protocol because #341 is
+    still unmerged upstream -- see docs/decisions/002-pr341-production-dependency.md for the
+    full gap and its recheck date. Both places this used to fail silently now emit a structured
+    WARN-level stderr log instead (agnosticPlanCliPath()'s no-candidate-path fallback in
+    src/agnostic-plan-driver.ts, and ForkedHiveDriver.surfaceNextQuestion()'s zero-pending-
+    envelope case in src/driver.ts) -- observability only, the underlying fallback behavior is
+    unchanged, but it's no longer silent.
   success: >
-    Drop an idea in; Minerva runs kickoff+plan and generates the human-gate questions,
-    surfaced somewhere else (most likely Delphi, which supports surveys, AI chat, and
-    back-and-forth). The user fills that out / chats with the AI and continues the
-    intake asynchronously -- while it runs, the user can go do other work with the
-    orchestrator (deep research, tool CBAs in Delphi), make selections, and kick off a
-    new project that starts its own question intake. Once intake is done, it feeds
-    scope/tickets forward so the pipeline keeps going -- fully async, multi-instance,
-    no manual babysitting.
+    Drop an idea in; Minerva runs the relevant Hive command(s) headlessly and, at any
+    question/decision point, pauses and hands the extracted question(s) back to whoever
+    called it -- without assuming or building any specific answer-surface itself. The caller
+    (a human session, or Pantheon via Consus, or any other agentic harness) decides how to
+    collect the answer and hands it back to Minerva to resume from exactly where it paused.
+    Once a run completes, it feeds scope/tickets forward into Multica so the pipeline keeps
+    going -- fully async, multi-instance, no manual babysitting, and no coupling to any one
+    downstream surface.
   avoid: >
-    Never auto-approve. Minerva must not make assumptions, cut corners, or kick off
-    work when uncertain or under-informed -- it should keep building out the full
-    requirements until there's enough to proceed. A real approval process (human, or
-    via the votem plugin) sits in front of every kickoff, surfaced through Delphi and
-    configured outside Minerva itself.
+    Never auto-approve. Minerva must not make assumptions, cut corners, or kick off work when
+    uncertain or under-informed -- it should keep building out the full requirements until
+    there's enough to proceed. A real approval process (human, or via the votem plugin) sits
+    in front of every kickoff, configured outside Minerva itself.
+    Also avoid: Minerva taking on integration or UI responsibility that belongs to the calling
+    harness. It must not hardcode or assume Consus (or any other specific surface) as the
+    place questions get answered -- that coupling belongs entirely to Pantheon/the integration,
+    never to Minerva.
 
 integrations:
   cli_tools:
     codex:
       detected: true
-      path: "/Users/dostal/.npm-global/bin/codex"
+      path: "/Users/mdostal/.local/bin/codex"
       impact: "Adversarial code review"
     multica:
       detected: true
-      path: "/Users/dostal/.local/bin/multica"
+      path: "/opt/homebrew/bin/multica"
       impact: "v2 remote compute dispatch -- core to Minerva's stated pain point (push execution off the local/SSH box), but wiring is deferred to v2 per docs/initial-info.md"
     linearis:
       detected: false
@@ -77,7 +294,7 @@ integrations:
     context7:
       detected: false
     posthog:
-      detected: false
+      detected: false  # session-level MCP connection observed 2026-08-13, not a project-level dependency -- left false pending an explicit project decision to depend on it
     firebase:
       detected: false
     mobile-mcp:
@@ -85,3 +302,25 @@ integrations:
   vaults:
     obsidian:
       detected: false
+
+code_quality:
+  linters: []
+  formatters: []
+  pre_commit:
+    framework: null
+    hooks: []
+  code_snippets:
+    - path: src/dispatch.ts
+      pattern: method-registry-dispatch
+      annotation: "Flat Record<string, Handler> mapping method name to async handler; wraps every call in try/catch, normalizes thrown MinervaError into {error: {code, message, retry_after_ms}}"
+      lines: "1-40"
+    - path: src/driver.ts
+      pattern: swappable-strategy
+      annotation: "Driver interface with single runTurn method; concrete drivers (SpawnDriver, SubagentDriver, ForkedHiveDriver -- all fully implemented) selected via MINERVA_DRIVER env var, fail loudly on invalid config. ForkedHiveDriver's zero-pending-envelope fallback in surfaceNextQuestion() now emits a structured WARN stderr log rather than degrading silently; see docs/decisions/002-pr341-production-dependency.md for its one real external dependency (PR #341)."
+      lines: "1-40"
+  test_first_signals:
+    co_located_tests: true
+    test_before_source: inconclusive
+    test_runner_in_precommit: false
+    bdd_keywords: false
+    test_absence: false

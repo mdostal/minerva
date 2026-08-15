@@ -1,0 +1,16 @@
+{
+  "agent_id": "a9a8f1f1e61996255",
+  "session_id": "8b73c91e-24f7-4ae3-92f1-03480670c1a7",
+  "agent_type": "",
+  "cwd": "/Users/mdostal/Documents/work/pantheon/minerva",
+  "agent_transcript_path": "/Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-minerva/8b73c91e-24f7-4ae3-92f1-03480670c1a7/subagents/agent-a9a8f1f1e61996255.jsonl",
+  "last_assistant_message": "Confirming Heimdall's resilience status note",
+  "prompt_id": "203f71dc-34c5-4222-8e0f-8e967749c12a",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "verdict": "failure",
+  "verdict_source": "missing_marker",
+  "written_at": "2026-08-14T04:46:12Z"
+}

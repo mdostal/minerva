@@ -37,6 +37,20 @@ function withEnv(vars: Record<string, string | undefined>, body: () => void): vo
   }
 }
 
+function captureWarnings(body: () => void): string[] {
+  const savedWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  try {
+    body();
+  } finally {
+    console.warn = savedWarn;
+  }
+  return warnings;
+}
+
 function q(overrides: Partial<ResolvableQuestion>): ResolvableQuestion {
   return { text: "some question", channel: "agent", ...overrides };
 }
@@ -107,10 +121,48 @@ test("loadPlanDefaults: reads a YAML config file via MINERVA_PLAN_DEFAULTS, per-
   }
 });
 
-test("loadPlanDefaults: unreadable config file fails loudly", () => {
+test("loadPlanDefaults: missing config file warns and falls back to empty built-in defaults", () => {
   withEnv({ MINERVA_PLAN_DEFAULTS: "/no/such/plan-defaults-file.yaml" }, () => {
-    assert.throws(() => loadPlanDefaults(), MinervaError);
+    const warnings = captureWarnings(() => {
+      assert.deepEqual(loadPlanDefaults(), BUILTIN_PLAN_DEFAULTS);
+    });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /Ignoring plan-defaults config file/);
   });
+});
+
+test("loadPlanDefaults: unparsable config file warns and falls back to empty built-in defaults", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-defaults-bad-yaml-"));
+  const file = join(dir, "defaults.yaml");
+  writeFileSync(file, "mode: [\n");
+  try {
+    withEnv({ MINERVA_PLAN_DEFAULTS: file }, () => {
+      const warnings = captureWarnings(() => {
+        assert.deepEqual(loadPlanDefaults(), BUILTIN_PLAN_DEFAULTS);
+      });
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!, /Ignoring plan-defaults config file/);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadPlanDefaults: schema-invalid config file warns and falls back to empty built-in defaults", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-defaults-bad-schema-"));
+  const file = join(dir, "defaults.yaml");
+  writeFileSync(file, "mode: banana\nanswers:\n  - answer: x\n");
+  try {
+    withEnv({ MINERVA_PLAN_DEFAULTS: file }, () => {
+      const warnings = captureWarnings(() => {
+        assert.deepEqual(loadPlanDefaults(), BUILTIN_PLAN_DEFAULTS);
+      });
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!, /Invalid plan-defaults mode/);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("loadPlanDefaults: an answer rule with neither qid nor match is rejected", () => {
@@ -125,16 +177,22 @@ test("resolve: mode off always parks (returns null)", () => {
   assert.equal(resolveDefaultAnswer(q({}), BUILTIN_PLAN_DEFAULTS, "idea"), null);
 });
 
-test("resolve: explicit qid match wins regardless of channel/mode", () => {
+test("resolve: agent mode ignores explicit qid matches on human-channel questions", () => {
   const d: PlanDefaults = { ...AGENT, answers: [{ qid: "metrics", answer: "yes, enable metrics" }] };
   const got = resolveDefaultAnswer(q({ channel: "human", qid: "metrics", text: "Enable metrics?" }), d, "idea");
-  assert.equal(got, "yes, enable metrics");
+  assert.equal(got, null);
 });
 
-test("resolve: explicit substring match wins even on a human-channel question in agent mode", () => {
+test("resolve: agent mode ignores explicit substring matches on human-channel questions", () => {
   const d: PlanDefaults = { ...AGENT, answers: [{ match: "sign-off", answer: "Approved by operator" }] };
   const got = resolveDefaultAnswer(q({ channel: "human", text: "Ready for sign-off on scope?" }), d, "idea");
-  assert.equal(got, "Approved by operator");
+  assert.equal(got, null);
+});
+
+test("resolve: auto mode allows explicit matches on human-channel questions", () => {
+  const d: PlanDefaults = { ...AUTO, answers: [{ qid: "metrics", answer: "yes, enable metrics" }] };
+  const got = resolveDefaultAnswer(q({ channel: "human", qid: "metrics", text: "Enable metrics?" }), d, "idea");
+  assert.equal(got, "yes, enable metrics");
 });
 
 test("resolve: agent mode parks a human-channel question with no explicit answer (AD-5 preserved)", () => {

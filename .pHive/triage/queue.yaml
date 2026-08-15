@@ -1,7 +1,7 @@
 version: 1
 items:
   - id: t-001
-    state: plan-ready
+    state: closed
     kind: bug
     title: "Minerva driver orphans detached claude subprocesses on interrupt -- lock types, make driver swappable"
     description: |
@@ -39,10 +39,426 @@ items:
     assignee: null
     linked_epic: swappable-driver
     linked_story: lock-core-types
-    closed_reason: null
-    closed_at: null
+    closed_reason: "shipped in PR #2 (epic swappable-driver, v0.1.1) -- Driver abstraction, SpawnDriver hardening (SIGINT/SIGTERM, configurable turn timeout), locked core types, and the ForkedHiveDriver seam all merged to origin/dev before this session began. Discovered stale (still plan-ready) during a 2026-08-14 backlog sweep; closing as bookkeeping, no further work needed."
+    closed_at: "2026-08-14T18:00:00Z"
     state_history:
       - { state: inbox, at: "2026-07-25T19:00:00Z" }
       - { state: clarified, at: "2026-07-25T19:00:00Z" }
       - { state: prioritized, at: "2026-07-25T19:00:00Z" }
       - { state: plan-ready, at: "2026-07-25T20:00:00Z" }
+      - { state: closed, at: "2026-08-14T18:00:00Z" }
+  - id: t-002
+    state: closed
+    kind: feature
+    title: "dev has real Consus integration wired into core code -- violates standalone-god principle, needs rip-out/re-architecture decision"
+    description: |
+      Surfaced during epic minerva-value-audit (research into whether plugin-hive's own
+      runner-agnostic work replaces Minerva's value). Operator principle stated directly: "if
+      the plugin requires the other systems, then the god/plugin is not a true standalone god
+      for the Pantheon -- if it requires all of the others to do anything, then it is a process
+      piece or a flag in the pantheon itself." Minerva's dev branch does not meet this bar today.
+
+      Full findings:
+      1. src/dispatch.ts imports and exposes 4 Consus-specific ABI methods alongside the core
+         provider-neutral ones: resumeFromConsusAnswer, resumeAnsweredConsusDecision,
+         pollConsusAnswers, pollAndResumeConsusAnswers (from consus-resume.ts, consus-poller.ts,
+         consus-auto-resume.ts).
+      2. src/kickoff-engine.ts's core startRun question-surfacing path calls
+         postQuestionToConsusDecisionApi() UNCONDITIONALLY on every question -- not behind any
+         opt-in flag (unlike plan-runner.ts's clean pollConsusForAnswers flag pattern) -- though
+         it fails soft (750ms timeout, catches unreachable, falls back to normal
+         waiting_on_human status rather than throwing).
+      3. src/run-manager.ts's core RunStatus type has "awaiting-consus" as a first-class enum
+         value, and RunRecord has a first-class consus_question_id field -- Consus-awareness has
+         leaked into the core data model, not just add-on modules.
+      4. src/plan-runner.ts has 24 Consus references, including a CONSUS_URL env var default
+         (http://localhost:8722), an opt-in poll flag (pollConsusForAnswers), and a best-effort
+         post-to-Consus block.
+      5. Dedicated integration modules: src/consus-decisions.ts, src/consus-poller.ts,
+         src/consus-resume.ts, src/consus-auto-resume.ts -- landed via a real 5-commit
+         "minerva-auto-resume" epic (PAN-7523, PAN-7524, +3 feat commits).
+      6. This contradicts .pHive/CONTEXT.md's explicit convention: "every god-integration
+         (Delphi, Auriga, Vulcan, Multica, votem) is v2, each behind a contract... v1 is
+         standalone." Consus (renamed from Delphi) integration here is direct/hardcoded, not
+         behind any contract or abstraction seam.
+
+      Needs a proper /plan cycle: research the full blast radius (including any test files and
+      the seed-repo naming convention "consus-seeds"), decide the rip-out or
+      abstract-behind-a-contract approach, and decompose into stories. NOT resolved by this
+      triage entry -- filed here so it surfaces at the next standup rather than getting lost.
+
+      Separately (NOT part of this item): src/full-loop.test.ts and src/plan-runner.test.ts
+      reference the default seed-repo path (~/repos/consus-seeds) without self-provisioning a
+      temp git repo the way 12 other test files correctly do. That's a small, unrelated
+      test-hygiene bug already tracked as its own story in the minerva-value-audit epic.
+
+      UPDATE (2026-08-14T05:15Z): live evidence this is already causing real breakage, not just
+      an architectural concern. A full `npm run ci` run on this developer's machine showed 20
+      NEW test failures beyond the epic's own changes, all with the identical pattern -- a run's
+      status came back `awaiting-consus` where the test expected `waiting_on_human`. Root cause,
+      confirmed directly: a real Consus instance happens to be running locally right now
+      (`lsof -i :8722` shows a live node process; `curl localhost:8722/api/decisions` responds).
+      Because `kickoff-engine.ts`'s call to `postQuestionToConsusDecisionApi()` is unconditional
+      (finding 2 above), any test asserting `waiting_on_human` silently breaks the moment a real
+      Consus instance is reachable on this machine -- these tests were never actually hermetic
+      against Consus reachability, they just happened to pass when no local Consus was running.
+      This is concrete, reproduced evidence for why the unconditional call (not just the
+      dedicated consus-*.ts modules) needs to be part of whatever this item's eventual fix scopes
+      in -- test isolation is a real, current casualty of the coupling, not a hypothetical one.
+
+      DECISION (2026-08-14T14:34Z): operator directive is full rip-out, not a design-note flag.
+      "you need to full rip it out and apart -- my real question, what is left of minerva at the
+      end -- do we have a plan, do we have an answer, is there a PoC of minerva acting correctly
+      as the hive planning system to be better?" This is no longer an open architectural question
+      to merely document -- it's prioritized for a real /plan cycle and execution, with a live PoC
+      (re-run the pause/resume test from epic minerva-value-audit, now against a ripped-out
+      Minerva plus the already-shipped fix-startrun-heimdall-routing fixes) as the acceptance bar.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T04:05:17Z"
+    priority: p0
+    severity: critical
+    assignee: null
+    linked_epic: rip-out-consus-coupling
+    linked_story:
+      - core-rip-out-consus-coupling
+      - document-consus-ripout-and-standalone-boundary
+    closed_reason: "merged to origin/dev (807c18e, via the fix-startrun-heimdall-routing chain) -- live pause/resume PoC confirmed waiting_on_human held throughout with a real Consus instance reachable, zero Consus references anywhere in run state."
+    closed_at: "2026-08-14T20:00:00Z"
+    state_history:
+      - { state: inbox, at: "2026-08-14T04:05:17Z" }
+      - { state: clarified, at: "2026-08-14T14:34:36Z" }
+      - { state: prioritized, at: "2026-08-14T14:34:36Z" }
+      - { state: plan-ready, at: "2026-08-14T15:12:49Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
+  - id: t-003
+    state: closed
+    kind: bug
+    title: "startRun (default SpawnDriver) fails end-to-end in a stock environment -- non-fail-open Heimdall call + task-type mismatch"
+    description: |
+      Confirmed via a live, black-box functional test (2 parallel real startRun invocations
+      against dev, no Minerva code changes made during the test -- see epic minerva-value-audit,
+      which was investigating Minerva's pause/resume value proposition and needed a live run to
+      validate it). Neither run ever produced a question; both failed identically before a single
+      real driving turn was ever spawned.
+
+      Root causes, precisely traced (read-only):
+
+      1. src/driver.ts's SpawnDriver.runTurn() calls resolveRuntimeRoute(), which does a
+         REQUIRED, non-fail-open fetch to Heimdall's /available-route?task-type=kickoff before
+         every turn -- unlike the sibling Heimdall lookup in src/agnostic-plan-driver.ts, which
+         is explicitly fail-open ("BULLETPROOF CLAUDE FALLBACK"). When this fetch throws, the
+         exception propagates uncaught out of startRun.
+      2. With no Heimdall running (the default state on a fresh machine), that's an uncaught
+         ECONNREFUSED / "fetch failed".
+      3. When a real Heimdall instance IS running (confirmed by manually starting one from the
+         sibling /Users/mdostal/Documents/work/pantheon/heimdall checkout as a diagnostic step,
+         not a code change), the failure becomes deterministic and reveals a second, independent
+         bug: Heimdall's live API only accepts task-type planning|build|review -- Minerva's
+         driver hardcodes task-type=kickoff, which Heimdall rejects with 400 invalid_task_type.
+         Real drift between Minerva and the service it depends on, not an environment artifact.
+      4. Even with a corrected task type, Heimdall separately reports the local
+         claude@mathew.dostal lane as "down" ("reason": "unconfigured -- no status recorded
+         yet"), so a task-type fix alone would not be sufficient to unblock a live run today.
+      5. All of the above surface identically to the ABI caller as
+         {"error":{"code":"UNKNOWN_METHOD"}} -- src/dispatch.ts's generic catch-all mislabels any
+         uncaught exception this way, so a real external caller cannot distinguish "you called a
+         nonexistent method" from "an internal routing dependency failed." A debuggability bug
+         independent of the routing bug itself.
+      6. Side effect: startRun calls allocateRun() (creating the run's workspace/worktree/
+         run.yaml on disk) BEFORE the failing drive turn, so every failed attempt leaves a
+         permanently stuck in_progress run with zero cleanup path -- 7 such orphaned runs
+         accumulated during the test (harmless, confined to a scratch MINERVA_HOME, not the real
+         ~/.minerva/runs, but the same would happen in a real deployment).
+
+      Impact: this blocks the entire premise of Minerva's value proposition -- the cold-start-
+      tolerant pause/resume ABI (the whole subject of epic minerva-value-audit) cannot be
+      exercised at all while startRun itself does not complete in a stock environment.
+
+      Recommend a proper /plan cycle to decide the fix: (a) make SpawnDriver's Heimdall route
+      lookup fail-open, mirroring agnostic-plan-driver.ts's existing pattern; (b) reconcile the
+      task-type vocabulary between Minerva's driver.ts and Heimdall's actual accepted values
+      (planning/build/review vs kickoff); (c) give dispatch.ts's catch-all a way to surface the
+      real underlying error/code instead of collapsing everything to UNKNOWN_METHOD; (d) decide
+      whether allocateRun() should roll back / mark the run failed rather than leaving it
+      permanently stuck in_progress when the first drive turn throws before completion.
+
+      Not resolved by this triage entry -- filed so it surfaces at the next standup. Separate
+      from and more urgent-looking than t-002 (the Consus-coupling architecture question): t-002
+      is an architecture/scope question, this is a live, reproducible functional break in the
+      core ABI's most basic method.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T04:17:00Z"
+    priority: p0
+    severity: critical
+    assignee: null
+    linked_epic: fix-startrun-heimdall-routing
+    linked_story:
+      - fix-heimdall-route-fail-fast-with-fallback
+      - add-upstream-error-code
+      - auto-cleanup-orphaned-runs-on-first-turn-failure
+      - fix-heimdall-task-type-value
+    closed_reason: "merged to origin/dev (807c18e) -- live pause/resume PoC confirmed startRun completes end-to-end with the MINERVA_FALLBACK_CLI/MINERVA_FALLBACK_MODEL fallback exercised live, no Heimdall running."
+    closed_at: "2026-08-14T20:00:00Z"
+    state_history:
+      - { state: inbox, at: "2026-08-14T04:17:00Z" }
+      - { state: clarified, at: "2026-08-14T04:33:46Z" }
+      - { state: prioritized, at: "2026-08-14T04:33:46Z" }
+      - { state: plan-ready, at: "2026-08-14T05:00:24Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
+  - id: t-004
+    state: closed
+    kind: bug
+    title: "kickoff-engine.test.ts: two tests expect frozen plan_runtime='gemini' but get undefined -- reproduced twice, independent of the Heimdall startRun fix"
+    description: |
+      Confirmed reproducible twice in this session, with identical details both times (once
+      before epic fix-startrun-heimdall-routing existed, once after it shipped and fixed the
+      unrelated startRun/UNKNOWN_METHOD/task-type/orphan-cleanup issues) -- so this is a distinct,
+      stable, pre-existing bug on dev, not caused by or fixed by that epic.
+
+      Failing tests (src/kickoff-engine.test.ts):
+      - "planning route freezes on run record when Heimdall returns a non-claude runtime"
+        (kickoff-engine.test.ts:196) -- expects record.plan_runtime === 'gemini', gets undefined.
+      - "submitAnswers keeps the frozen plan_runtime (no drift) and falls back correctly if CLI is
+        missing" (kickoff-engine.test.ts:244) -- same expected/actual mismatch.
+
+      Both tests spin up their own hermetic mock Heimdall server (createMockHeimdall(), a real
+      local HTTP server via node -e, no external dependency) and set MINERVA_HEIMDALL_URL /
+      MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL to point at it -- they are NOT the seed-repo issue, NOT
+      the live-Consus-service issue (t-002), and NOT anything touched by
+      fix-startrun-heimdall-routing's 4 stories (which fixed resolveRuntimeRoute()'s error
+      handling and availableRouteUrl()'s task-type value, not the plan_runtime-freezing logic this
+      test exercises). Given they mock Heimdall themselves, the failure is very likely in
+      Minerva's own plan_runtime-freezing code path (wherever `record.plan_runtime` gets set from
+      the resolved route), not an environment/reachability problem.
+
+      ROOT CAUSE FOUND (2026-08-14T18:10Z): not a bug in the freezing code path -- the two tests
+      are stale against a deliberate, documented guard added by the runner-agnostic PLAN driver
+      work (commit 9b79947, PR #22, merged to main just before this session's kickoff).
+      src/agnostic-plan-driver.ts:112: `if (process.env.MINERVA_TEST_DRIVE_PROMPT) return null;`
+      -- a "bulletproof claude fallback" test seam (comment: "the automated suite injects a fake
+      driver and swaps the drive prompt; never reach for the network or a real runtime there").
+      kickoff-engine.test.ts's env() helper sets MINERVA_TEST_DRIVE_PROMPT unconditionally for
+      EVERY test in the file (needed to keep its real `claude -p` subprocess spawns cheap/
+      scripted) -- so resolveAgnosticPlanDriver() always short-circuits to null before ever
+      reaching Heimdall's mocked route, and kickoff-engine.ts:297 never sets plan_runtime/
+      plan_model, regardless of what the mock Heimdall server returns. The sibling tests
+      expecting `plan_runtime === undefined` ("falls back to claude", "stays absent when Heimdall
+      explicitly returns claude") pass trivially -- that's the ONLY reachable behavior in this
+      file's fixture now. This also means real positive-path coverage (resolveAgnosticPlanDriver
+      actually picking a non-claude runtime) has a genuine gap: agnostic-plan-driver.test.ts only
+      covers the two null-return guards (test mode, feature off), never the actual resolution
+      path, because exercising it needs a real ported CLI + opencode binary on disk with no
+      dependency-injection seam to fake them.
+
+      DECISION: scope is now small and unambiguous -- fix the two stale test expectations to
+      match the deliberately-guarded current behavior (rewrite, not delete, so the guard itself
+      stays regression-tested); file the deeper positive-path coverage gap as its own follow-on
+      triage item (t-007) rather than pulling a DI refactor into this fix. Fast-tracked to
+      plan-ready; executing directly, no research-brief/grill ceremony, consistent with t-005.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T05:26:55Z"
+    priority: p2
+    severity: low
+    assignee: null
+    linked_epic: fix-kickoff-engine-plan-runtime-tests
+    linked_story: fix-kickoff-engine-plan-runtime-tests
+    closed_reason: "merged to origin/dev (807c18e) -- kickoff-engine.test.ts fully clean on the final full-suite run."
+    closed_at: "2026-08-14T20:00:00Z"
+    state_history:
+      - { state: inbox, at: "2026-08-14T05:26:55Z" }
+      - { state: clarified, at: "2026-08-14T18:10:00Z" }
+      - { state: prioritized, at: "2026-08-14T18:10:00Z" }
+      - { state: plan-ready, at: "2026-08-14T18:10:00Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
+  - id: t-007
+    state: closed
+    kind: feature
+    title: "No test coverage for resolveAgnosticPlanDriver's actual positive path (picking a non-claude Heimdall-routed runtime) -- only the null-return guards are tested"
+    description: |
+      Surfaced while root-causing t-004. src/agnostic-plan-driver.ts's resolveAgnosticPlanDriver()
+      has 5 short-circuit-to-null guards (feature off, test mode, unreachable/claude route, missing
+      ported CLI, missing opencode binary) but the actual success path -- constructing a real
+      AgnosticPlanDriver from a resolved non-claude route -- has zero test coverage anywhere.
+      agnostic-plan-driver.test.ts only covers 2 of the 5 guards (test mode, feature off).
+      kickoff-engine.test.ts's two plan_runtime tests (fixed via t-004) can never reach this path
+      either, since that file's fixture always sets MINERVA_TEST_DRIVE_PROMPT.
+
+      Blocker: agnosticPlanCliPath() and opencodeAvailable() (agnostic-plan-driver.ts:36,70) have
+      no dependency-injection seam -- they hit the real filesystem / spawn a real `opencode
+      --version` check. A clean unit test needs either (a) a DI refactor to inject these as
+      parameters/overridable functions, or (b) an environment-gated live integration test (skip
+      unless a real ported CLI + opencode are present on the test machine, similar to other
+      live-driver tests in this repo).
+
+      Not investigated further -- filed so it surfaces at standup. Needs a /plan cycle to pick the
+      approach (DI refactor vs. gated live test) once picked up.
+
+      CORRECTION (2026-08-14T20:15Z): this triage entry was factually wrong. Before starting the
+      DI refactor the operator approved, a final check of src/full-loop.test.ts (a sibling file
+      from the separate minerva-value-audit epic, not cross-referenced when this was filed) showed
+      its "full autonomous loop: claude kickoff + gemini planning" test already exercises exactly
+      this positive path: a mocked Heimdall route returning a non-claude runtime, a real
+      HIVE_PLAN_AGNOSTIC_CLI override pointing at a real executable fake CLI, OPENCODE_BIN=echo
+      satisfying opencodeAvailable(), and an assertion that record.plan_runtime === "gemini" /
+      plan_model === "gemini-2.0-flash-exp". Confirmed passing (npx tsx --test
+      src/full-loop.test.ts, both tests ok) and has been passing all night -- never appeared in
+      any failure list across every test run tonight. agnosticPlanCliPath()/opencodeAvailable()
+      already have working override seams (HIVE_PLAN_AGNOSTIC_CLI, OPENCODE_BIN); no DI refactor
+      is needed or was built. Closing as a filing error, not a shipped fix -- the root mistake was
+      only checking agnostic-plan-driver.test.ts and kickoff-engine.test.ts for coverage during
+      t-004's investigation, not the full test suite.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T18:10:00Z"
+    priority: null
+    severity: null
+    assignee: null
+    linked_epic: null
+    linked_story: null
+    closed_reason: "filing error -- positive-path coverage already existed in src/full-loop.test.ts, not cross-referenced when this was filed. No fix needed; see CORRECTION note above."
+    closed_at: "2026-08-14T20:15:00Z"
+    state_history:
+      - { state: inbox, at: "2026-08-14T18:10:00Z" }
+      - { state: closed, at: "2026-08-14T20:15:00Z" }
+  - id: t-005
+    state: closed
+    kind: feature
+    title: "Remove bin/ideate-to-consus.mjs -- the idea<->Consus round-trip loop belongs in the Pantheon layer, not in Minerva"
+    description: |
+      Follow-on to t-002/epic rip-out-consus-coupling. That epic ripped Consus coupling out of
+      Minerva's core ABI/engine/CLI but deliberately kept bin/ideate-to-consus.mjs as an
+      excluded-but-present sibling utility (header note only), since its whole purpose is a
+      Consus/Janus round-trip and it sits outside the standalone-core claim.
+
+      Operator directive (2026-08-14): "the ideas from consus to minerva and back and forth is a
+      layer living in the pantheon for a decision surface to be able to be made visible and the
+      plugins work it, i'll navigate that soonish." This reframes the ideation<->decision-surface
+      loop as Pantheon-owned integration glue, not something that should live inside Minerva's
+      repo at all -- even as an excluded, opt-in sibling script. Full removal, not just a
+      boundary note.
+
+      Scope (confirmed via grep, read-only):
+      - bin/ideate-to-consus.mjs (634 lines) -- the tool itself, no dedicated test file.
+      - docs/ideation/pan-6965/* and docs/ideation/pan-6963/ingested-context.md -- demo artifacts
+        generated by the tool; dead weight once the tool that produced/consumes them is gone.
+      - tests/e2e/ForkedDriverFlow.test.ts -- two dead MINERVA_CONSUS_DECISIONS_URL env var
+        references (save/clear-for-test/restore triple); confirmed zero remaining reads of that
+        env var anywhere in src/ or bin/ after the earlier rip-out, so this is inert leftover, not
+        live coupling.
+      - CHANGELOG.md's existing Unreleased entry for rip-out-consus-coupling describes
+        ideate-to-consus.mjs as "excluded via header note" -- now stale, needs amending (nothing
+        released yet, so amend in place rather than layering a contradicting bullet).
+
+      Explicitly NOT in scope (confirmed read-only, not part of this loop):
+      - src/run-manager.ts's defaultSeedRepoPath() / "consus-seeds" default git remote naming --
+        a seed-repo template naming convention, not a live Consus API call or part of the
+        ideation<->decision-surface round trip this item is about.
+      - VISION.md / README.md's "Delphi / Consus (human decision surface)" mentions -- these
+        correctly describe the wider Pantheon diagram (an external consumer of Minerva's generic
+        waiting_on_human/submitAnswers channel), which is exactly the operator's stated target
+        shape ("layer living in the pantheon"), not Minerva-side coupling code.
+      - .pHive/epics/minerva-auto-resume/* and .pHive/epics/fix-route-response-contract/* --
+        historical, already-merged epic docs; kept as history per the same convention used for
+        rip-out-consus-coupling's own docs.
+
+      DECISION: scope is small, unambiguous, and fully operator-directed in chat -- executing
+      directly (no research-brief/grill ceremony) rather than spinning up full planning agents,
+      consistent with how t-002's DECISION note was handled. Fast-tracked straight to plan-ready.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T16:30:00Z"
+    priority: p2
+    severity: low
+    assignee: null
+    linked_epic: remove-ideate-to-consus
+    linked_story: remove-ideate-to-consus-tool
+    closed_reason: "merged to origin/dev (807c18e) -- bin/ideate-to-consus.mjs and its demo artifacts confirmed gone."
+    closed_at: "2026-08-14T20:00:00Z"
+    state_history:
+      - { state: inbox, at: "2026-08-14T16:30:00Z" }
+      - { state: clarified, at: "2026-08-14T16:30:00Z" }
+      - { state: prioritized, at: "2026-08-14T16:30:00Z" }
+      - { state: plan-ready, at: "2026-08-14T16:30:00Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }
+  - id: t-006
+    state: closed
+    kind: bug
+    title: "Broad test-suite flakiness on this dev machine: 10-17 live-subprocess/timing-sensitive tests fail under a full `npm test` run, unrelated to any code change"
+    description: |
+      Surfaced while verifying story remove-ideate-to-consus-tool (epic remove-ideate-to-consus,
+      t-005) was clean before commit. A full `npm test` run showed 17 failures out of 209/201
+      tests; re-running just the 4 affected files in isolation (deadline-renewal-ownership.test.ts,
+      kickoff-engine.test.ts, prebaked-plan-defaults.test.ts, run-manager.test.ts) still showed
+      10/29 failures, with individual test durations of 13-47 seconds -- these spawn real `claude`
+      subprocesses / hit real timing windows rather than running hermetically.
+
+      Confirmed NOT caused by the remove-ideate-to-consus change: none of the failing files
+      (src/deadline-renewal-ownership.test.ts, src/kickoff-engine.test.ts,
+      src/prebaked-plan-defaults.test.ts, src/run-manager.test.ts, src/driver.test.ts,
+      src/real-forked-hive-driver.test.ts, src/plan-runner.test.ts) import or reference
+      bin/ideate-to-consus.mjs, docs/ideation/*, or tests/e2e/ForkedDriverFlow.test.ts (grep-
+      confirmed) -- ideate-to-consus.mjs was a standalone CLI entrypoint with no importers.
+
+      Two of the 17 are already t-004 (kickoff-engine.test.ts plan_runtime='gemini' tests).
+      The rest are new observations, not yet individually root-caused:
+      - src/deadline-renewal-ownership.test.ts: "an answer submitted long after the envelope's
+        on-disk deadline has lapsed still lands correctly" -- 42s duration, real-time-window test.
+      - src/driver.test.ts: "SIGINT to a live SpawnDriver-driven process kills the in-flight
+        claude child -- no orphan" -- spawns a real subprocess.
+      - src/prebaked-plan-defaults.test.ts: ~8 failures across auto/agent-mode headless-plan tests
+        -- likely depends on live Heimdall/claude routing, same category as t-003's root cause.
+      - src/real-forked-hive-driver.test.ts: 2 failures on real multi-turn dispatch/closure tests.
+      - src/run-manager.test.ts / src/plan-runner.test.ts: listRuns / workspace-isolation tests --
+        one of these was already noted as a "confirmed-transient" flake earlier this session.
+
+      Working hypothesis (not yet verified): most of these need a live Heimdall instance and/or a
+      real `claude` CLI runtime to behave deterministically -- the same underlying environment gap
+      that motivated t-003/fix-startrun-heimdall-routing, just hitting more test files than
+      startRun alone. Needs a proper /plan cycle to confirm root cause per file and decide fix
+      (better test isolation/mocking vs. documenting a required local dev environment).
+
+      Not resolved by this triage entry -- filed so it surfaces at standup rather than getting
+      lost. Did not block story remove-ideate-to-consus-tool: that change is structurally unrelated
+      (no import chain to any affected file) and typecheck + the specifically-touched test file
+      (ForkedDriverFlow.test.ts) both passed clean in isolation.
+
+      ROOT CAUSE FOUND (2026-08-14T19:30Z): the "needs live Heimdall/claude" working hypothesis
+      was wrong. After merging minerva-value-audit + the fix-startrun-heimdall-routing chain into
+      dev, a fresh full `npm test` run showed exactly 7 failures (down from 17 -- most of the
+      original list, including every run-manager.test.ts/plan-runner.test.ts/driver.test.ts SIGINT
+      failure, did not reproduce, confirming they were transient flakes under load, not stable
+      bugs). All 7 remaining failures root-caused precisely, two distinct causes, neither related
+      to Heimdall/claude reachability:
+      1. src/prebaked-plan-defaults.test.ts (4 failures): unlike full-loop.test.ts (fixed by
+         minerva-value-audit's fix-seed-repo-test-hermeticity story), this file's before() never
+         self-provisions MINERVA_SEED_REPO via createSeedRepo() -- every startRun() in the file
+         omits target_repo, so allocateRun() falls through to run-manager's resolveSeedRepo(),
+         which defaults to ~/repos/consus-seeds and fails hard on any machine without that exact
+         directory. A gap the seed-repo-hermeticity story's scope missed, not a new bug.
+      2. src/deadline-renewal-ownership.test.ts + src/real-forked-hive-driver.test.ts (3 failures):
+         both hardcode `FORK_PATH = "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork"`
+         -- a DIFFERENT username (dostal) than this machine's actual user (mdostal). The path
+         literally does not exist here. These are deliberate, AD-1-compliant live integration
+         tests (no mocking the CLI boundary) against a local plugin-hive-fork checkout -- the
+         right fix is not to mock them but to make the path MINERVA_HIVE_PLUGIN_DIR-configurable
+         (the mechanism the code under test already uses) with the old hardcoded value as a
+         fallback default, and skip gracefully (node:test's {skip: reason} option) rather than
+         hard-fail when neither resolves to a real checkout on disk.
+
+      DECISION: fix (1) for real (self-provision, matching the sibling pattern exactly); fix (2)
+      by making the path configurable + skipping gracefully with a clear, actionable message.
+      Both are small, mechanical, fully understood -- executing directly, no research-brief/grill
+      ceremony, consistent with t-004/t-005. Fast-tracked to plan-ready.
+    reporter: "mdostal"
+    reported_at: "2026-08-14T16:55:00Z"
+    priority: p2
+    severity: low
+    assignee: null
+    linked_epic: fix-test-suite-flakiness-t006
+    linked_story: fix-test-suite-flakiness-t006
+    closed_reason: "merged to origin/dev (807c18e) -- full suite verified clean (205/208 pass, 0 fail, 3 correct skips) before push."
+    closed_at: "2026-08-14T20:00:00Z"
+    state_history:
+      - { state: inbox, at: "2026-08-14T16:55:00Z" }
+      - { state: clarified, at: "2026-08-14T19:30:00Z" }
+      - { state: prioritized, at: "2026-08-14T19:30:00Z" }
+      - { state: plan-ready, at: "2026-08-14T19:30:00Z" }
+      - { state: closed, at: "2026-08-14T20:00:00Z" }

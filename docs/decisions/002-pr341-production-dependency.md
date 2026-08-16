@@ -1,6 +1,29 @@
 # 002 — ForkedHiveDriver's Production Path Depends on an Unmerged PR
 
-**Status:** open dependency, tracked · **recheck_by: 2026-09-13**
+**Status:** open dependency, tracked, operator-accepted interim stance in place · **recheck_by: 2026-09-13**
+
+---
+
+## Interim operating stance (2026-08-16)
+
+Operator decision: Minerva ships now with the explicit expectation that operators set
+`MINERVA_HIVE_PLUGIN_DIR` at a `plugin-hive-fork` checkout (or, once merged, a `hive-workshop`
+checkout) to run `MINERVA_DRIVER=forked` — this is the accepted production posture for the
+`ForkedHiveDriver` path until the upstream gap below closes, not a blocker on releasing.
+"We'll clean that as we go" — this doc's **Recheck** section stays the mechanism for updating that
+stance once the dependency actually clears; no other change to release process.
+
+Progress on closing the gap: `firefly-events/plugin-hive#341` targets the `plugin-hive`
+release-mirror repo, which carries none of the maintainer's real CI/review automation (that lives
+in `firefly-events/hive-workshop`, the actual dev repo `plugin-hive` publishes a curated subset
+from — see `scripts/publish-release.sh`). Filed **`firefly-events/hive-workshop#127`**
+(2026-08-16) — the same implementation, reconciled against `hive-workshop`'s `develop` tip (164
+commits of drift from PR #341's original plugin-hive-`develop` base at filing time), all 50 tests
+(19 pytest, 19 vitest, 12 shell) re-verified passing in that repo's own environment before
+opening. CodeRabbit review auto-picked it up on open (`SUCCESS`). Once #127 merges into
+`hive-workshop`'s `develop` and is promoted through the existing publish flow to `plugin-hive`,
+this doc's gap closes for real and the recheck below should confirm that rather than PR #341's
+own (now-superseded-as-the-landing-path) status.
 
 ---
 
@@ -84,16 +107,26 @@ queue schema's operator-driven-recheck posture — time-based auto-advance is de
 operator-driven, not automated), re-checking this dependency is a manual, dated action, not new
 tooling. To recheck:
 
-1. Run:
+1. Run (check the real landing path first — `hive-workshop#127` is what actually promotes to a
+   plugin-hive release; `plugin-hive#341` is the original PR against the release-mirror repo,
+   which never gets its own auto-pickup/CI since that lives in `hive-workshop`, superseded as the
+   landing path but left open as reference):
    ```
-   gh pr view 341 --repo firefly-events/plugin-hive --json state,reviewDecision,updatedAt
+   gh pr view 127 --repo firefly-events/hive-workshop --json state,reviewDecision,updatedAt,mergedAt
+   gh pr view 341 --repo firefly-events/plugin-hive --json state,reviewDecision,updatedAt,mergedAt
    ```
 2. Update this doc's status line based on the result:
-   - Still open → bump `recheck_by` another 30 days and note the check in this file.
-   - Merged → update this doc's **Status** to reflect that the production path now exists, and
-     flag `src/driver.ts`'s `pluginDirArgs()` comment and `docs/architecture.md`'s as-built note
-     for a follow-up story to drop the "ahead of PR #341 merging upstream" caveat and validate
-     `MINERVA_DRIVER=forked` against the real marketplace-installed plugin-hive.
+   - `hive-workshop#127` still open → bump `recheck_by` another 30 days and note the check in this
+     file.
+   - `hive-workshop#127` merged, but no newer `plugin-hive` release/tag published since → the
+     protocol exists in `hive-workshop`'s `develop` but hasn't reached a `plugin-hive` release yet
+     via `scripts/publish-release.sh`'s promotion flow. Note the merge, keep the interim stance
+     above in place, and recheck again in ~2 weeks for a publish.
+   - A `plugin-hive` release/tag published *after* #127's merge date → update this doc's
+     **Status** to reflect that the production path now exists, and flag `src/driver.ts`'s
+     `pluginDirArgs()` comment and `docs/architecture.md`'s as-built note for a follow-up story to
+     drop the "ahead of PR #341 merging upstream" caveat and validate `MINERVA_DRIVER=forked`
+     against the real marketplace-installed plugin-hive.
 
 ---
 

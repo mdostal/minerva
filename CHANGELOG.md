@@ -30,6 +30,7 @@ All notable changes to Minerva are documented in this file.
 - **`fix-kickoff-engine-plan-runtime-tests` release finalization.** Applied the planned `patch` version bump (`0.1.4` → `0.1.5`).
 - **Merge reconciliation.** `minerva-value-audit` and the `fix-startrun-heimdall-routing` chain were sibling branches cut from the same `dev` point and bumped the patch version independently. Reconciled to `0.1.5` (the chain's tip) on merge -- both lines' changes are included; no functional version conflict, just two parallel patch counters converging.
 - **`fix-test-suite-flakiness-t006` release finalization.** Applied the planned `patch` version bump (`0.1.5` → `0.1.6`).
+- **Operator decision (2026-08-16): `ForkedHiveDriver`'s production dependency stays open, and that's accepted, not blocking.** Minerva ships now with the explicit expectation that operators set `MINERVA_HIVE_PLUGIN_DIR` at a `plugin-hive-fork` checkout to use `MINERVA_DRIVER=forked` — no code change, just a documented interim posture (see `docs/decisions/002-pr341-production-dependency.md`). Filed `firefly-events/hive-workshop#127`, porting `firefly-events/plugin-hive#341`'s headless-question-protocol implementation into the real dev repo behind plugin-hive's release mirror (`hive-workshop` carries the CI/CodeRabbit automation the release-mirror PR never had), reconciled against 164 commits of drift, all 50 tests re-verified in that repo's own environment before opening.
 
 ## [0.1.1] - 2026-07-26
 

@@ -1,8 +1,12 @@
 {
-  "name": "minerva",
+  "name": "pantheon-minerva",
   "version": "0.1.6",
   "description": "Minerva — the Pantheon's Planner. Agent-drivable idea-to-spec engine.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mdostal/minerva.git"
+  },
   "bin": {
     "minerva": "./bin/minerva.ts"
   },

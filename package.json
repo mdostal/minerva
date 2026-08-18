@@ -1,6 +1,6 @@
 {
   "name": "pantheon-minerva",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Minerva — the Pantheon's Planner. Agent-drivable idea-to-spec engine.",
   "type": "module",
   "repository": {

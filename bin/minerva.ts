@@ -8,6 +8,7 @@ import { submitAnswers } from "../src/kickoff-engine.ts";
 import { getRunStatus, type Channel } from "../src/run-manager.ts";
 import { getOutput, type CompletedEpic } from "../src/output-emitter.ts";
 import { fileAllStoriesToMultica } from "../src/plan-runner.ts";
+import { runStdioServer } from "../src/mcp-server.ts";
 import { readFileSync } from "node:fs";
 
 function readStdin(): Promise<string> {
@@ -24,7 +25,15 @@ function readStdin(): Promise<string> {
 
 async function main() {
   if (process.argv.length > 2) {
-    await mainArgs(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    // "mcp" was previously unreachable (mainArgs's flag parser throws "Unknown argument" for
+    // anything that isn't a --flag it recognizes) -- safe, backward-compatible extension point,
+    // no existing caller could have relied on this positional word meaning anything.
+    if (argv[0] === "mcp") {
+      await runStdioServer();
+      return;
+    }
+    await mainArgs(argv);
     return;
   }
 
@@ -174,6 +183,9 @@ const ARG_HELP = `minerva — JSON-over-stdio
 
   minerva --resume <run_id> --question <question_id> --answer "<answer>" [--channel human|agent]
           [--file-to-multica --parent <issue_id>] [--project <project_id>] [--target-repo owner/repo]
+  minerva mcp                 run as an MCP server (stdio transport) exposing the full ABI as tools
+  minerva agent init          detect installed agent CLIs, register the MCP server, install usage skills
+  minerva agent status        report what's currently registered/installed, without changing anything
 `;
 
 main();

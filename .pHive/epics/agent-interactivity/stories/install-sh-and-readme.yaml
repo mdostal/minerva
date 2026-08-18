@@ -3,6 +3,7 @@ epic: agent-interactivity
 title: "install.sh + README one-command install + npm distribution-name fix"
 complexity: low
 depends_on: [agent-init-status, usage-skills]
+status: shipped
 
 description: >
   npm's existing "minerva" is an unrelated, unmaintained data-visualization package

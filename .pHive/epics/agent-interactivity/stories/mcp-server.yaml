@@ -3,6 +3,7 @@ epic: agent-interactivity
 title: "minerva mcp — MCP server exposing the existing 8-method ABI"
 complexity: medium
 depends_on: []
+status: shipped
 
 description: >
   src/mcp-server.ts wraps dispatch.ts (Minerva's single existing entrypoint) as 8 MCP tools via

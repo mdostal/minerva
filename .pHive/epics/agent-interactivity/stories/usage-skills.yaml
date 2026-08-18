@@ -3,6 +3,7 @@ epic: agent-interactivity
 title: "Usage skill(s) teaching the correct Minerva interaction loop"
 complexity: low
 depends_on: [mcp-server]
+status: shipped
 
 description: >
   src/agent-skills/minerva-plan/SKILL.md -- one skill (not four like Portunus's ask/drop/

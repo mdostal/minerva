@@ -3,6 +3,7 @@ epic: agent-interactivity
 title: "minerva agent init / minerva agent status — harness detection + MCP registration"
 complexity: medium
 depends_on: [mcp-server]
+status: shipped
 
 description: >
   src/agent-setup.ts mirrors Portunus's src/portunus/agent_setup.py structure closely, adapted to

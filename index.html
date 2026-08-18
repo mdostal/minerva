@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minerva — The Pantheon's Planner</title>
+<meta name="description" content="Minerva turns a raw idea into an approved, planned spec — headless, agent-drivable, no UI.">
+
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="icon" href="assets/favicon.ico" sizes="any">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  /* ---------- tokens ---------- */
+  :root {
+    --ink: #12162A;
+    --surface: #1E2A4A;
+    --surface-2: #26355C;
+    --ivory: #F4E9D8;
+    --ivory-dim: rgba(244, 233, 216, 0.66);
+    --ivory-faint: rgba(244, 233, 216, 0.38);
+    --gold: #C99A46;
+    --gold-bright: #E3BC72;
+    --line: rgba(244, 233, 216, 0.14);
+    --line-strong: rgba(244, 233, 216, 0.26);
+    --shadow: rgba(8, 10, 20, 0.35);
+
+    --font-display: "Fraunces", ui-serif, Georgia, serif;
+    --font-body: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* light theme: system default via media query, no explicit stamp needed on a
+     static page with no toggle -- still structured for a future [data-theme]
+     stamp so it's provable/testable in isolation. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ink: #F4E9D8;
+      --surface: #FFFDF7;
+      --surface-2: #FBF3E3;
+      --ivory: #1E2A4A;
+      --ivory-dim: rgba(30, 42, 74, 0.66);
+      --ivory-faint: rgba(30, 42, 74, 0.34);
+      --gold: #8C6A28;
+      --gold-bright: #6E5220;
+      --line: rgba(30, 42, 74, 0.14);
+      --line-strong: rgba(30, 42, 74, 0.24);
+      --shadow: rgba(30, 42, 74, 0.12);
+    }
+  }
+  :root[data-theme="light"] {
+    --ink: #F4E9D8;
+    --surface: #FFFDF7;
+    --surface-2: #FBF3E3;
+    --ivory: #1E2A4A;
+    --ivory-dim: rgba(30, 42, 74, 0.66);
+    --ivory-faint: rgba(30, 42, 74, 0.34);
+    --gold: #8C6A28;
+    --gold-bright: #6E5220;
+    --line: rgba(30, 42, 74, 0.14);
+    --line-strong: rgba(30, 42, 74, 0.24);
+    --shadow: rgba(30, 42, 74, 0.12);
+  }
+  :root[data-theme="dark"] {
+    --ink: #12162A;
+    --surface: #1E2A4A;
+    --surface-2: #26355C;
+    --ivory: #F4E9D8;
+    --ivory-dim: rgba(244, 233, 216, 0.66);
+    --ivory-faint: rgba(244, 233, 216, 0.38);
+    --gold: #C99A46;
+    --gold-bright: #E3BC72;
+    --line: rgba(244, 233, 216, 0.14);
+    --line-strong: rgba(244, 233, 216, 0.26);
+    --shadow: rgba(8, 10, 20, 0.35);
+  }
+
+  /* ---------- reset ---------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { color-scheme: dark light; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--ivory);
+    font-family: var(--font-body);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  img { max-width: 100%; display: block; }
+  a { color: var(--gold-bright); text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  a:hover { color: var(--gold); }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--gold-bright);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; margin: 0; }
+  code, pre { font-family: var(--font-mono); }
+
+  .wrap {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
+
+  /* ---------- watermark owl (decorative, reuses the exact icon mark's path
+     data -- not a redesign, just the same artwork used unbadged as a ground
+     texture) ---------- */
+  .owl-mark { fill: currentColor; }
+
+  /* ---------- hero ---------- */
+  .hero {
+    position: relative;
+    overflow: hidden;
+    padding: 96px 0 88px;
+    border-bottom: 1px solid var(--line);
+  }
+  .hero-watermark {
+    position: absolute;
+    top: 50%;
+    right: -120px;
+    transform: translateY(-50%) rotate(-6deg);
+    width: 560px;
+    height: 560px;
+    color: var(--ivory);
+    opacity: 0.05;
+    pointer-events: none;
+  }
+  .badge {
+    width: 64px;
+    height: 64px;
+    border-radius: 15px;
+    display: block;
+    box-shadow: 0 10px 30px var(--shadow);
+  }
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 34px;
+  }
+  .eyebrow .label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ivory-dim);
+  }
+  .wordmark {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ivory);
+  }
+  h1.thesis {
+    font-size: clamp(34px, 5.4vw, 54px);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    max-width: 15ch;
+  }
+  h1.thesis em {
+    font-style: italic;
+    color: var(--gold-bright);
+  }
+  .dek {
+    margin: 22px 0 0;
+    max-width: 52ch;
+    font-size: 19px;
+    color: var(--ivory-dim);
+  }
+
+  /* ---------- install block ---------- */
+  .install {
+    margin-top: 40px;
+    max-width: 620px;
+  }
+  .install-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ivory-faint);
+    margin-bottom: 10px;
+  }
+  .terminal {
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    box-shadow: 0 18px 40px var(--shadow);
+  }
+  .terminal code {
+    flex: 1;
+    min-width: 0;
+    font-size: 14.5px;
+    color: var(--ivory);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .terminal .prompt { color: var(--gold); user-select: none; }
+  .cursor {
+    display: inline-block;
+    width: 7px;
+    height: 15px;
+    background: var(--gold-bright);
+    margin-left: 2px;
+    vertical-align: -2px;
+    animation: blink 1.1s steps(1) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+  @keyframes blink { 50% { opacity: 0; } }
+  .copy-btn {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--ivory-dim);
+    background: transparent;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .copy-btn:hover { color: var(--ivory); border-color: var(--gold); }
+  .install-note {
+    margin: 14px 0 0;
+    font-size: 14px;
+    color: var(--ivory-faint);
+  }
+  .install-note a { color: inherit; text-decoration-line: underline; }
+
+  .hero-links {
+    margin-top: 30px;
+    display: flex;
+    gap: 22px;
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+  }
+  .hero-links a { text-decoration: none; border-bottom: 1px solid var(--line-strong); padding-bottom: 2px; }
+  .hero-links a:hover { border-color: var(--gold); }
+
+  /* ---------- sections ---------- */
+  section.band { padding: 76px 0; border-bottom: 1px solid var(--line); }
+  section.band:last-of-type { border-bottom: none; }
+  .kicker {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 16px;
+  }
+  h2.head { font-size: clamp(26px, 3.4vw, 34px); max-width: 20ch; margin-bottom: 22px; }
+  .lede { font-size: 18px; color: var(--ivory-dim); max-width: 58ch; }
+  .prose { max-width: 62ch; color: var(--ivory-dim); }
+  .prose p + p { margin-top: 16px; }
+  .prose strong { color: var(--ivory); font-weight: 600; }
+  .prose em { color: var(--gold-bright); font-style: normal; }
+
+  /* ---------- flow diagram ---------- */
+  .flow {
+    margin-top: 44px;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .flow-node {
+    flex: 0 0 auto;
+    min-width: 148px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    padding: 16px 16px;
+  }
+  .flow-node.is-minerva {
+    border-color: var(--gold);
+    box-shadow: 0 0 0 1px var(--gold) inset;
+  }
+  .flow-node .name {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 16px;
+    color: var(--ivory);
+  }
+  .flow-node .role {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--ivory-dim);
+    line-height: 1.4;
+  }
+  .flow-arrow {
+    flex: 0 0 auto;
+    width: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ivory-faint);
+    font-family: var(--font-mono);
+    font-size: 15px;
+  }
+
+  /* ---------- ABI ledger ---------- */
+  .abi-loop { margin-top: 40px; }
+  .abi-loop-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ivory-faint);
+    margin-bottom: 14px;
+  }
+  ol.abi-list {
+    list-style: none;
+    margin: 0 0 36px;
+    padding: 0;
+    counter-reset: abi;
+    border-top: 1px solid var(--line);
+  }
+  ol.abi-list li {
+    counter-increment: abi;
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    gap: 18px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--line);
+    align-items: baseline;
+  }
+  ol.abi-list li::before {
+    content: counter(abi);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--gold);
+  }
+  ol.abi-list .method {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    color: var(--ivory);
+  }
+  ol.abi-list .desc {
+    display: block;
+    margin-top: 3px;
+    font-size: 14.5px;
+    color: var(--ivory-dim);
+    font-family: var(--font-body);
+  }
+  .abi-utility {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .abi-utility span {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ivory-dim);
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+
+  /* ---------- footer ---------- */
+  footer {
+    padding: 56px 0 72px;
+  }
+  .footer-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 24px;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--line);
+  }
+  .footer-brand { display: flex; align-items: center; gap: 12px; }
+  .footer-brand .badge { width: 34px; height: 34px; border-radius: 9px; }
+  .footer-brand .name { font-family: var(--font-display); font-weight: 600; font-size: 16px; }
+  .footer-links {
+    display: flex;
+    gap: 26px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+  .footer-links a { text-decoration: none; }
+  .footer-bottom {
+    margin-top: 22px;
+    font-size: 13.5px;
+    color: var(--ivory-faint);
+  }
+  .footer-bottom a { color: var(--ivory-dim); }
+
+  @media (max-width: 640px) {
+    .hero { padding: 64px 0 56px; }
+    .hero-watermark { width: 380px; height: 380px; right: -160px; }
+    section.band { padding: 56px 0; }
+    .terminal { flex-direction: column; align-items: stretch; }
+    .copy-btn { align-self: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <svg class="hero-watermark" viewBox="0 0 64 64" aria-hidden="true">
+    <g class="owl-mark">
+      <polygon points="13,29 22,9 30,29"/>
+      <polygon points="34,29 42,9 51,29"/>
+      <path d="M32,59 C19,59 11,48 11,36 C11,29 14,24 19,23 L45,23 C50,24 53,29 53,36 C53,48 45,59 32,59 Z"/>
+    </g>
+  </svg>
+  <div class="wrap">
+    <div class="eyebrow">
+      <img class="badge" src="assets/icon.svg" width="64" height="64" alt="Minerva">
+      <div>
+        <div class="wordmark">Minerva</div>
+        <div class="label">The Pantheon's Planner</div>
+      </div>
+    </div>
+
+    <h1 class="thesis">Turns an idea into an approved plan. <em>Headless.</em></h1>
+    <p class="dek">
+      Minerva takes a raw idea and drives it to a finished, human-approved spec — an epic with
+      dependency-tracked stories — over a stable subprocess ABI. No terminal session to babysit,
+      no UI of its own. Free and open source.
+    </p>
+
+    <div class="install">
+      <div class="install-label">Get your agent using it</div>
+      <div class="terminal">
+        <code><span class="prompt">$</span> curl -fsSL https://mdostal.github.io/minerva/install.sh | bash<span class="cursor" aria-hidden="true"></span></code>
+        <button class="copy-btn" type="button" data-copy="curl -fsSL https://mdostal.github.io/minerva/install.sh | bash">Copy</button>
+      </div>
+      <p class="install-note">
+        Installs the CLI, wires the MCP server into whatever agent harness is already on the
+        machine (Claude Code, Codex CLI today), and drops in the usage skill so an agent gets the
+        full <code>startRun → poll → answer → repeat</code> pattern immediately. Already
+        installed? <code>minerva agent init</code> is the same thing, idempotent.
+      </p>
+    </div>
+
+    <div class="hero-links">
+      <a href="https://github.com/mdostal/minerva">GitHub repo</a>
+      <a href="https://github.com/mdostal/minerva#readme">Read the README</a>
+      <a href="https://github.com/mdostal/minerva#quickstart">Quickstart</a>
+    </div>
+  </div>
+</header>
+
+<section class="band">
+  <div class="wrap">
+    <div class="kicker">What it does</div>
+    <h2 class="head">Planning used to mean a human, one idea at a time.</h2>
+    <div class="prose">
+      <p>
+        Getting from a raw idea to an approved plan meant a human hand-running
+        <code>/hive:kickoff</code> and <code>/hive:plan</code> in a terminal. Minerva makes that
+        step a <strong>service you can drive from anywhere</strong>: feed it an idea over a stable
+        subprocess ABI, and it drives plugin-hive's kickoff and plan skills against an isolated
+        per-run git workspace, surfaces exactly the questions that need a human answer, and
+        returns the finished spec.
+      </p>
+      <p>
+        Splitting the planner out of the terminal is what lets you <strong>feed many ideas at
+        once</strong> — each idea gets its own run and its own decision thread, in parallel,
+        instead of a serial per-idea session. There is <em>no daemon</em>; nothing advances a run
+        on its own. A run only moves when a caller answers its questions.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <div class="kicker">How it fits</div>
+    <h2 class="head">One slot in the Pantheon, wired to the rest.</h2>
+    <p class="lede">
+      Minerva plans; it doesn't route and it doesn't provision. Ideas arrive already routed,
+      questions go to a human, and the approved output moves on to build the thing.
+    </p>
+    <div class="flow" role="img" aria-label="Flow: idea to Auriga, to Minerva, to Delphi and Consus for human decisions, to Vulcan, to the execution swarm.">
+      <div class="flow-node">
+        <div class="name">Auriga</div>
+        <div class="role">routes the idea in, hands the plan off</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node is-minerva">
+        <div class="name">Minerva</div>
+        <div class="role">runs the idea → plan loop</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">
+        <div class="name">Delphi / Consus</div>
+        <div class="role">human answers the open questions</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">
+        <div class="name">Vulcan</div>
+        <div class="role">provisions the repo</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">
+        <div class="name">Swarm</div>
+        <div class="role">execute → review → test → ship</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <div class="kicker">The ABI</div>
+    <h2 class="head">One JSON envelope in, one out. Fresh process every call.</h2>
+    <p class="lede">
+      Minerva's public interface is the Pantheon subprocess ABI itself —
+      <code>{method, params}</code> in, <code>{result}</code> or <code>{error}</code> out — wire
+      compatible with plugin-hive's task-tracking adapter ABI. The same eight methods run as an
+      MCP server (<code>minerva mcp</code>) for anything that speaks MCP.
+    </p>
+
+    <div class="abi-loop">
+      <div class="abi-loop-label">The core loop</div>
+      <ol class="abi-list">
+        <li><div class="method-wrap"><span class="method">startRun</span><span class="desc">hand Minerva a raw idea, get back a run_id</span></div></li>
+        <li><div class="method-wrap"><span class="method">getQuestions</span><span class="desc">pull the questions currently blocking the run</span></div></li>
+        <li><div class="method-wrap"><span class="method">submitAnswers</span><span class="desc">the only write path that advances a run</span></div></li>
+        <li><div class="method-wrap"><span class="method">getOutput</span><span class="desc">fetch the approved epic and its dependency-tracked stories</span></div></li>
+      </ol>
+    </div>
+
+    <div class="abi-loop-label">Also available</div>
+    <div class="abi-utility">
+      <span>capabilities</span>
+      <span>getRunStatus</span>
+      <span>listRuns</span>
+      <span>abortRun</span>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <img class="badge" src="assets/icon.svg" width="34" height="34" alt="">
+        <span class="name">Minerva</span>
+      </div>
+      <nav class="footer-links">
+        <a href="https://github.com/mdostal/minerva">GitHub</a>
+        <a href="https://github.com/mdostal/minerva#readme">README</a>
+        <a href="https://github.com/mdostal/minerva/blob/main/VISION.md">Vision</a>
+        <a href="install.sh">install.sh</a>
+      </nav>
+    </div>
+    <p class="footer-bottom">
+      Named for the Roman goddess of wisdom and strategic planning. Free and open source, always.
+      Built by <a href="https://mdostal.com">Mathew Dostal</a> — fractional CTO, Dostal Technology.
+    </p>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var btn = document.querySelector(".copy-btn");
+    if (!btn || !navigator.clipboard) return;
+    btn.addEventListener("click", function () {
+      navigator.clipboard.writeText(btn.getAttribute("data-copy")).then(function () {
+        var original = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(function () { btn.textContent = original; }, 1600);
+      });
+    });
+  })();
+</script>
+
+</body>
+</html>

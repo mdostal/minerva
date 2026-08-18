@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Minerva icon — self-contained badge (deep indigo ground), designed to sit on both light and dark host pages since the badge supplies its own background. Palette: #1E2A4A indigo, #F4E9D8 ivory, #C99A46 laurel gold. -->
+  <title>Minerva</title>
+
+  <!-- Badge ground -->
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#1E2A4A"/>
+
+  <!-- Owl: shield-shaped head (nods to Minerva's shield/strategy) with angular ear tufts -->
+  <g fill="#F4E9D8">
+    <!-- ear tufts -->
+    <polygon points="13,29 22,9 30,29"/>
+    <polygon points="34,29 42,9 51,29"/>
+    <!-- shield-shaped head/face -->
+    <path d="M32,59 C19,59 11,48 11,36 C11,29 14,24 19,23 L45,23 C50,24 53,29 53,36 C53,48 45,59 32,59 Z"/>
+  </g>
+
+  <!-- eyes: negative-space circles showing badge ground -->
+  <circle cx="22" cy="36" r="8" fill="#1E2A4A"/>
+  <circle cx="42" cy="36" r="8" fill="#1E2A4A"/>
+
+  <!-- pupils: fixed, forward gaze -->
+  <circle cx="22" cy="36" r="2.6" fill="#C99A46"/>
+  <circle cx="42" cy="36" r="2.6" fill="#C99A46"/>
+
+  <!-- beak -->
+  <polygon points="27,40 37,40 32,50" fill="#C99A46"/>
+</svg>

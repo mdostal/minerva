@@ -15,6 +15,24 @@ the hive flow (`kickoff` + `plan`), extracts the human-gate questions along the 
 to the decision surface, iterates the back-and-forth, and emits the approved epic/stories — then
 hands off to **Auriga** (routing) and **Vulcan** (provisioning) for the build.
 
+## Get your agent using it in one command
+
+```bash
+curl -fsSL https://mdostal.github.io/minerva/install.sh | bash
+```
+
+Installs the CLI, wires the MCP server into whatever AI coding agent CLIs are already on the
+machine (Claude Code, Codex CLI today), and drops in the `minerva-plan` usage skill — so an agent
+gets the full startRun → poll → answer → repeat interaction pattern immediately, not just a raw
+tool list. Already have Minerva installed? Just run `minerva agent init` — same thing, idempotent,
+safe to re-run any time (e.g. after installing a new harness). `minerva agent status` shows what's
+currently wired without changing anything. `--harness claude` / `--harness codex` narrows either
+subcommand to just one harness.
+
+Minerva has no UI of its own — this is the "top and forward" entry point for any agent or harness
+that needs to drive it. No MCP-aware caller? Skip straight to the [Quickstart](#quickstart) below;
+the identical 8 methods are also a plain JSON-over-stdio subprocess ABI.
+
 ## What & why
 
 Planning used to mean a human hand-running `/hive:kickoff` and `/hive:plan` in a terminal, one
@@ -52,15 +70,18 @@ flowchart TB
     subgraph internals["Minerva internals"]
         direction TB
         cli["bin/minerva.ts — JSON-over-stdio ABI\n(fresh process per call)"]
+        mcp["minerva mcp — MCP server\n(same dispatch(), alternate transport)"]
         dispatch["dispatch — capabilities · startRun\ngetQuestions · submitAnswers · getOutput\ngetRunStatus · listRuns · abortRun"]
         engine["Kickoff+Plan engine\n(drives plugin-hive kickoff + plan)"]
         driver{"Driver\n(swappable via MINERVA_DRIVER)"}
         spawn["SpawnDriver — claude -p / --resume (default)"]
         subagent["SubagentDriver — claude --bg (orphan-resistant)"]
-        forked["ForkedHiveDriver (stub — not implemented)"]
+        forked["ForkedHiveDriver — real headless-question protocol\n(needs MINERVA_HIVE_PLUGIN_DIR until plugin-hive#341 ships)"]
         rm["Run Manager — per-run isolated git workspace\n(~/.minerva/runs, filesystem only)"]
 
-        cli --> dispatch --> engine --> driver
+        cli --> dispatch
+        mcp --> dispatch
+        dispatch --> engine --> driver
         driver --> spawn & subagent & forked
         engine --> rm
     end
@@ -109,6 +130,11 @@ echo '{"method":"submitAnswers","params":{"run_id":"<run_id>","answers":[...]}}'
 echo '{"method":"getOutput","params":{"run_id":"<run_id>"}}' | npx tsx bin/minerva.ts
 ```
 
+Prefer a native tool over hand-rolled subprocess calls? `npx tsx bin/minerva.ts mcp` runs the
+identical 8 methods as an MCP server (stdio transport) — the same thing `minerva agent init`
+registers automatically. See [Get your agent using it in one command](#get-your-agent-using-it-in-one-command)
+above.
+
 Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 
 | Var | Purpose | Default |
@@ -126,9 +152,12 @@ npm run ci        # test + typecheck (local CI — no GitHub Actions)
 
 ## Status
 
-**Working (wip).** The subprocess ABI, the kickoff+plan engine, per-run isolated workspaces, and
-the default `SpawnDriver` + opt-in orphan-resistant `SubagentDriver` are real and covered by a TDD
-suite; `ForkedHiveDriver` is an intentional stub that throws until plugin-hive-fork exists. See
+**Working (wip).** The subprocess ABI, the MCP server, the kickoff+plan engine, per-run isolated
+workspaces, and all three drivers (`SpawnDriver`, `SubagentDriver`, `ForkedHiveDriver`) are real
+and covered by a TDD suite. `ForkedHiveDriver`'s one open gap is external, not internal: its
+production path needs `firefly-events/plugin-hive#341` (or its `hive-workshop` port) to actually
+merge upstream — until then, set `MINERVA_HIVE_PLUGIN_DIR` at a local `plugin-hive-fork` checkout
+to use `MINERVA_DRIVER=forked` (see `docs/decisions/002-pr341-production-dependency.md`). See
 [VISION.md](./VISION.md) for the trajectory.
 
 ---

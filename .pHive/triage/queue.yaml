@@ -571,3 +571,42 @@ items:
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-19T05:15:00Z" }
+  - id: t-011
+    state: inbox
+    kind: bug
+    title: "target_repo allowlist shells out to git for local-path allowlist entries unnecessarily"
+    description: |
+      Surfaced by a round-2 grill pass on harden-run-id-and-target-repo-boundaries, run
+      post-implementation ahead of shipping v0.2.1 (per operator request to "use the full /grill"
+      before /ship). Informational only, not a security or correctness defect -- the feature
+      works correctly today.
+
+      src/kickoff-engine.ts:108-118's isTargetRepoAllowed() calls normalizeTargetRepoValue(entry)
+      for each configured MINERVA_ALLOWED_TARGET_REPOS entry that doesn't exact-string-match the
+      target_repo being checked. normalizeTargetRepoValue()'s local-path branch
+      (src/target-repo-signal.ts:57-72) does a real synchronous `git -C <path> remote get-url
+      origin` subprocess call. So an allowlist mixing slugs and local paths causes a real `git`
+      subprocess spawn per local-path entry, on every startRun call that doesn't hit the exact-
+      match fast path -- and makes the allowlist check's outcome depend on live filesystem/git
+      state of OTHER configured paths, not just the target_repo actually being validated.
+
+      Suggested fix: skip slug-derivation entirely for allowlist entries that are clearly local
+      paths (start with `/` or `~`) -- exact-string match is the only mechanism ever intended for
+      local-path allowlist entries per the epic's own design decision ("reuse
+      normalizeTargetRepoValue... do not invent a new comparison shape" meant slug comparison for
+      slugs, not deriving slugs from paths).
+
+      Not resolved by this triage entry. Neither blocks anything already shipped nor is urgent --
+      MINERVA_ALLOWED_TARGET_REPOS is opt-in and off by default; this only fires for operators who
+      configure it with a mixed slug+local-path list.
+    reporter: "mdostal"
+    reported_at: "2026-08-19T23:45:00Z"
+    priority: null
+    severity: null
+    assignee: null
+    linked_epic: null
+    linked_story: null
+    closed_reason: null
+    closed_at: null
+    state_history:
+      - { state: inbox, at: "2026-08-19T23:45:00Z" }

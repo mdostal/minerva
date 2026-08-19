@@ -1,0 +1,63 @@
+name: agent-interactivity
+title: "One-command agent/harness onboarding: MCP server, agent init/status, usage skills, install.sh, gh-pages, branding"
+description: >
+  Operator directive (2026-08-18): Minerva has no UI, so every agent/harness that drives it needs
+  a way to install and interact with it that's "top and forward" -- discoverable at install time,
+  not buried. Modeled directly on the sibling Pantheon project Portunus's real, shipped
+  `portunus agent init`/`agent status` pattern (firefly-events/portunus PR #101, merged to its
+  dev branch): detect installed harnesses (Claude Code, Codex CLI), register an MCP server for
+  each, install usage skills teaching the correct interaction pattern, all idempotent. A CBA was
+  run before starting (see triage/chat record): explicitly SCOPED OUT a full interactive UI --
+  Minerva's own README already assigns the human-decision-surface role to Delphi/Consus, and a
+  Minerva-owned UI answering pending human-channel questions would re-duplicate that role, the
+  same shape of coupling risk the whole rip-out-consus-coupling epic spent tonight eliminating.
+  Operator confirmed this scoping explicitly.
+
+  Five stories: (1) an MCP server exposing the existing 8-method ABI (dispatch.ts is already the
+  single clean entrypoint -- this is a thin adapter, no new business logic) as `minerva mcp`, a
+  new subcommand on the existing bin/minerva.ts (which already branches on argv.length > 2 into
+  an argv-mode separate from its stdin-JSON ABI mode -- confirmed backward-compatible extension
+  point, no existing caller could have relied on "mcp"/"agent" as positional argv0 since the
+  existing parser throws Unknown argument for anything it doesn't recognize as a --flag today);
+  (2) `minerva agent init`/`agent status` subcommands, closely mirroring Portunus's
+  src/portunus/agent_setup.py structure and its real-world findings (targeted `claude mcp get
+  <name>` instead of `claude mcp list`, which health-checks every registered server); (3) usage
+  skill(s) installed to ~/.claude/skills/ teaching the correct Minerva interaction loop (startRun
+  -> poll getQuestions -> submitAnswers -> repeat, AD-5 no-autonomous-progress, agent/human
+  channel semantics -- never fabricate an answer); (4) install.sh (published to gh-pages root,
+  chains an install + `minerva agent init`) + README's top-line one-command install, plus fixing
+  the npm package name collision (npm's existing "minerva" is an unrelated, unmaintained
+  infovizconsulting.com package -- same shape of collision Portunus hit on PyPI, same fix:
+  distinct publish name, e.g. pantheon-minerva, installed command stays plain `minerva`); (5) an
+  icon + gh-pages landing site + branding, reusing the parallel-blind-design-agents technique
+  (memory: feedback_parallel-blind-design-agents.md) for the icon since taste is involved.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+stories:
+  - id: mcp-server
+    title: "minerva mcp — MCP server exposing the existing 8-method ABI"
+    complexity: medium
+    depends_on: []
+  - id: agent-init-status
+    title: "minerva agent init / minerva agent status — harness detection + MCP registration"
+    complexity: medium
+    depends_on: [mcp-server]
+  - id: usage-skills
+    title: "Usage skill(s) teaching the correct Minerva interaction loop"
+    complexity: low
+    depends_on: [mcp-server]
+  - id: install-sh-and-readme
+    title: "install.sh + README one-command install + npm distribution-name fix"
+    complexity: low
+    depends_on: [agent-init-status, usage-skills]
+  - id: icon-pages-branding
+    title: "Icon + gh-pages landing site + branding"
+    complexity: medium
+    depends_on: []

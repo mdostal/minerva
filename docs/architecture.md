@@ -46,6 +46,15 @@ architecture should be built to expect, or wait for, autonomous movement between
   params}` envelope from stdin per invocation, dispatches, writes one `{result}`/`{error}`
   envelope to stdout, exits. Fresh process per call (see AD-1) — this is the entire external
   surface; there is no daemon.
+- **MCP server (`minerva mcp`, agent-interactivity epic)** — the same argv-mode branch on
+  `bin/minerva`, an alternate transport onto the identical `dispatch()` call, not a second
+  implementation of the ABI. Exposes each of the 8 methods as an MCP tool (`src/mcp-server.ts`)
+  over `@modelcontextprotocol/sdk`'s stdio transport, so any MCP-aware caller (Claude Code, Codex
+  CLI) can call `startRun`/`submitAnswers`/etc. as a native tool instead of hand-rolling a
+  subprocess-spawn-and-parse-JSON adapter. AD-1's "no daemon" invariant still holds: this is a
+  stdio-piped child process per connection, exactly as ephemeral as the one-shot ABI calls, not a
+  persistent listening service. `minerva agent init` (agent-interactivity epic) registers it with
+  a detected harness; see that story for the onboarding flow.
 - **Run Manager** — owns run lifecycle: allocates a run id, an isolated workspace
   (worktree-off-`dev` for an existing-repo idea, fresh git-init scratch repo for a greenfield
   idea — see AD-3), and a namespaced `.pHive` state directory on `startRun`; looks up an

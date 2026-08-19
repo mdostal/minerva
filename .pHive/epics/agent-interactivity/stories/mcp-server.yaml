@@ -1,0 +1,28 @@
+id: mcp-server
+epic: agent-interactivity
+title: "minerva mcp — MCP server exposing the existing 8-method ABI"
+complexity: medium
+depends_on: []
+status: shipped
+
+description: >
+  src/mcp-server.ts wraps dispatch.ts (Minerva's single existing entrypoint) as 8 MCP tools via
+  @modelcontextprotocol/sdk's low-level Server + StdioServerTransport. `minerva mcp` on
+  bin/minerva.ts's existing argv-mode branch (safe extension -- "mcp" was previously an
+  unrecognized flag that threw). Every tool call is exactly dispatch({method, params}); no
+  duplicated validation. Tool descriptions carry the AD-5 no-autonomous-progress contract and the
+  agent/human channel semantics for the calling agent, not just JSON shapes.
+
+acceptance_criteria:
+  - listTools returns all 8 ABI methods with real descriptions and JSON-schema inputSchemas.
+  - A tool call maps 1:1 onto dispatch()'s existing result/error contract -- MinervaError codes
+    surface as {code, message} with isError true, not swallowed or re-shaped.
+  - A full startRun -> getRunStatus -> listRuns round trip works identically to the stdin-JSON ABI.
+  - Verified for real, not just unit-tested against createServer() in isolation -- spawned the
+    actual `npx tsx bin/minerva.ts mcp` subprocess, connected a real StdioClientTransport, listed
+    tools and called capabilities against it.
+  - npm run typecheck and bin/minerva.test.ts + src/mcp-server.test.ts pass.
+
+out_of_scope:
+  - agent init/status (story agent-init-status).
+  - Usage skill content (story usage-skills).

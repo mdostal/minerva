@@ -1,0 +1,44 @@
+id: agent-init-status
+epic: agent-interactivity
+title: "minerva agent init / minerva agent status — harness detection + MCP registration"
+complexity: medium
+depends_on: [mcp-server]
+status: shipped
+
+description: >
+  src/agent-setup.ts mirrors Portunus's src/portunus/agent_setup.py structure closely, adapted to
+  TypeScript/Node. Wired as `minerva agent init`/`minerva agent status` on bin/minerva.ts's
+  existing argv-mode branch (same safe extension pattern as `mcp`). `--harness claude|codex`
+  narrows either subcommand. Carries forward Portunus's real-world finding: a targeted `claude mcp
+  get <name>` instead of `claude mcp list`, which health-checks every registered server (30+
+  seconds on a machine with several configured).
+
+  Real-world finding caught during this story's own verification: the first cut let a failing
+  `claude mcp get minerva` call's stderr ("No MCP server named...") leak straight through to the
+  caller's terminal (execFileSync's default stdio inherits it) -- fixed by explicitly piping
+  stderr rather than inheriting it, since "not yet registered" is a routine, expected outcome
+  every fresh init hits at least once per harness, not something that should read as an error to
+  the user.
+
+acceptance_criteria:
+  - detectHarnesses/mcpRegistered/registerMcp/agentStatus/agentInit all tested against real
+    fake-executable scripts (MINERVA_CLAUDE_BIN/MINERVA_CODEX_BIN overrides, same convention as
+    agnostic-plan-driver.ts's OPENCODE_BIN seam), not framework-level mocking.
+  - mcpRegistered(claude) calls exactly `mcp get minerva`, never `mcp list`.
+  - registerMcp is idempotent -- a no-op success (no shell-out at all) when already registered.
+  - agentInit only installs skills when "claude" is among the actual targets, even if codex is
+    also present -- an explicit only=["codex"] leaves skills untouched.
+  - --harness narrows both init and status to just that harness; status's skills field is omitted
+    (not just left stale) when narrowed to a non-claude harness.
+  - Verified for real against this machine's actual claude/codex binaries: ran `minerva agent
+    init` for real (via `npm link` so `minerva` genuinely resolves on PATH, matching what
+    install.sh will deliver), confirmed `claude mcp get minerva` reports "Status: Connected" for
+    real, confirmed the skill file lands on disk at ~/.claude/skills/minerva-plan/SKILL.md, and
+    confirmed re-running init/status afterward is idempotent.
+  - npm run typecheck and src/agent-setup.test.ts pass.
+
+out_of_scope:
+  - Usage skill content itself (story usage-skills, done alongside this one since agentInit's
+    tests are only meaningful against real packaged skill content).
+  - install.sh / npm publish name (story install-sh-and-readme) -- this story's real-machine
+    verification used `npm link` as a stand-in for that not-yet-built install path.

@@ -1,0 +1,39 @@
+id: install-sh-and-readme
+epic: agent-interactivity
+title: "install.sh + README one-command install + npm distribution-name fix"
+complexity: low
+depends_on: [agent-init-status, usage-skills]
+status: shipped
+
+description: >
+  npm's existing "minerva" is an unrelated, unmaintained data-visualization package
+  (infovizconsulting.com) -- same shape of collision the sibling Pantheon project Portunus hit on
+  PyPI, same fix: package.json's distribution name changed to `pantheon-minerva` (confirmed
+  unclaimed via `npm view`); the installed command stays plain `minerva` via the existing `bin`
+  field, independent of the package name. Not yet published to npm -- scripts/install.sh installs
+  from GitHub in the meantime, chaining `npm install --global git+https://.../minerva.git` with
+  `minerva agent init` into one curl-pipe-bash command, published to gh-pages root (icon-pages-
+  branding story), now the README's top line. README also fixes a stale claim found while
+  updating the same section: the architecture diagram and Status section both said
+  ForkedHiveDriver was "an intentional stub that throws" -- contradicted by this repo's own
+  docs/decisions/002-pr341-production-dependency.md (written earlier this session), which
+  confirms it's fully implemented and e2e-tested, with one external (not internal) gap.
+
+acceptance_criteria:
+  - package.json name is pantheon-minerva; bin.minerva unchanged.
+  - scripts/install.sh checks for node/npm, installs, verifies `minerva` resolves on PATH, runs
+    `minerva agent init`, reports what happened.
+  - Verified for real, twice: once via `npm install -g --prefix <scratch> .` from this checkout
+    (confirms tsx resolves as a devDependency for a global top-level install target, not just
+    assumed), once running the actual install.sh script end-to-end with HOME/npm_config_prefix/
+    PATH fully isolated (confirms the MCP registration and skill install both land in the isolated
+    location, not the real machine's config -- checked directly, not assumed).
+  - README's top has a "Get your agent using it in one command" section with the curl line,
+    mirroring Portunus's real, shipped README diff.
+  - README's architecture diagram and Status section no longer claim ForkedHiveDriver is a stub.
+
+out_of_scope:
+  - Actually publishing to npm (not yet done for either Portunus or Minerva -- both still
+    GitHub-install in the interim).
+  - gh-pages site / icon (story icon-pages-branding) -- install.sh's published-to-gh-pages-root
+    step happens there, not here.

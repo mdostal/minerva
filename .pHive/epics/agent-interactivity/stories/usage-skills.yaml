@@ -1,0 +1,25 @@
+id: usage-skills
+epic: agent-interactivity
+title: "Usage skill(s) teaching the correct Minerva interaction loop"
+complexity: low
+depends_on: [mcp-server]
+status: shipped
+
+description: >
+  src/agent-skills/minerva-plan/SKILL.md -- one skill (not four like Portunus's ask/drop/
+  vault-setup/vault-audit, since Minerva has one cohesive workflow, not several distinct ones)
+  teaching an agent the correct startRun -> poll both channels -> submitAnswers -> repeat ->
+  getOutput loop, the AD-5 no-autonomous-progress contract (never fabricate an answer on the
+  human channel), and agent/human channel semantics. Installed to ~/.claude/skills/ by
+  `minerva agent init` (story agent-init-status).
+
+acceptance_criteria:
+  - Frontmatter (name/description) matches this repo's existing skill-file convention.
+  - Body covers the full loop with a concrete example call sequence, explicit "when NOT to use"
+    guidance against guessing a human-channel answer, and a note that Minerva only plans (hands
+    off execution elsewhere).
+  - skillNames()/installSkills() (agent-setup.ts) pick it up automatically -- no hardcoded skill
+    list to keep in sync.
+
+out_of_scope:
+  - The installation mechanism itself (story agent-init-status).

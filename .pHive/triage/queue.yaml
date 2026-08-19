@@ -462,3 +462,49 @@ items:
       - { state: prioritized, at: "2026-08-14T19:30:00Z" }
       - { state: plan-ready, at: "2026-08-14T19:30:00Z" }
       - { state: closed, at: "2026-08-14T20:00:00Z" }
+  - id: t-008
+    state: inbox
+    kind: bug
+    title: "Two informational hardening notes from the pre-public-release security review, not blockers -- run_id path-join with no format check, unrestricted target_repo worktree trust boundary"
+    description: |
+      Surfaced during the full-repo security review ahead of making this repo public (triage
+      context: a separate finding from this same review, the target_repo git-clone-injection
+      issue, was Critical and got fixed immediately -- see src/target-repo-signal.ts's
+      GIT_ALLOW_PROTOCOL fix and its regression test). These two are lower-severity, filed so
+      they surface at standup rather than getting lost, not fixed now.
+
+      1. **run_id path-join, no format check** (src/run-manager.ts:132-166, reached from
+         kickoff-engine.ts, output-emitter.ts, cleanup-ledger.ts). run_id is validated only as
+         `typeof === "string"` everywhere it's accepted (MCP tools, stdin-JSON ABI, CLI flags),
+         then joined directly into a filesystem path with no format check -- allocateRun always
+         uses randomUUID(), so anything else is definitionally invalid. A traversal-shaped value
+         (e.g. "../../../some/dir") would resolve outside ~/.minerva/runs/. Exploitability is
+         limited: readRunRecord requires an existing, parseable run.yaml at the traversed path
+         (no blind write -- every write path requires a successful prior read), and the trust
+         model is same-privilege local execution (whoever can call the ABI already runs code with
+         the operator's own permissions). Suggested fix: validate run_id against a UUID regex at
+         the dispatch.ts/mcp-server.ts boundary, reject anything else with VALIDATION_FAILED.
+
+      2. **target_repo/worktree trust boundary** (kickoff-engine.ts:270-279, dispatch.ts via
+         startRun). target_repo is used directly as a `git -C <path> worktree add` target with no
+         allowlist -- an intentional design feature (the tool is meant to plan against an
+         arbitrary local repo), but means any MCP/ABI caller -- including an LLM agent steered via
+         prompt injection in the idea text -- can direct Minerva to create a worktree against, and
+         later commit+push into, any local repo path reachable on the operator's machine.
+         Suggested fix: an optional allowlist env var (e.g. MINERVA_ALLOWED_TARGET_REPOS) for
+         deployments where the calling agent isn't fully trusted.
+
+      Not resolved by this triage entry. Needs a /plan cycle (or a quick standalone fix) once
+      picked up -- neither blocks the public release; both are informational hardening per the
+      review's own severity assessment, confirmed by direct review of the code paths.
+    reporter: "mdostal"
+    reported_at: "2026-08-19T01:00:00Z"
+    priority: null
+    severity: null
+    assignee: null
+    linked_epic: null
+    linked_story: null
+    closed_reason: null
+    closed_at: null
+    state_history:
+      - { state: inbox, at: "2026-08-19T01:00:00Z" }

@@ -1,0 +1,63 @@
+id: icon-pages-branding
+epic: agent-interactivity
+title: "Icon + gh-pages landing site + branding"
+complexity: medium
+depends_on: []
+status: planned
+
+description: >
+  Icon direction decided by the operator via the parallel-blind-design-agents technique
+  (memory: feedback_parallel-blind-design-agents.md) -- three independent candidates were
+  designed, independently re-verified (not just trusted on self-report), published as a
+  comparison Artifact, and the operator's synthesis was clear and immediate: Candidate A (the
+  owl -- Minerva's own iconic animal, flat-geometric shield-shaped face on an indigo badge) is
+  the pick, as-is, no further design iteration requested. The one real bug the operator caught
+  during that process (Artifact swatch padding silently shrinking the icon content well below
+  its labeled size, `box-sizing: border-box` + padding + border eating into the declared
+  dimension) was fixed and does not affect the chosen source SVG itself, which was never touched
+  by that bug.
+
+  Reference: the sibling Pantheon project Portunus has a real, working GitHub Pages site
+  (`mdostal.github.io/portunus/`) via a `gh-pages` branch (no automated publish workflow found on
+  its `dev`/`main` -- maintained by direct push) containing `index.html` + `assets/` (16px/32px
+  PNG favicons + a 180px apple-touch-icon + a hero image). Minerva's `gh-pages` branch does not
+  exist yet (confirmed via `gh api repos/mdostal/minerva/pages` -> 404) -- this story creates it
+  fresh, follows the same asset-naming shape, and publishes `scripts/install.sh` at the gh-pages
+  root as that script's own header comment and the README already promise
+  (`https://mdostal.github.io/minerva/install.sh`).
+
+  Tooling note (investigated, not assumed): this machine has no `rsvg-convert`, no ImageMagick
+  (`magick`/`convert`), and Python's `cairosvg` fails to load (`libcairo` not installed). Real,
+  working options confirmed earlier this session: (a) headless Chrome
+  (`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless --screenshot`),
+  already used twice tonight for real pixel-accurate icon verification; (b) Pillow (`PIL`,
+  confirmed importable), which can pack multiple PNG sizes into one real multi-resolution
+  `favicon.ico` (`Image.save(..., format="ICO", sizes=[...])`). Use these, not a tool that isn't
+  actually on this machine.
+
+acceptance_criteria:
+  - The chosen owl SVG becomes the canonical icon source, committed in the repo (e.g.
+    `assets/icon.svg` or `docs/assets/icon.svg`) -- not left in the session scratchpad.
+  - Real favicon assets generated via real rendering (headless Chrome for PNG, Pillow for ICO
+    packing) at, at minimum: 16px, 32px PNG, a 180px apple-touch-icon PNG, and a packed
+    multi-resolution favicon.ico. Verify each generated file actually opens/decodes (e.g. via
+    Pillow's own `Image.open` round-trip), not just "the command exited 0".
+  - A `gh-pages` branch is created (or content prepared for one, if actually pushing needs a
+    separate confirmation -- flag this explicitly rather than assuming) containing an
+    index.html landing page (following the artifact-design skill's guidance -- this is squarely
+    an "editorial" treatment, a real public landing page, not a utilitarian doc), the favicon
+    assets, and `scripts/install.sh` at the root, mirroring Portunus's real, working structure.
+  - The landing page prominently features the one-command install line, links back to the GitHub
+    repo/README, and uses the finalized owl icon/branding consistently.
+  - README.md references the finalized icon appropriately (e.g. a favicon `<link>`-equivalent
+    note, or an inline badge/logo near the top) if that reads as natural, without overdoing it.
+  - Whatever touches the shared GitHub repo in a hard-to-reverse way (creating the gh-pages
+    branch for real, enabling GitHub Pages in repo settings, pushing) gets flagged clearly before
+    doing it, consistent with this session's whole-night practice -- this story's operator
+    "blessing" covers building and preparing the work; actually flipping the repo's public
+    GitHub Pages setting live is still worth a clear heads-up at the moment it happens, not a
+    silent assumption.
+
+out_of_scope:
+  - Any further icon design iteration -- the operator's pick is final for this pass.
+  - A full rebrand of README/VISION.md beyond the icon/landing-page touch points above.

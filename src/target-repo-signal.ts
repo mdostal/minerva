@@ -105,7 +105,25 @@ export function resolveLocalCheckout(value: string): ResolvedCheckout {
   let cloned = false;
   if (!existsSync(localPath)) {
     const cloneUrl = isUrl ? v : `git@github.com:${slug}.git`;
-    execFileSync("git", ["clone", cloneUrl, localPath], { stdio: "pipe" });
+    // SECURITY: `v` can originate from a Multica ticket's free-text description/title
+    // (bin/minerva-plan.ts's --ticket flow, via parseTargetRepoLine), not just an operator-typed
+    // CLI flag -- so it must be treated as untrusted. `isUrl`'s classification (`git@`/`://`/
+    // `github.com` substring match) is a loose heuristic, not a safe allowlist: a crafted value
+    // like `ext::sh%-c%touch$IFS/tmp/pwned%git@` matches it (via the trailing "git@") and gets
+    // passed to `git clone` verbatim. Git's `ext::<command>` remote-helper transport then runs
+    // that command directly -- a well-known git-clone-injection class, not theoretical. Rather
+    // than hand-roll a URL-shape regex (error-prone, and the existing isUrl/isSlug heuristics
+    // are proof this is easy to get subtly wrong), rely on git's own GIT_ALLOW_PROTOCOL
+    // allowlist -- the mechanism git ships specifically for tools that clone caller-supplied
+    // URLs. `file` stays allowed for this file's own local-clone tests (target-repo-signal.
+    // test.ts uses file:// against a bare local repo, no network); `https`/`ssh` cover real
+    // GitHub clones (including the git@host:owner/repo scp-like syntax, which git resolves via
+    // the ssh transport). `ext`, `fd`, and everything else are excluded, closing this class
+    // outright even if a future change reintroduces a looser isUrl heuristic upstream.
+    execFileSync("git", ["clone", cloneUrl, localPath], {
+      stdio: "pipe",
+      env: { ...process.env, GIT_ALLOW_PROTOCOL: "file:https:ssh" },
+    });
     cloned = true;
   }
   ensureDevBranch(localPath);

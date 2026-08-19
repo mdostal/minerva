@@ -1,8 +1,22 @@
 {
   "name": "pantheon-minerva",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Minerva — the Pantheon's Planner. Agent-drivable idea-to-spec engine.",
   "type": "module",
+  "license": "MIT",
+  "author": "Mathew Dostal",
+  "homepage": "https://mdostal.github.io/minerva/",
+  "bugs": {
+    "url": "https://github.com/mdostal/minerva/issues"
+  },
+  "keywords": [
+    "ai-agent",
+    "mcp",
+    "model-context-protocol",
+    "headless",
+    "planning",
+    "cli"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mdostal/minerva.git"

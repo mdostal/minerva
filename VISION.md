@@ -16,7 +16,7 @@ Pick a rung and jump in.
 
 ## ① Current — what runs today
 
-Minerva is real, tested code (TDD, `npm run ci`), version `0.1.1`. It is **not** a long-running
+Minerva is real, tested code (TDD, `npm run ci`), version `0.2.0`. It is **not** a long-running
 service — it's a subprocess driven one JSON call at a time.
 
 - **Runs where you invoke it.** No daemon, no server, no port. `bin/minerva.ts` reads one JSON

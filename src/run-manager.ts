@@ -137,6 +137,21 @@ function runRecordPath(runId: string): string {
   return join(runDir(runId), "run.yaml");
 }
 
+// UUID-shape guard (validate-run-id-uuid-shape story). Matches any RFC 4122 version (1-5), not
+// v4-specifically -- this validates *shape*, not provenance, so it doesn't couple to
+// randomUUID()'s current output format, which could change across Node versions. Co-located here
+// because it protects runDir()/runRecordPath()'s path-join immediately above, but it must be
+// called ONLY from the two ABI boundaries in front of this module -- dispatch.ts's method routing
+// and mcp-server.ts's CallToolRequestSchema handler -- and NEVER from run-manager.ts's own
+// functions. Internal callers (e.g. output-emitter.test.ts's direct
+// commitAndPushPlan({run_id: "x", ...}) call, which never crosses either ABI boundary) must keep
+// working with non-UUID placeholder run_ids unmodified. See the story's PLACEMENT CONSTRAINT.
+const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuidShaped(value: unknown): value is string {
+  return typeof value === "string" && UUID_SHAPE_RE.test(value);
+}
+
 export function defaultSeedRepoPath(): string {
   return join(homedir(), "repos", "consus-seeds");
 }

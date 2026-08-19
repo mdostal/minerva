@@ -1,7 +1,13 @@
 id: envelope-detection-parsing
 epic: forked-driver-integration
 title: Envelope detection + parsing (.pHive/questions/*.yaml -> typed shape)
-status: pending
+status: shipped
+reconciliation_note: >
+  Built and released via the forked-driver-integration commit chain, tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: medium
 methodology: tdd
 depends_on: [spike-stateless-model-tier, question-answer-type-extension]

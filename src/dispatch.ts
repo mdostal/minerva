@@ -1,7 +1,7 @@
 import { MinervaError, type ErrorCode } from "./errors.ts";
 import { HeimdallRouteError } from "./driver.ts";
 import { capabilities } from "./capabilities.ts";
-import { getRunStatus, listRuns } from "./run-manager.ts";
+import { getRunStatus, listRuns, isUuidShaped } from "./run-manager.ts";
 import { startRun, getQuestions, submitAnswers } from "./kickoff-engine.ts";
 import { getOutput } from "./output-emitter.ts";
 import { abortRun } from "./cleanup-ledger.ts";
@@ -32,6 +32,12 @@ const handlers: Record<string, Handler> = {
   abortRun,
 };
 
+// validate-run-id-uuid-shape story: the methods whose params carry a run_id that eventually
+// reaches run-manager.ts's runDir()/runRecordPath() path-join. Every one of these is guarded
+// here, at the ABI boundary, BEFORE the handler (and therefore run-manager.ts) is ever reached --
+// never inside run-manager.ts itself (see run-manager.ts's isUuidShaped doc comment for why).
+const RUN_ID_METHODS = new Set(["getRunStatus", "getQuestions", "submitAnswers", "getOutput", "abortRun"]);
+
 function isValidEnvelope(req: unknown): req is Envelope {
   return (
     typeof req === "object" &&
@@ -57,6 +63,16 @@ export async function dispatch(req: unknown): Promise<Response> {
       error: {
         code: "UNKNOWN_METHOD",
         message: `Unknown method: ${req.method}`,
+        retry_after_ms: null,
+      },
+    };
+  }
+
+  if (RUN_ID_METHODS.has(req.method) && !isUuidShaped((req.params ?? {}).run_id)) {
+    return {
+      error: {
+        code: "VALIDATION_FAILED",
+        message: "run_id must be a valid UUID",
         retry_after_ms: null,
       },
     };

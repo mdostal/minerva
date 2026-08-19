@@ -1,7 +1,13 @@
 id: real-forked-hive-driver
 epic: forked-driver-integration
 title: Real ForkedHiveDriver.runTurn() implementation
-status: pending
+status: shipped
+reconciliation_note: >
+  Built and released via the forked-driver-integration commit chain, tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: high
 methodology: tdd
 depends_on: [envelope-detection-parsing, escalation-classification-envelope]

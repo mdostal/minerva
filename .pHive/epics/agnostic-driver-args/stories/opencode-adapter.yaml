@@ -1,7 +1,13 @@
 id: opencode-adapter
 epic: agnostic-driver-args
 title: Implement OpencodeAdapter for opencode and codex
-status: pending
+status: shipped
+reconciliation_note: >
+  Built and released via Multica ticket PAN-8562, tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: medium
 methodology: classic
 depends_on: [define-runtime-adapter]

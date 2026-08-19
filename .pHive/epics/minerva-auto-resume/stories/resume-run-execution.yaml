@@ -1,7 +1,12 @@
 id: resume-run-execution
 epic: minerva-auto-resume
 title: Feed answer back and resume the parked run
-status: pending
+status: obsolete
+obsolete_reason: >
+  Same supersession as the epic's other stories -- built (src/consus-resume.ts,
+  src/consus-auto-resume.ts), then removed by rip-out-consus-coupling.
+obsoleted_at: "2026-08-19T00:00:00Z"
+
 complexity: high
 methodology: classic
 depends_on:

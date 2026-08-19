@@ -463,7 +463,7 @@ items:
       - { state: plan-ready, at: "2026-08-14T19:30:00Z" }
       - { state: closed, at: "2026-08-14T20:00:00Z" }
   - id: t-008
-    state: inbox
+    state: closed
     kind: bug
     title: "Two informational hardening notes from the pre-public-release security review, not blockers -- run_id path-join with no format check, unrestricted target_repo worktree trust boundary"
     description: |
@@ -499,6 +499,42 @@ items:
       review's own severity assessment, confirmed by direct review of the code paths.
     reporter: "mdostal"
     reported_at: "2026-08-19T01:00:00Z"
+    priority: p3
+    severity: low
+    assignee: null
+    linked_epic: harden-run-id-and-target-repo-boundaries
+    linked_story:
+      - validate-run-id-uuid-shape
+      - target-repo-allowlist
+    closed_reason: "shipped in harden-run-id-and-target-repo-boundaries (patch 0.2.0 -> 0.2.1), merged to dev"
+    closed_at: "2026-08-19T05:00:00Z"
+    state_history:
+      - { state: inbox, at: "2026-08-19T01:00:00Z" }
+      - { state: clarified, at: "2026-08-19T02:00:00Z" }
+      - { state: prioritized, at: "2026-08-19T02:00:00Z" }
+      - { state: plan-ready, at: "2026-08-19T03:00:00Z" }
+      - { state: closed, at: "2026-08-19T05:00:00Z" }
+  - id: t-009
+    state: inbox
+    kind: feature
+    title: "Driver lifecycle telemetry: driver_started / driver_succeeded / driver_failed events"
+    description: |
+      Surfaced while closing out stale open PR #57 ("Add driver lifecycle telemetry", branch
+      feat/c2a54262-3a17-4107-b221-518b2500e3ca, opened 2026-08-11). The PR proposed a new
+      src/telemetry.ts (emitTelemetryEvent) wired into ForkedHiveDriver.runTurn, emitting
+      driver_started/driver_succeeded/driver_failed events. Confirmed via grep: neither the
+      file nor any of those three event names exist anywhere on dev today -- genuinely not
+      implemented, not superseded by later work (unlike 3 sibling stale PRs closed at the same
+      time, #55/#47/#58, which WERE superseded).
+
+      Do not merge the original branch as-is -- it predates and would conflict with/regress the
+      fix-test-suite-flakiness-t006 fix to real-forked-hive-driver.test.ts's FORK_PATH
+      graceful-skip handling. A fresh implementation against current dev is needed, not a merge.
+
+      Not resolved by this triage entry. No urgency signal from the operator either way --
+      filed so the idea isn't silently lost, not because it's known to be wanted.
+    reporter: "mdostal"
+    reported_at: "2026-08-19T05:15:00Z"
     priority: null
     severity: null
     assignee: null
@@ -507,4 +543,31 @@ items:
     closed_reason: null
     closed_at: null
     state_history:
-      - { state: inbox, at: "2026-08-19T01:00:00Z" }
+      - { state: inbox, at: "2026-08-19T05:15:00Z" }
+  - id: t-010
+    state: inbox
+    kind: feature
+    title: "Add CONTRIBUTING.md and .github/FUNDING.yml"
+    description: |
+      Surfaced while closing out stale open PR #58 ("oss-docs" README/LICENSE/docs pass, opened
+      2026-08-11). Most of that PR is superseded by this session's OSS-readiness pass (its LICENSE
+      copyright holder conflicts with the MIT LICENSE already on dev; its README/index.html
+      content is factually stale). But two small pieces are genuinely still absent from the repo:
+      a CONTRIBUTING.md and a .github/FUNDING.yml. Neither is required for the repo to be a valid
+      public OSS release (already confirmed: LICENSE, SECURITY.md, package.json metadata, and a
+      working README/gh-pages site are all in place) -- this is optional polish, not a gap.
+
+      Not resolved by this triage entry. FUNDING.yml in particular is a personal/business decision
+      (whether and how to solicit funding) the operator should make explicitly, not something to
+      default into.
+    reporter: "mdostal"
+    reported_at: "2026-08-19T05:15:00Z"
+    priority: null
+    severity: null
+    assignee: null
+    linked_epic: null
+    linked_story: null
+    closed_reason: null
+    closed_at: null
+    state_history:
+      - { state: inbox, at: "2026-08-19T05:15:00Z" }

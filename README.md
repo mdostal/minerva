@@ -149,7 +149,7 @@ Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 ```bash
 npm test          # tsx --test, TDD suite across src/ + bin/
 npm run typecheck # tsc --noEmit
-npm run ci        # test + typecheck (local CI — no GitHub Actions)
+npm run ci        # test + typecheck — the authoritative gate, run locally before every merge
 ```
 
 ## Status
@@ -165,7 +165,9 @@ to use `MINERVA_DRIVER=forked` (see `docs/decisions/002-pr341-production-depende
 ---
 
 _Discipline: TypeScript default over the Pantheon subprocess ABI (interchangeable, any-language);
-named → interfaced → full TDD → locked; local CI, no GitHub Actions._
+named → interfaced → full TDD → locked; `npm run ci` is the authoritative gate — GitHub Actions
+(`.github/workflows/ci.yml`, `promote.yml`) layer shared cross-repo scaffolding on top, not a
+replacement for it._
 
 <!-- shared:support -->
 ## Support this project

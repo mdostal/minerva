@@ -19,9 +19,15 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { dispatch } from "./dispatch.ts";
+import { isUuidShaped } from "./run-manager.ts";
 
 const SERVER_NAME = "minerva";
 const SERVER_VERSION = "0.1.0";
+
+// validate-run-id-uuid-shape story: mirrors dispatch.ts's RUN_ID_METHODS. mcp-server.ts is the
+// other of the two ABI boundaries in front of run-manager.ts's runDir()/runRecordPath()
+// path-join, so it rejects a non-UUID run_id here, before ever forwarding to dispatch().
+const RUN_ID_TOOLS = new Set(["getRunStatus", "getQuestions", "submitAnswers", "getOutput", "abortRun"]);
 
 const TOOLS: Tool[] = [
   {
@@ -142,7 +148,19 @@ export function createServer(): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    const response = await dispatch({ method: name, params: (args ?? {}) as Record<string, unknown> });
+    const params = (args ?? {}) as Record<string, unknown>;
+    if (RUN_ID_TOOLS.has(name) && !isUuidShaped(params.run_id)) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ code: "VALIDATION_FAILED", message: "run_id must be a valid UUID", retry_after_ms: null }),
+          },
+        ],
+        isError: true,
+      };
+    }
+    const response = await dispatch({ method: name, params });
     if ("error" in response) {
       return {
         content: [{ type: "text" as const, text: JSON.stringify(response.error) }],

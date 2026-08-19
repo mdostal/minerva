@@ -1,7 +1,13 @@
 id: agent-channel-resolution
 epic: headless-planning
 title: Enable auto-resolution of agent-channel questions using defaults
-status: open
+status: shipped
+reconciliation_note: >
+  Built and released via Multica ticket PAN-8608, tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: medium
 methodology: tdd
 depends_on: [pre-baked-defaults-config]

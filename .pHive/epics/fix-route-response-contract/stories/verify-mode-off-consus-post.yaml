@@ -1,7 +1,13 @@
 id: verify-mode-off-consus-post
 epic: fix-route-response-contract
 title: Ensure mode=off triggers PARK and POST to Consus
-status: pending
+status: obsolete
+obsolete_reason: >
+  Verified the POST-to-Consus mechanism this story targets (kickoff-engine.ts's unconditional
+  postQuestionToConsusDecisionApi() call to /api/questions) instead. It was itself deleted by
+  the later rip-out-consus-coupling epic -- nothing left to verify. Superseded, not built.
+obsoleted_at: "2026-08-19T00:00:00Z"
+
 complexity: medium
 methodology: classic
 depends_on: [refactor-route-payload-parser]

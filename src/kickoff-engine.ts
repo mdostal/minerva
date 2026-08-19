@@ -24,6 +24,7 @@ import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type D
 import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
+import { normalizeTargetRepoValue } from "./target-repo-signal.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
@@ -79,6 +80,42 @@ function resolveTurnRetryLimit(): number {
   return parsed;
 }
 const TURN_RETRY_LIMIT = resolveTurnRetryLimit();
+
+// target-repo-allowlist story (harden-run-id-and-target-repo-boundaries epic): MINERVA_ALLOWED_
+// TARGET_REPOS is OPTIONAL and comma-separated (owner/repo slugs and/or absolute local paths --
+// the same two shapes target_repo already accepts). Unset (the default) means NO allowlist is
+// enforced -- startRun's behavior is completely unchanged, matching this project's "opt-in
+// hardening, never a new default restriction" idiom (cf. MINERVA_REPO_MAP/MINERVA_INCUBATOR_REPO
+// in repo-resolution.ts). Returns null for "unset" AND for "set but blank/all-whitespace" so both
+// mean identically "no restriction" -- never an accidental empty allowlist that rejects everything.
+function resolveAllowedTargetRepos(): string[] | null {
+  const raw = process.env.MINERVA_ALLOWED_TARGET_REPOS;
+  if (raw === undefined) return null;
+  const entries = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return entries.length > 0 ? entries : null;
+}
+
+// Exact-match only (no globs -- v1 scope, see this story's design_decisions). Reuses
+// normalizeTargetRepoValue()'s existing slug/path classification rather than inventing a new
+// comparison shape: a slug/URL target_repo is compared by its normalized slug, so a bare
+// "owner/repo" slug, an ssh URL, and an https URL for the same GitHub repo all match the same
+// allowlist entry. A target_repo with no derivable slug (a bare local path whose checkout has no
+// readable origin remote) falls back to an exact string match against the allowlist entry's raw
+// (trimmed) value -- covers local-path allowlist entries verbatim.
+function isTargetRepoAllowed(targetRepo: string, allowed: string[]): boolean {
+  const targetSlug = normalizeTargetRepoValue(targetRepo).slug;
+  const targetTrimmed = targetRepo.trim();
+  return allowed.some((entry) => {
+    const entryTrimmed = entry.trim();
+    if (entryTrimmed === targetTrimmed) return true;
+    if (!targetSlug) return false;
+    const entrySlug = normalizeTargetRepoValue(entry).slug;
+    return entrySlug !== null && entrySlug === targetSlug;
+  });
+}
 
 // Every driver.runTurn() call in this file goes through here instead of calling it directly.
 // A TurnTimeoutError means the turn was killed only because it ran long, not because it failed
@@ -277,6 +314,20 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // of being stranded in a throwaway fresh_init scratch that is never pushed anywhere.
   const resolved = resolveTargetRepo({ explicit: explicitRepo, idea });
   const targetRepo = resolved.repo;
+
+  // target-repo-allowlist story: gate the resolved target_repo against MINERVA_ALLOWED_TARGET_
+  // REPOS, when configured, BEFORE any worktree/clone operation (allocateRun below is the first
+  // such operation). No-op when the env var is unset (resolveAllowedTargetRepos returns null) or
+  // when nothing resolved a target_repo at all (nothing to gate).
+  if (targetRepo) {
+    const allowedTargetRepos = resolveAllowedTargetRepos();
+    if (allowedTargetRepos && !isTargetRepoAllowed(targetRepo, allowedTargetRepos)) {
+      throw new MinervaError(
+        "VALIDATION_FAILED",
+        `target_repo "${targetRepo}" is not in the configured MINERVA_ALLOWED_TARGET_REPOS allowlist`,
+      );
+    }
+  }
 
   // Resolve the effective pre-baked-defaults config once, here, from built-in + env + the
   // per-run `defaults` override, and freeze it onto the run record (prebaked-plan-defaults epic).

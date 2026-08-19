@@ -1,0 +1,81 @@
+id: target-repo-allowlist
+epic: harden-run-id-and-target-repo-boundaries
+title: "Optional MINERVA_ALLOWED_TARGET_REPOS allowlist"
+status: complete
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  kickoff-engine.ts's startRun() uses the resolved target_repo directly as a `git -C <path>
+  worktree add` target, then a commit+push destination -- intentional, since Minerva is meant to
+  plan against any local repo the operator names. The gap: any MCP/ABI caller (including an LLM
+  agent steered via prompt injection embedded in idea text) can direct Minerva at any local repo
+  path reachable on the operator's machine, with no way to constrain that for a less-trusted
+  deployment.
+
+  Add an OPTIONAL MINERVA_ALLOWED_TARGET_REPOS env var (comma-separated owner/repo slugs and/or
+  absolute local paths -- the same two shapes target_repo already accepts). When unset (the
+  default), behavior is completely unchanged. When set, startRun checks the resolved target_repo
+  against the list before resolveLocalCheckout/worktree creation, rejecting with
+  VALIDATION_FAILED on a miss.
+
+  Reuse normalizeTargetRepoValue() from src/target-repo-signal.ts for the slug/path
+  classification -- do not invent a new comparison shape. Exact-match only for v1 (no globs) --
+  matches this triage entry's own scope; globs are a future item if ever needed.
+
+acceptance_criteria:
+  - "Given MINERVA_ALLOWED_TARGET_REPOS is unset, when startRun is called with any target_repo, then behavior is byte-identical to before this change."
+  - "Given MINERVA_ALLOWED_TARGET_REPOS=\"owner/repo-a,owner/repo-b\" and startRun is called with target_repo resolving to owner/repo-a (via slug, ssh URL, or https URL -- all three normalize to the same slug per normalizeTargetRepoValue), when startRun runs, then it proceeds normally."
+  - "Given the same allowlist and startRun is called with a target_repo resolving to owner/repo-c (not in the list), when startRun runs, then it returns {error: {code: \"VALIDATION_FAILED\", message: naming target_repo and that it's not in the configured allowlist}} before any git worktree/clone operation occurs."
+  - "Given MINERVA_ALLOWED_TARGET_REPOS contains an absolute local path (not a slug) and startRun is called with a target_repo resolving to that same local path, when startRun runs, then it proceeds normally -- confirms local-path allowlist entries work, not just slugs."
+  - "Given a target_repo that fails the allowlist check, when the rejection occurs, then no worktree is created and no commit/push occurs (verify via a real temp git repo -- the repo's working tree and refs are unchanged after the rejected call)."
+
+metric:
+  applies: false
+  justification: "Purely opt-in hardening -- the default (unset) path has no behavioral change to measure a trend against; the only observable surface is the reject-on-miss path, already covered by acceptance-criteria tests."
+
+steps:
+  - id: research
+    description: Re-confirm exactly where in kickoff-engine.ts's startRun the resolved target_repo is used to create the worktree, and normalizeTargetRepoValue()'s exact slug/path output shape so the allowlist comparison matches it precisely.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for all 5 acceptance criteria: unset-env passthrough, slug match via
+      all 3 input shapes, slug miss rejection, local-path match, and the no-worktree-created
+      verification on rejection (real temp git repo, no mocking, matching this codebase's
+      established real-subprocess test convention).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the allowlist check in kickoff-engine.ts's startRun, reusing normalizeTargetRepoValue() from target-repo-signal.ts, placed before any worktree/clone call. Make the failing tests pass without modifying them.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the check is genuinely a no-op when the env var is unset (no accidental default allowlist), and that it's placed before, not after, any filesystem/git mutation.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to the epic branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/kickoff-engine.ts
+      purpose: "startRun() (around line 265-280) is where target_repo reaches the worktree-creation call this story gates."
+    - path: src/target-repo-signal.ts
+      purpose: "normalizeTargetRepoValue() -- the existing slug/path classifier this story's allowlist comparison must reuse, not reimplement."
+
+design_decisions:
+  - decision: "Opt-in only -- absent env var means unchanged behavior."
+    rationale: "Minerva's documented v1 behavior is 'plan against any local repo the operator names' -- this is intentional for the common trusted-operator case. The allowlist is for less-trusted deployments, not a new default restriction."
+  - decision: "Exact-match only, no glob patterns, for v1."
+    rationale: "Matches the two-hardening-notes scope this epic was sized to (per design-discussion.md open question 2) -- a policy-engine-shaped feature is out of scope."
+
+references:
+  - path: .pHive/epics/harden-run-id-and-target-repo-boundaries/docs/design-discussion.md
+    relevant_excerpt: |
+      Add an optional MINERVA_ALLOWED_TARGET_REPOS env var ... Reuse normalizeTargetRepoValue's
+      existing slug/path classification rather than inventing a new one.

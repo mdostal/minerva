@@ -1,0 +1,47 @@
+name: harden-run-id-and-target-repo-boundaries
+title: "Harden run_id and target_repo ABI trust boundaries (triage t-008)"
+description: >
+  Two informational-severity hardening notes from the pre-public-release security review
+  (triage t-008), picked up as the final item in the post-release backlog sweep. Neither
+  finding blocks any shipped release; both are additive validation with no behavior change
+  for any caller already passing valid input.
+
+  1. Reject non-UUID run_id values at the dispatch.ts/mcp-server.ts ABI boundary instead of
+     letting an arbitrary string reach a filesystem path join in run-manager.ts.
+  2. Add an optional MINERVA_ALLOWED_TARGET_REPOS allowlist env var so operators of
+     less-trusted deployments can constrain which local repo paths startRun may target;
+     absent (the default), behavior is unchanged.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: tdd
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [security-hardening, small-scope, backend-validation]
+  roster: [orchestrator]
+  per_tag_reasoning:
+    security-hardening: "Source is a security-review triage entry (t-008); no new architecture, pure validation additions."
+    small-scope: "2 isolated files/entry-points, no UI, no external dependency, no cross-layer coordination."
+    backend-validation: "Both fixes are input-validation guards in existing TS modules already covered by the TDD suite."
+  confidence: high
+  gate_decisions:
+    tpm_spawned: false
+    architect_spawned: false
+    ui_designer_spawned: false
+    reason: "Small scope per design-discussion.md §6 — design discussion + grill (1 round, converged) judged sufficient; H/V and structured outline not warranted for 2 additive validation guards."
+
+source_triage: t-008
+
+stories:
+  - id: validate-run-id-uuid-shape
+    title: "Reject non-UUID run_id at the ABI boundary"
+    complexity: low
+    depends_on: []
+  - id: target-repo-allowlist
+    title: "Optional MINERVA_ALLOWED_TARGET_REPOS allowlist"
+    complexity: low
+    depends_on: []

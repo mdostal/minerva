@@ -16,6 +16,7 @@ import { dispatch } from "./dispatch.ts";
 import { __setDriverForTest } from "./kickoff-engine.ts";
 import { HeimdallRouteError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 import { createSeedRepo } from "./test-cli.ts";
+import { allocateRun } from "./run-manager.ts";
 
 let minervaHome: string;
 let seedRepo: string;
@@ -70,4 +71,63 @@ test("a genuinely nonexistent method name still returns UNKNOWN_METHOD -- this p
   assert.equal(response.error.code, "UNKNOWN_METHOD");
   assert.match(response.error.message, /Unknown method: thisMethodDoesNotExist/);
   assert.equal(response.error.retry_after_ms, null);
+});
+
+// validate-run-id-uuid-shape story -- run_id reaches run-manager.ts's runDir()/runRecordPath()
+// path-join with no format validation anywhere upstream. dispatch.ts's method routing is one of
+// the two ABI boundaries (the other is mcp-server.ts's CallToolRequestSchema handler) that must
+// reject a non-UUID run_id with VALIDATION_FAILED BEFORE calling into the run-manager.ts-backed
+// handler at all, for exactly these five methods.
+const RUN_ID_METHODS = ["getRunStatus", "getQuestions", "submitAnswers", "getOutput", "abortRun"] as const;
+const NON_UUID_RUN_IDS = ["x", "", "../../etc/passwd", "not-a-uuid-at-all", "12345"];
+
+// Every one of these methods declares other required params too (channel, answers) -- pass
+// well-formed values for those so a failure can ONLY be attributed to run_id shape, never to a
+// different, unrelated VALIDATION_FAILED (e.g. "requires channel ..."). This isolates exactly
+// what the guard is supposed to catch.
+function fullParamsFor(runId: string): Record<string, unknown> {
+  return {
+    run_id: runId,
+    channel: "agent",
+    answers: [{ question_id: "q1", answer: "an answer" }],
+  };
+}
+
+for (const method of RUN_ID_METHODS) {
+  for (const badRunId of NON_UUID_RUN_IDS) {
+    test(`dispatch rejects ${method} with non-UUID run_id ${JSON.stringify(badRunId)} as VALIDATION_FAILED naming run_id`, async () => {
+      const response = await dispatch({ method, params: fullParamsFor(badRunId) });
+
+      assert.ok("error" in response, `expected an error response, got ${JSON.stringify(response)}`);
+      assert.equal(response.error.code, "VALIDATION_FAILED");
+      assert.match(response.error.message, /run_id/);
+      assert.equal(response.error.retry_after_ms, null);
+    });
+  }
+}
+
+test("dispatch: a valid-UUID run_id round-trips unchanged through all five methods (no regression)", async () => {
+  const { run_id: runId } = allocateRun("an idea for the dispatch UUID regression test", undefined);
+
+  const status = await dispatch({ method: "getRunStatus", params: { run_id: runId } });
+  assert.ok("result" in status, `expected a result, got ${JSON.stringify(status)}`);
+  assert.equal(status.result.status, "in_progress");
+
+  const questions = await dispatch({ method: "getQuestions", params: { run_id: runId, channel: "agent" } });
+  assert.ok("result" in questions, `expected a result, got ${JSON.stringify(questions)}`);
+  assert.deepEqual(questions.result.questions, []);
+
+  const output = await dispatch({ method: "getOutput", params: { run_id: runId } });
+  assert.ok("error" in output, `expected an error, got ${JSON.stringify(output)}`);
+  assert.equal(output.error.code, "NOT_READY", "a real run_id must reach run-manager, not be rejected as VALIDATION_FAILED");
+
+  const submit = await dispatch({
+    method: "submitAnswers",
+    params: { run_id: runId, channel: "agent", answers: [{ question_id: "no-such-question", answer: "x" }] },
+  });
+  assert.ok("error" in submit, `expected an error, got ${JSON.stringify(submit)}`);
+  assert.equal(submit.error.code, "NOT_FOUND", "a real run_id must reach kickoff-engine, not be rejected as VALIDATION_FAILED");
+
+  const abort = await dispatch({ method: "abortRun", params: { run_id: runId } });
+  assert.ok("result" in abort, `expected a result, got ${JSON.stringify(abort)}`);
 });

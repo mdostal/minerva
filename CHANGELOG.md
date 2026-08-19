@@ -4,6 +4,10 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **`harden-run-id-and-target-repo-boundaries` release finalization.** `/execute` applied the planned `patch` version bump (`0.2.0` → `0.2.1`).
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

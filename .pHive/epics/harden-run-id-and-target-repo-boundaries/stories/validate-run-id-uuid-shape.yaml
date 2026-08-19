@@ -1,7 +1,9 @@
 id: validate-run-id-uuid-shape
 epic: harden-run-id-and-target-repo-boundaries
 title: "Reject non-UUID run_id at the ABI boundary"
-status: complete
+status: shipped
+shipped_at: "2026-08-19T23:55:00Z"
+release_id: "v0.2.1"
 complexity: low
 methodology: tdd
 depends_on: []

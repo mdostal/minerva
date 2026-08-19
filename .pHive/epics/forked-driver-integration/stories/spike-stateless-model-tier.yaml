@@ -1,7 +1,13 @@
 id: spike-stateless-model-tier
 epic: forked-driver-integration
 title: "Spike: stateless-turn feasibility + minimum reliable model tier"
-status: pending
+status: shipped
+reconciliation_note: >
+  Built and released via the forked-driver-integration commit chain, tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: medium
 methodology: tdd
 depends_on: []

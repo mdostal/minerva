@@ -1,7 +1,13 @@
 id: poll-consus-answers
 epic: minerva-auto-resume
 title: Poll Consus API for parked question status
-status: pending
+status: obsolete
+obsolete_reason: >
+  Same supersession as the epic's other stories -- built (src/consus-poller.ts), then removed
+  by rip-out-consus-coupling. bin/minerva.test.ts now asserts pollAndResumeConsusAnswers is NOT
+  a registered ABI method.
+obsoleted_at: "2026-08-19T00:00:00Z"
+
 complexity: medium
 methodology: classic
 depends_on:

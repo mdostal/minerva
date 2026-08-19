@@ -1,7 +1,14 @@
 id: e2e-verification
 epic: minerva-auto-resume
 title: End-to-end integration and verification
-status: pending
+status: obsolete
+obsolete_reason: >
+  This story's whole mechanism (Consus-question-ID<->run-ID polling and resume) was built,
+  then deliberately torn out by the rip-out-consus-coupling epic per operator directive ("full
+  rip it out and apart") -- Minerva's v1 standalone requirement forbids Consus coupling. The
+  consus-*.ts modules this story depends on no longer exist in the tree.
+obsoleted_at: "2026-08-19T00:00:00Z"
+
 complexity: medium
 methodology: classic
 depends_on:

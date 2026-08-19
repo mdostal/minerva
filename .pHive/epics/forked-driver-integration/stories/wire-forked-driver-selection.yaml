@@ -1,7 +1,13 @@
 id: wire-forked-driver-selection
 epic: forked-driver-integration
 title: MINERVA_DRIVER=forked wiring + full regression
-status: pending
+status: shipped
+reconciliation_note: >
+  Built and released via the forked-driver-integration commit chain (commit 705ed97, closes epic), tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: medium
 methodology: tdd
 depends_on: [deadline-renewal-ownership]

@@ -1,7 +1,12 @@
 id: store-parked-mapping
 epic: minerva-auto-resume
 title: Store mapping between Consus question ID and Minerva run ID
-status: pending
+status: obsolete
+obsolete_reason: >
+  Same supersession as the epic's other stories -- built (src/consus-decisions.ts), then
+  removed by rip-out-consus-coupling.
+obsoleted_at: "2026-08-19T00:00:00Z"
+
 complexity: low
 methodology: classic
 depends_on: []

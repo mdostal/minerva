@@ -1,7 +1,13 @@
 id: deadline-renewal-ownership
 epic: forked-driver-integration
 title: Deadline renewal ownership
-status: pending
+status: shipped
+reconciliation_note: >
+  Built and released via the forked-driver-integration commit chain, tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: low
 methodology: tdd
 depends_on: [real-forked-hive-driver]

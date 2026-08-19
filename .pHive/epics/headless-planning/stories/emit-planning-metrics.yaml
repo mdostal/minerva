@@ -1,7 +1,13 @@
 id: emit-planning-metrics
 epic: headless-planning
 title: Capture and emit core planning metrics per run (turns, escalations, driver, elapsed)
-status: open
+status: shipped
+reconciliation_note: >
+  Built and released via Multica ticket PAN-8606, tracked outside this Hive epic's
+  story IDs -- status field was never updated even though the work landed and shipped.
+  Reconciled 2026-08-19 during the pre-open-source-release backlog sweep; see the
+  epic-reality-check audit for the corroborating commits.
+
 complexity: medium
 methodology: tdd
 depends_on: []

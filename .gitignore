@@ -5,3 +5,12 @@ node_modules/
 .env
 *.env
 !*.example.env
+
+# Hive process telemetry -- raw agent-run transcripts, interrupt captures, and metrics events.
+# Not planning/decision content (epics, stories, docs, episodes, audits stay tracked -- those
+# carry real context). This is operational exhaust from running the tooling itself.
+.pHive/agent-complete/
+.pHive/interrupts/
+.pHive/metrics/
+
+graphify-out/

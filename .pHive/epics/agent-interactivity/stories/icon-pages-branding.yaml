@@ -3,7 +3,7 @@ epic: agent-interactivity
 title: "Icon + gh-pages landing site + branding"
 complexity: medium
 depends_on: []
-status: planned
+status: complete
 
 description: >
   Icon direction decided by the operator via the parallel-blind-design-agents technique

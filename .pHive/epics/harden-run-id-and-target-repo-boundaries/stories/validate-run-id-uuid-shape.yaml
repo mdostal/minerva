@@ -1,0 +1,89 @@
+id: validate-run-id-uuid-shape
+epic: harden-run-id-and-target-repo-boundaries
+title: "Reject non-UUID run_id at the ABI boundary"
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  run_id is validated only as `typeof === "string"` (or not at all) everywhere it enters the
+  system, then joined directly into a filesystem path in src/run-manager.ts's runDir()/
+  runRecordPath() (join(runsRoot(), runId)). allocateRun() always produces run_id via
+  randomUUID(), so any other shape is definitionally external/malformed input. Add a UUID-shape
+  guard and enforce it ONLY at the two ABI boundaries (src/dispatch.ts, src/mcp-server.ts) --
+  never inside run-manager.ts itself.
+
+  PLACEMENT CONSTRAINT (confirmed by grill during planning, do not relocate this validation):
+  src/output-emitter.test.ts:536 calls commitAndPushPlan({ run_id: "x", ... }) directly, bypassing
+  the ABI boundary entirely -- a legitimate internal-function test, not a loophole. Placing the
+  guard inside run-manager.ts instead of at the boundary would break this test. The guard belongs
+  in dispatch.ts's method routing (before it calls into run-manager.ts-backed handlers) and in
+  mcp-server.ts's CallToolRequestSchema handler (before it forwards to dispatch()).
+
+  Reject with the existing VALIDATION_FAILED error code (already established for malformed-input
+  rejection in both files -- no new error code) and a message naming the field, e.g.
+  `"run_id must be a valid UUID"`.
+
+  Validate UUID *shape* generically (any RFC 4122 version), not v4-specifically -- this guards
+  against Node's randomUUID() output format changing across versions; it is not meant to assert
+  provenance.
+
+acceptance_criteria:
+  - "Given getRunStatus/getQuestions/submitAnswers/getOutput/abortRun called via the stdin-JSON ABI (dispatch.ts) with a non-UUID run_id (e.g. \"../../etc/passwd\", \"x\", \"\"), when dispatched, then the response is {error: {code: \"VALIDATION_FAILED\", message: naming run_id}} and run-manager.ts's path-join functions are never reached."
+  - "Given the same five MCP tools called via mcp-server.ts with a non-UUID run_id, when CallToolRequestSchema's handler runs, then the same VALIDATION_FAILED rejection occurs before dispatch() is invoked."
+  - "Given a valid UUID run_id for an existing run, when any of the five methods are called via either boundary, then behavior is byte-identical to before this change (no regression)."
+  - "Given src/output-emitter.test.ts:536's direct commitAndPushPlan({ run_id: \"x\", ... }) call (an internal function, not routed through either ABI boundary), when the full test suite runs, then it still passes unchanged -- proves the guard is boundary-scoped, not pushed into run-manager.ts."
+
+metric:
+  applies: false
+  justification: "Pure input-validation hardening with no user-facing behavioral change for valid input; nothing to measure a trend against beyond the acceptance-criteria regression tests themselves."
+
+steps:
+  - id: research
+    description: Re-confirm every dispatch.ts method handler and mcp-server.ts tool handler that accepts run_id, and the exact VALIDATION_FAILED message shape already used elsewhere in each file for style consistency.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests asserting VALIDATION_FAILED for non-UUID run_id at both boundaries
+      (dispatch.ts and mcp-server.ts, all five affected methods each), plus a regression test
+      confirming a valid-UUID run_id still round-trips correctly. Do NOT read the implementation
+      first -- write from the acceptance criteria.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the UUID-shape guard function (co-located in run-manager.ts near runDir/runRecordPath, since that's what it protects, but called ONLY from dispatch.ts and mcp-server.ts) and wire it into both boundaries' five methods. Make the failing tests pass without modifying them.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the guard is not reachable from any run-manager.ts-internal call path (grep for direct run-manager.ts function calls in tests/src, verify output-emitter.test.ts:536 still passes), and that error messages match existing VALIDATION_FAILED style.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to the epic branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/run-manager.ts
+      purpose: "Home of runDir()/runRecordPath() (the path-join this guard protects) and where the new UUID-shape helper should live, even though it's called elsewhere."
+    - path: src/dispatch.ts
+      purpose: "stdin-JSON ABI method routing -- one of the two boundary call sites."
+    - path: src/mcp-server.ts
+      purpose: "MCP tool handler -- the other boundary call site (5 tools declare run_id: {type: string} in their JSON Schema at lines 56-130)."
+    - path: src/output-emitter.test.ts
+      purpose: "Line 536 is the internal-call-path test that must remain unaffected -- proves the guard is boundary-scoped."
+
+design_decisions:
+  - decision: "Validate at dispatch.ts/mcp-server.ts only, never inside run-manager.ts's own functions."
+    rationale: "run-manager.ts's functions are also called directly by tests/internal code with non-UUID placeholder values (output-emitter.test.ts:536). Boundary-only placement catches every external caller while leaving legitimate internal call sites untouched."
+  - decision: "Accept any RFC 4122 UUID version, not just v4."
+    rationale: "Validating shape, not provenance -- avoids coupling to Node's randomUUID() implementation detail, which could change version across Node upgrades."
+
+references:
+  - path: .pHive/epics/harden-run-id-and-target-repo-boundaries/docs/design-discussion.md
+    relevant_excerpt: |
+      Add a UUID-shape guard ... call it at every external entry point before the value reaches
+      run-manager.ts's path-join functions ... Placement constraint (confirmed by grill round 1).

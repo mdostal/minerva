@@ -90,3 +90,30 @@ test("resolveLocalCheckout: clones a slug on demand under the base and guarantee
   const r2 = resolveLocalCheckout(fileUrl);
   assert.equal(r2.cloned, false);
 });
+
+// Security regression test (found by a full-repo security review ahead of this project's first
+// public release): a target_repo value can originate from a Multica ticket's free-text
+// description/title (bin/minerva-plan.ts's --ticket flow via parseTargetRepoLine), not just an
+// operator-typed CLI flag -- so it must be treated as untrusted, not just "some string that
+// happens to look URL-ish." Proves the fix actually blocks the exploit at the git-subprocess
+// boundary (GIT_ALLOW_PROTOCOL), not just that the code "looks" fixed.
+test("resolveLocalCheckout: a git-clone-injection payload via the ext:: transport helper is blocked, not executed", () => {
+  const root = mkdtempSync(join(tmpdir(), "minerva-trs-sec-"));
+  cleanups.push(root);
+  const base = join(root, "checkouts");
+  execFileSync("mkdir", ["-p", base]);
+  process.env.MINERVA_REPO_CHECKOUT_BASE = base;
+
+  const canary = join(root, "pwned");
+  // `%` is git's ext:: argument separator (git help remote-ext); `$IFS` stands in for a space so
+  // the payload survives parseTargetRepoLine's \S+ (whitespace-free token) capture -- the exact
+  // value shape that would arrive from a crafted ticket description's `target_repo:` line.
+  const payload = `ext::sh%-c%touch$IFS${canary}%git@`;
+
+  assert.throws(
+    () => resolveLocalCheckout(payload),
+    /GIT_ALLOW_PROTOCOL|protocol|not allowed/i,
+    "expected git itself to refuse the ext:: transport, not silently run it",
+  );
+  assert.equal(existsSync(canary), false, "the injected command must never actually execute");
+});

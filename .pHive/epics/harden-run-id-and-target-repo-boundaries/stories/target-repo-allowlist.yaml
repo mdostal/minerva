@@ -1,7 +1,7 @@
 id: target-repo-allowlist
 epic: harden-run-id-and-target-repo-boundaries
 title: "Optional MINERVA_ALLOWED_TARGET_REPOS allowlist"
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: []

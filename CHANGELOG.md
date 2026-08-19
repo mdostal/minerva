@@ -4,6 +4,12 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-19
+
+### Security
+
+- **Two informational hardening notes from the pre-public-release security review, closed** (triage `t-008`, epic `harden-run-id-and-target-repo-boundaries`): `run_id` is now validated as UUID-shaped at both ABI boundaries (`dispatch.ts`'s stdin-JSON routing, `mcp-server.ts`'s MCP tool handler) before it can reach a filesystem path join — scoped deliberately to the boundary, not `run-manager.ts` itself, so internal call sites that use non-UUID placeholder values keep working unchanged. An optional `MINERVA_ALLOWED_TARGET_REPOS` env var lets operators of less-trusted deployments constrain which local repo paths `startRun` may target (comma-separated slugs and/or absolute paths); unset (the default), behavior is completely unchanged. Both additive, opt-in-by-default, TDD'd, and independently cross-verified by two separate implementation passes plus a fresh-eyes review before merging.
+
 ### Changed
 
 - **`harden-run-id-and-target-repo-boundaries` release finalization.** `/execute` applied the planned `patch` version bump (`0.2.0` → `0.2.1`).

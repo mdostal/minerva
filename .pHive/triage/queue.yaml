@@ -515,7 +515,7 @@ items:
       - { state: plan-ready, at: "2026-08-19T03:00:00Z" }
       - { state: closed, at: "2026-08-19T05:00:00Z" }
   - id: t-009
-    state: prioritized
+    state: plan-ready
     kind: feature
     title: "Driver lifecycle telemetry: driver_started / driver_succeeded / driver_failed events"
     description: |
@@ -538,14 +538,15 @@ items:
     priority: p3
     severity: low
     assignee: null
-    linked_epic: null
-    linked_story: null
+    linked_epic: driver-telemetry-and-allowlist-fix
+    linked_story: driver-lifecycle-telemetry
     closed_reason: null
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-19T05:15:00Z" }
       - { state: clarified, at: "2026-08-20T00:15:00Z" }
       - { state: prioritized, at: "2026-08-20T00:15:00Z" }
+      - { state: plan-ready, at: "2026-08-20T00:25:00Z" }
   - id: t-010
     state: closed
     kind: feature
@@ -607,11 +608,12 @@ items:
     priority: p3
     severity: low
     assignee: null
-    linked_epic: null
-    linked_story: null
+    linked_epic: driver-telemetry-and-allowlist-fix
+    linked_story: allowlist-skip-local-path-slug-derivation
     closed_reason: null
     closed_at: null
     state_history:
       - { state: inbox, at: "2026-08-19T23:45:00Z" }
       - { state: clarified, at: "2026-08-20T00:15:00Z" }
       - { state: prioritized, at: "2026-08-20T00:15:00Z" }
+      - { state: plan-ready, at: "2026-08-20T00:25:00Z" }

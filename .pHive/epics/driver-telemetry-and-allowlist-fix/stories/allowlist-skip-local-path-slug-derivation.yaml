@@ -1,7 +1,9 @@
 id: allowlist-skip-local-path-slug-derivation
 epic: driver-telemetry-and-allowlist-fix
 title: "Skip unnecessary git shell-out for local-path allowlist entries"
-status: complete
+status: shipped
+shipped_at: "2026-08-20T00:45:00Z"
+release_id: "v0.3.0"
 complexity: low
 methodology: tdd
 depends_on: []

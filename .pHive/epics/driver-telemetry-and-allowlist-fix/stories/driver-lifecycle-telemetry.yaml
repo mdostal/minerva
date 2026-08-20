@@ -1,7 +1,9 @@
 id: driver-lifecycle-telemetry
 epic: driver-telemetry-and-allowlist-fix
 title: "driver_started/driver_succeeded/driver_failed telemetry for ForkedHiveDriver"
-status: complete
+status: shipped
+shipped_at: "2026-08-20T00:45:00Z"
+release_id: "v0.3.0"
 complexity: low
 methodology: tdd
 depends_on: []

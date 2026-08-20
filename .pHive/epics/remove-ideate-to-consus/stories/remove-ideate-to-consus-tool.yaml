@@ -1,6 +1,11 @@
 id: remove-ideate-to-consus-tool
 epic: remove-ideate-to-consus
 title: Delete ideate-to-consus.mjs, its demo artifacts, and the last dead Consus env-var reference
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: bin/ideate-to-consus.mjs confirmed absent from the tree.
 complexity: low
 depends_on: []
 

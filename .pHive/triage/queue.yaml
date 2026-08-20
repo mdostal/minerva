@@ -545,7 +545,7 @@ items:
     state_history:
       - { state: inbox, at: "2026-08-19T05:15:00Z" }
   - id: t-010
-    state: inbox
+    state: closed
     kind: feature
     title: "Add CONTRIBUTING.md and .github/FUNDING.yml"
     description: |
@@ -567,10 +567,11 @@ items:
     assignee: null
     linked_epic: null
     linked_story: null
-    closed_reason: null
-    closed_at: null
+    closed_reason: "CONTRIBUTING.md added directly (low-risk boilerplate). .github/FUNDING.yml deliberately NOT added -- still the operator's call on whether/how to solicit funding, not something to default into even under a general go-ahead. Re-open (or file fresh) if you want FUNDING.yml added with a specific target (GitHub Sponsors, BuyMeACoffee, etc.)."
+    closed_at: "2026-08-20T00:10:00Z"
     state_history:
       - { state: inbox, at: "2026-08-19T05:15:00Z" }
+      - { state: closed, at: "2026-08-20T00:10:00Z" }
   - id: t-011
     state: inbox
     kind: bug

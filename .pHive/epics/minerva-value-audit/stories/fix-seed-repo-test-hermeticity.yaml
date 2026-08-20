@@ -1,7 +1,12 @@
 id: fix-seed-repo-test-hermeticity
 epic: minerva-value-audit
 title: Make full-loop.test.ts and plan-runner.test.ts self-provision their seed repo
-status: pending
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: src/full-loop.test.ts:96-137, src/plan-runner.test.ts:23-67 both self-provision MINERVA_SEED_REPO.
+
 complexity: low
 methodology: tdd
 depends_on: []

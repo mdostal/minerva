@@ -1,7 +1,12 @@
 id: add-driver-fallback-observability
 epic: minerva-value-audit
 title: Make Minerva's two silent driver-fallback paths loudly observable
-status: pending
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: src/driver.ts:226-264, explicit named error messages on fallback (same mechanism as the sibling fix-startrun-heimdall-routing story).
+
 complexity: medium
 methodology: tdd
 depends_on: []

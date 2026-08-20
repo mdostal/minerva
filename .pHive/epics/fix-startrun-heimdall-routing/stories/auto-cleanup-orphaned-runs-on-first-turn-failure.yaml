@@ -1,7 +1,12 @@
 id: auto-cleanup-orphaned-runs-on-first-turn-failure
 epic: fix-startrun-heimdall-routing
 title: Transition a run to aborted automatically when its first drive turn fails
-status: pending
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: src/kickoff-engine.ts:384 calls abortRun on first-turn failure.
+
 complexity: medium
 methodology: tdd
 depends_on: [fix-heimdall-route-fail-fast-with-fallback]

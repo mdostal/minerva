@@ -1,7 +1,12 @@
 id: resolve-plan-agnostic-architecture-question
 epic: minerva-value-audit
 title: Resolve whether plan-agnostic.mjs substitutes for Minerva's full plan-flow loop
-status: pending
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: resolved and documented inside docs/decisions/002-pr341-production-dependency.md.
+
 complexity: low
 methodology: classic
 depends_on: [document-pr341-production-dependency]

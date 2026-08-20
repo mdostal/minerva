@@ -1,7 +1,12 @@
 id: document-consus-ripout-and-standalone-boundary
 epic: rip-out-consus-coupling
 title: Document the rip-out end state and draw an explicit standalone-boundary line around ideate-to-consus.mjs
-status: pending
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: .pHive/CONTEXT.md:3,49 documents the standalone/v1 boundary; CHANGELOG's rip-out entry documents the removal in detail. The story's original target artifact (ideate-to-consus.mjs) was itself later deleted by remove-ideate-to-consus -- shipped-in-spirit, nothing left to document.
+
 complexity: medium
 methodology: classic
 depends_on: [core-rip-out-consus-coupling]

@@ -1,6 +1,11 @@
 id: fix-test-suite-flakiness-t006
 epic: fix-test-suite-flakiness-t006
 title: Fix seed-repo self-provisioning gap and hardcoded fork-path skip for the 7 remaining failures
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: src/deadline-renewal-ownership.test.ts:41-63, src/real-forked-hive-driver.test.ts:3 both use configurable MINERVA_HIVE_PLUGIN_DIR with graceful skip.
 complexity: low
 depends_on: []
 

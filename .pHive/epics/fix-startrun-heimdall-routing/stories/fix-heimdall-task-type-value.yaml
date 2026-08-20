@@ -1,7 +1,12 @@
 id: fix-heimdall-task-type-value
 epic: fix-startrun-heimdall-routing
 title: Correct the hardcoded Heimdall task-type value (confirmed invalid) to a real, evidenced value
-status: pending
+status: shipped
+reconciliation_note: >
+  Confirmed already shipped via a reality-check audit (2026-08-20) -- work landed via direct
+  commits documented in CHANGELOG.md's release-finalization entries, story YAML was simply
+  never updated. Evidence: src/driver.ts:152, src/agnostic-plan-driver.ts:101 both use task-type=planning.
+
 complexity: low
 methodology: classic
 depends_on: []

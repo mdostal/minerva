@@ -112,6 +112,14 @@ function isTargetRepoAllowed(targetRepo: string, allowed: string[]): boolean {
     const entryTrimmed = entry.trim();
     if (entryTrimmed === targetTrimmed) return true;
     if (!targetSlug) return false;
+    // allowlist-skip-local-path-slug-derivation story: an entry that is clearly a local filesystem
+    // path (starts with "/" or "~") can never match by slug -- deriving one would require a real
+    // `git -C <entry> remote get-url origin` shell-out (normalizeTargetRepoValue's local-path
+    // branch, target-repo-signal.ts) against a checkout that has nothing to do with the target_repo
+    // actually being validated. The exact-string check just above already covers local-path entries
+    // correctly, so skip slug derivation entirely here -- pure dead-work removal, not a behavior
+    // change (a non-matching local path was never going to slug-match anyway).
+    if (entryTrimmed.startsWith("/") || entryTrimmed.startsWith("~")) return false;
     const entrySlug = normalizeTargetRepoValue(entry).slug;
     return entrySlug !== null && entrySlug === targetSlug;
   });

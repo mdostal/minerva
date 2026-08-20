@@ -1,0 +1,100 @@
+id: driver-lifecycle-telemetry
+epic: driver-telemetry-and-allowlist-fix
+title: "driver_started/driver_succeeded/driver_failed telemetry for ForkedHiveDriver"
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Recovered from a stale, never-merged PR (#57, opened 2026-08-11) that proposed a real,
+  genuinely-still-missing capability -- confirmed via grep that neither src/telemetry.ts nor
+  any driver_started/driver_succeeded/driver_failed reference exists anywhere on dev/main today.
+  Do NOT merge the old branch -- it predates and would conflict with the fix-test-suite-
+  flakiness-t006 fix to real-forked-hive-driver.test.ts's FORK_PATH handling. Fresh
+  implementation against current code only.
+
+  Add a new src/telemetry.ts exporting emitTelemetryEvent(event: string, payload?: object): void,
+  which appends one JSON line ({event, emitted_at, ...payload}) to
+  <MINERVA_HOME>/events/<event>.jsonl (MINERVA_HOME resolution matches the existing convention:
+  process.env.MINERVA_HOME ?? join(homedir(), ".minerva"), already used in run-manager.ts).
+
+  Wire it into src/driver.ts's ForkedHiveDriver.runTurn() around the existing spawnRuntime()
+  call: emit driver_started before, driver_succeeded after success, driver_failed (with
+  err.message) in a catch that RETHROWS the original error unchanged -- telemetry must never
+  swallow or alter runTurn's existing control flow/error behavior.
+
+  This is deliberately scoped to ForkedHiveDriver only (not SpawnDriver/SubagentDriver) --
+  matches what was actually proposed and what the triage entry documented. It is also
+  deliberately separate from the existing RunMetrics system (recordDriverTurn/
+  updateRunMetricsDriver/finalizeRunMetrics in run-manager.ts) -- RunMetrics is per-run
+  introspection embedded in the run record; this is a flat, cross-run operational event log an
+  operator could tail/ship externally. Do not conflate or merge the two mechanisms.
+
+  TEST ISOLATION (confirmed by grill round 1, finding H1 -- required, not optional):
+  src/real-forked-hive-driver.test.ts does NOT currently set MINERVA_HOME (confirmed via grep).
+  Its before()/after() hooks only touch MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL and
+  MINERVA_HIVE_PLUGIN_DIR. The test-spec step MUST add a MINERVA_HOME override (mkdtempSync-based
+  temp dir, matching the pattern already used in run-manager.test.ts) to this file's
+  before()/after() hooks before writing any test that exercises ForkedHiveDriver.runTurn() and
+  checks telemetry output -- otherwise the test would write real JSONL files into the developer's
+  actual ~/.minerva/events/ directory.
+
+acceptance_criteria:
+  - "Given ForkedHiveDriver.runTurn() is called and spawnRuntime() succeeds, when the turn completes, then a driver_started event and a driver_succeeded event are appended to <MINERVA_HOME>/events/driver_started.jsonl and driver_succeeded.jsonl respectively, each a valid JSON line with an emitted_at ISO timestamp."
+  - "Given ForkedHiveDriver.runTurn() is called and spawnRuntime() throws, when the turn fails, then a driver_started event AND a driver_failed event (containing the error message) are appended, the driver_succeeded event is NOT appended, and the original error is rethrown unchanged (same error type/message the caller would have seen before this change)."
+  - "Given MINERVA_HOME is set to an isolated temp directory (test convention), when telemetry events are emitted during a test run, then no files are written outside that temp directory -- confirmed by NOT finding new files under the real ~/.minerva/events/ after the test."
+  - "Given src/real-forked-hive-driver.test.ts's existing tests (the two from the forked-driver-integration epic), when the full test file runs after this change, then they still pass unchanged -- confirms the new MINERVA_HOME isolation and telemetry wiring don't regress the existing live-integration tests."
+
+metric:
+  applies: false
+  justification: "Pure observability addition (an event log an operator may or may not consume) -- no product behavior to trend against; the acceptance-criteria tests are the only falsifiable surface."
+
+steps:
+  - id: research
+    description: Re-confirm ForkedHiveDriver.runTurn()'s exact current structure in src/driver.ts around the spawnRuntime() call, and real-forked-hive-driver.test.ts's current before()/after() hooks (confirm MINERVA_HOME is genuinely absent, matching this story's H1 finding).
+    agent: researcher
+  - id: test-spec
+    description: |
+      Add MINERVA_HOME isolation to real-forked-hive-driver.test.ts's before()/after() hooks
+      FIRST (required per this story's placement constraint), then write failing tests for all 4
+      acceptance criteria. Do NOT read driver.ts's implementation details beyond the class/method
+      signature before writing tests -- write from the acceptance criteria.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Create src/telemetry.ts and wire ForkedHiveDriver.runTurn() to emit the three events. Make the failing tests pass without modifying them.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm telemetry never swallows/alters runTurn's original error behavior, confirm MINERVA_HOME isolation actually works (no real ~/.minerva pollution), confirm scope stays ForkedHiveDriver-only and doesn't touch RunMetrics.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to the epic branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/driver.ts
+      purpose: "ForkedHiveDriver.runTurn() -- where the spawnRuntime() call this story wraps lives."
+    - path: src/real-forked-hive-driver.test.ts
+      purpose: "Existing live-integration test for ForkedHiveDriver -- needs MINERVA_HOME isolation added before any telemetry-checking test is written here."
+    - path: src/run-manager.ts
+      purpose: "Existing RunMetrics system + MINERVA_HOME resolution convention to mirror, not duplicate."
+
+design_decisions:
+  - decision: "Scope to ForkedHiveDriver only, not SpawnDriver/SubagentDriver."
+    rationale: "Matches what was actually proposed (stale PR #57) and what the triage entry documented -- not expanding beyond the surfaced idea."
+  - decision: "Separate mechanism from RunMetrics, not a merge/extension of it."
+    rationale: "RunMetrics is per-run introspection (turns/driver/elapsed for THIS run, read via getRunStatus/getOutput); this is a flat, cross-run operational event log for external tailing/shipping. Different consumers, different shape."
+  - decision: "Telemetry write failures are not swallowed."
+    rationale: "Matches this codebase's fail-loud discipline (CONTEXT.md conventions) -- a real fs error writing telemetry is worth surfacing, not hiding, even though telemetry itself is opt-in/best-effort in spirit."
+
+references:
+  - path: .pHive/epics/driver-telemetry-and-allowlist-fix/docs/design-discussion.md
+    relevant_excerpt: |
+      Test isolation (confirmed by grill round 1, finding H1): real-forked-hive-driver.test.ts
+      does NOT currently set MINERVA_HOME ... The test-spec step must ADD a MINERVA_HOME override.

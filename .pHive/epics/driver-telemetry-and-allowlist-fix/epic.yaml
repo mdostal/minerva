@@ -1,0 +1,28 @@
+name: driver-telemetry-and-allowlist-fix
+title: "Driver lifecycle telemetry (t-009) + target_repo allowlist perf fix (t-011)"
+description: >
+  Bundled small epic from two discretionary backlog items surfaced after the v0.2.1 release:
+  t-009 (driver lifecycle telemetry, a genuinely unimplemented idea recovered from a stale,
+  unmergeable abandoned PR) and t-011 (an unnecessary git subprocess call in the target_repo
+  allowlist, found by a round-2 /grill pass on the just-shipped hardening epic). Neither is
+  urgent or blocking; picked up per operator direction to keep iterating on the triaged backlog.
+target_codebase: /Users/mdostal/Documents/work/pantheon/minerva
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+source_triage: [t-009, t-011]
+
+stories:
+  - id: driver-lifecycle-telemetry
+    title: "driver_started/driver_succeeded/driver_failed telemetry for ForkedHiveDriver"
+    complexity: low
+    depends_on: []
+  - id: allowlist-skip-local-path-slug-derivation
+    title: "Skip unnecessary git shell-out for local-path allowlist entries"
+    complexity: low
+    depends_on: []

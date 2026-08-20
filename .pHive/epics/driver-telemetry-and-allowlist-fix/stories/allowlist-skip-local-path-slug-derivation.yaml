@@ -1,0 +1,81 @@
+id: allowlist-skip-local-path-slug-derivation
+epic: driver-telemetry-and-allowlist-fix
+title: "Skip unnecessary git shell-out for local-path allowlist entries"
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Surfaced by a round-2 /grill pass on the just-shipped harden-run-id-and-target-repo-boundaries
+  epic (triage t-011). src/kickoff-engine.ts:108-118's isTargetRepoAllowed() calls
+  normalizeTargetRepoValue(entry) for every configured MINERVA_ALLOWED_TARGET_REPOS entry that
+  doesn't exact-string-match the target_repo being checked. For local-path entries, this triggers
+  a real execFileSync("git", ["-C", localPath, "remote", "get-url", "origin"], ...) subprocess
+  call (target-repo-signal.ts:57-72's local-path branch) -- unnecessary work, and makes the
+  allowlist outcome depend on live filesystem/git state of OTHER configured paths unrelated to
+  the target_repo actually being validated.
+
+  Fix: before calling normalizeTargetRepoValue(entry) for slug comparison, check whether `entry`
+  is clearly a local path (starts with "/" or "~") -- if so, skip slug derivation for that entry
+  entirely. The exact-string match already above it covers local paths; a local-path entry that
+  doesn't match exactly also cannot match by slug (deriving a slug from it requires a live git
+  read that has nothing to do with the target being validated), so skipping is
+  behavior-preserving, not a semantic change -- it only removes dead work on the miss path.
+
+acceptance_criteria:
+  - "Given MINERVA_ALLOWED_TARGET_REPOS contains a local-path entry (e.g. /Users/x/repo) and the target_repo being checked is a DIFFERENT slug entirely, when isTargetRepoAllowed runs, then it correctly rejects (unchanged outcome) AND does not invoke any git subprocess for that local-path entry -- verified by spying on/counting execFileSync git invocations, not just checking the boolean result."
+  - "Given the same allowlist and the target_repo IS that exact local path, when isTargetRepoAllowed runs, then it still matches via the existing exact-string comparison (unchanged behavior)."
+  - "Given MINERVA_ALLOWED_TARGET_REPOS mixes a local-path entry and a slug entry, and the target_repo matches the slug entry, when isTargetRepoAllowed runs, then it still correctly matches via slug comparison for the slug entry (confirms the fix doesn't break slug-entry matching, only skips derivation for path-shaped entries)."
+  - "Given the existing target-repo-allowlist.test.ts suite (6 tests from the harden-run-id-and-target-repo-boundaries epic), when it runs after this change, then all 6 still pass unchanged."
+
+metric:
+  applies: false
+  justification: "Pure internal efficiency/hygiene fix with no externally observable behavior change on any of the tested paths -- nothing to trend against beyond the acceptance-criteria regression tests."
+
+steps:
+  - id: research
+    description: Re-confirm isTargetRepoAllowed()'s exact current implementation in src/kickoff-engine.ts and normalizeTargetRepoValue()'s local-path branch in src/target-repo-signal.ts.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for all 4 acceptance criteria. The git-subprocess-count assertion needs
+      a real, verifiable mechanism (e.g. a spy/counter on execFileSync, or a local-path allowlist
+      entry pointing at a path with a KNOWN, distinguishable origin remote so a would-be
+      subprocess call's absence is provable another way) -- do not read the implementation first,
+      design the test from the acceptance criterion's intent.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the local-path short-circuit to isTargetRepoAllowed(). Make the failing tests pass without modifying them.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm no behavior change on any previously-passing case (re-run target-repo-allowlist.test.ts), confirm the local-path detection heuristic is reasonable and documented.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to the epic branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/minerva
+  key_files:
+    - path: src/kickoff-engine.ts
+      purpose: "isTargetRepoAllowed() (lines 108-118) -- the function this story fixes."
+    - path: src/target-repo-signal.ts
+      purpose: "normalizeTargetRepoValue()'s local-path branch (lines 57-72) -- the git subprocess call this story avoids triggering unnecessarily."
+    - path: src/target-repo-allowlist.test.ts
+      purpose: "Existing regression suite from harden-run-id-and-target-repo-boundaries -- must stay green."
+
+design_decisions:
+  - decision: "Detect local paths by prefix (/ or ~), not by attempting normalization first."
+    rationale: "Attempting normalization first would reintroduce the exact subprocess call this story is removing. A cheap string-prefix check is sufficient -- the existing isSlug()/isUrl() heuristics elsewhere in this codebase already use similarly cheap shape checks."
+
+references:
+  - path: .pHive/epics/driver-telemetry-and-allowlist-fix/docs/research-brief.md
+    relevant_excerpt: |
+      Fix: skip slug-derivation entirely when an allowlist entry is clearly a local path (starts
+      with / or ~) -- exact-string match is the only mechanism ever intended for local-path
+      entries.

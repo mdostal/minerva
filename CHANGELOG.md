@@ -4,6 +4,20 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+### Added
+
+- **Driver lifecycle telemetry for `ForkedHiveDriver`** (triage `t-009`, recovered from a stale, never-merged PR): a new `src/telemetry.ts` (`emitTelemetryEvent`) emits `driver_started`/`driver_succeeded`/`driver_failed` JSONL events to `<MINERVA_HOME>/events/`, a flat cross-run operational log an operator can tail/ship externally — deliberately separate from the existing per-run `RunMetrics` system. Scoped to `ForkedHiveDriver` only. Telemetry never swallows or alters the original error path.
+
+### Fixed
+
+- **`target_repo` allowlist no longer shells out to git unnecessarily** (triage `t-011`, found by a round-2 `/grill` pass on the just-shipped hardening epic): `isTargetRepoAllowed()` skips slug derivation entirely for `MINERVA_ALLOWED_TARGET_REPOS` entries that are clearly local paths — the pre-existing exact-string match already covers them, so this was dead work that also made the allowlist outcome depend on unrelated filesystem state. Behavior-preserving, not a semantic change.
+
+### Changed
+
+- **`driver-telemetry-and-allowlist-fix` release finalization.** `/execute` applied the planned `minor` version bump (`0.2.1` → `0.3.0`).
+
 ## [0.2.1] - 2026-08-19
 
 ### Security

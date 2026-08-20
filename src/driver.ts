@@ -39,6 +39,7 @@ import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
 import { listEnvelopes } from "./envelope-detection.ts";
+import { emitTelemetryEvent } from "./telemetry.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_HEIMDALL_URL = "http://127.0.0.1:4870";
@@ -945,7 +946,26 @@ export function writeAnswerOntoEnvelope(envelopePath: string, qid: string, answe
 }
 
 export class ForkedHiveDriver implements Driver {
+  // driver-lifecycle-telemetry: driver_started/driver_succeeded/driver_failed events wrap the
+  // whole turn (whichever branch below ends up calling spawnRuntime()), not just a single
+  // spawnRuntime() call site -- this method has three (dispatchFresh, answerAndContinue's own
+  // dispatchFresh re-entry, and classify), and the telemetry contract is about the outcome of
+  // runTurn() as a whole. Telemetry must never swallow or alter runTurn's existing control
+  // flow/error behavior: on failure the original error is rethrown completely unchanged (same
+  // object, same type, same message).
   async runTurn(input: DriverInput): Promise<DriverResult> {
+    emitTelemetryEvent("driver_started");
+    try {
+      const result = await this.dispatch(input);
+      emitTelemetryEvent("driver_succeeded");
+      return result;
+    } catch (err) {
+      emitTelemetryEvent("driver_failed", { message: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+  }
+
+  private async dispatch(input: DriverInput): Promise<DriverResult> {
     if (input.sessionId === null) {
       return this.dispatchFresh(input.cwd, input.prompt);
     }

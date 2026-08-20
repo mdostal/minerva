@@ -576,7 +576,7 @@ items:
       - { state: inbox, at: "2026-08-19T05:15:00Z" }
       - { state: closed, at: "2026-08-20T00:10:00Z" }
   - id: t-011
-    state: prioritized
+    state: plan-ready
     kind: bug
     title: "target_repo allowlist shells out to git for local-path allowlist entries unnecessarily"
     description: |

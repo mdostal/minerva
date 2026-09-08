@@ -251,6 +251,18 @@ function allocateWorktreeWorkspace(targetRepo: string, runId: string, workspaceP
   if (!existsSync(targetRepo)) {
     throw new MinervaError("VALIDATION_FAILED", `target_repo does not exist: ${targetRepo}`);
   }
+  // Fetch + fast-forward dev before cutting the worktree so dispatched runs start from the
+  // freshest available base. Non-fatal: if offline or not a fast-forward (diverged local
+  // dev), we proceed with the current local state rather than blocking the run entirely.
+  // Without this, a stale local dev branch causes all dispatched runs to see an outdated
+  // codebase — confirmed live: a run dispatched 2026-09-07 was 94 commits behind origin/main,
+  // causing it to duplicate work that had already been merged by a parallel build agent.
+  try {
+    execFileSync("git", ["-C", targetRepo, "fetch", "origin", "dev", "--no-tags", "--quiet"], { stdio: "pipe" });
+    execFileSync("git", ["-C", targetRepo, "merge", "--ff-only", "origin/dev"], { stdio: "pipe" });
+  } catch {
+    // non-fatal: proceed with current local dev
+  }
   try {
     execFileSync(
       "git",

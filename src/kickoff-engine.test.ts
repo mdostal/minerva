@@ -38,8 +38,7 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("startRun drives a real headless session to its first question; getQuestions surfaces raw prose on the human channel only", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("startRun drives a real headless session to its first question; getQuestions surfaces raw prose on the human channel only", () => {
   const started = call("startRun", { idea: "a tiny CLI todo app" }, env());
   assert.equal(started.status, 0);
   const runId = started.result.run_id;
@@ -59,8 +58,7 @@ test("startRun drives a real headless session to its first question; getQuestion
   assert.equal(agent.result.questions.length, 0);
 });
 
-test("No Autonomous Progress: polling getRunStatus repeatedly never advances a waiting_on_human run", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("No Autonomous Progress: polling getRunStatus repeatedly never advances a waiting_on_human run", () => {
   const runId = call("startRun", { idea: "a note-taking app" }, env()).result.run_id;
   const before1 = call("getRunStatus", { run_id: runId }, env()).result.status;
   const before2 = call("getRunStatus", { run_id: runId }, env()).result.status;
@@ -70,8 +68,7 @@ test("No Autonomous Progress: polling getRunStatus repeatedly never advances a w
   assert.equal(before3, "waiting_on_human");
 });
 
-test("submitAnswers resumes the real session with correct context, mirroring the spike's own resume proof", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("submitAnswers resumes the real session with correct context, mirroring the spike's own resume proof", () => {
   const runId = call("startRun", { idea: "a habit tracker" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
@@ -104,8 +101,7 @@ test("submitAnswers resumes the real session with correct context, mirroring the
   assert.equal(stillPendingHuman.result.questions.length, 1); // only q2, not q1+q2
 });
 
-test("WRONG_CHANNEL: submitting on the wrong channel is rejected and the run does not advance", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("WRONG_CHANNEL: submitting on the wrong channel is rejected and the run does not advance", () => {
   const runId = call("startRun", { idea: "a recipe box" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
@@ -125,8 +121,7 @@ test("WRONG_CHANNEL: submitting on the wrong channel is rejected and the run doe
   assert.equal(stillPending.result.questions[0].status, "pending");
 });
 
-test("questions carry real escalation-classification fields, not the old hardcoded stub", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("questions carry real escalation-classification fields, not the old hardcoded stub", () => {
   const runId = call("startRun", { idea: "a bookmark manager" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
@@ -141,8 +136,7 @@ test("questions carry real escalation-classification fields, not the old hardcod
   assert.equal(q1.channel, q1.suggested_channel);
 });
 
-test("submitAnswers validation: missing/invalid params return VALIDATION_FAILED without spawning claude", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("submitAnswers validation: missing/invalid params return VALIDATION_FAILED without spawning claude", () => {
   const runId = call("startRun", { idea: "a link shortener" }, env()).result.run_id;
 
   const noChannel = call("submitAnswers", { run_id: runId, answers: [{ question_id: "q-1", answer: "x" }] }, env());
@@ -198,8 +192,7 @@ function readRecord(runId: string) {
 // regardless of what a mock Heimdall server returns. The test below confirms that guard holds
 // even when Heimdall explicitly offers a non-claude runtime, rather than asserting the freeze
 // itself (which needs a non-test-mode path -- see triage t-007).
-test("planning route stays absent in test mode even when Heimdall offers a non-claude runtime (bulletproof claude fallback)", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("planning route stays absent in test mode even when Heimdall offers a non-claude runtime (bulletproof claude fallback)", async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
@@ -215,8 +208,7 @@ test("planning route stays absent in test mode even when Heimdall offers a non-c
   }
 });
 
-test("planning route falls back to claude (absent fields) when Heimdall is unreachable or returns 500", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("planning route falls back to claude (absent fields) when Heimdall is unreachable or returns 500", async () => {
   const mock = await createMockHeimdall({}, 500);
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
@@ -232,8 +224,7 @@ test("planning route falls back to claude (absent fields) when Heimdall is unrea
   }
 });
 
-test("planning route stays absent when Heimdall explicitly returns claude", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("planning route stays absent when Heimdall explicitly returns claude", async () => {
   const mock = await createMockHeimdall({ runtime: "claude", model: "claude-3-5-sonnet" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
@@ -253,8 +244,7 @@ test("planning route stays absent when Heimdall explicitly returns claude", asyn
 // mode, so "no drift" here means submitAnswers doesn't introduce a spurious plan_runtime value
 // on a run that started with none -- not that a frozen non-claude value survives a continuation
 // turn (that positive path is untested anywhere yet -- see triage t-007).
-test("submitAnswers introduces no plan_runtime drift on a run that never froze one, and falls back correctly if CLI is missing", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("submitAnswers introduces no plan_runtime drift on a run that never froze one, and falls back correctly if CLI is missing", async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl(), HIVE_PLAN_AGNOSTIC_CLI: "/does/not/exist" };
@@ -363,8 +353,7 @@ test("orphan cleanup: a first-turn failure (Heimdall routing failure, no fallbac
   assert.equal(ledgerEntriesAfterSecondAbort.length, 1);
 });
 
-test("orphan cleanup boundary: a run that already reached waiting_on_human is NOT auto-aborted by a later-stage (submitAnswers) failure -- that is a stall, protected by AD-5, out of scope for this hook", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("orphan cleanup boundary: a run that already reached waiting_on_human is NOT auto-aborted by a later-stage (submitAnswers) failure -- that is a stall, protected by AD-5, out of scope for this hook", () => {
   // First turn succeeds for real (default working test route + haiku), reaching waiting_on_human
   // -- a real question has been surfaced, so this run is no longer an "orphan" by this story's
   // own definition.

@@ -61,8 +61,7 @@ after(() => {
   rmSync(noDevRepo, { recursive: true, force: true });
 });
 
-test("startRun with target_repo checks out a NEW run-scoped branch, not dev itself", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("startRun with target_repo checks out a NEW run-scoped branch, not dev itself", () => {
   const res = call("startRun", { idea: "test idea", target_repo: existingRepo }, env());
   assert.equal(res.status, 0);
   const runId = res.result.run_id;
@@ -80,8 +79,7 @@ test("startRun with target_repo checks out a NEW run-scoped branch, not dev itse
   assert.doesNotMatch(ourBlock!, /branch refs\/heads\/dev$/m);
 });
 
-test("two concurrent startRuns against the SAME target_repo both succeed", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("two concurrent startRuns against the SAME target_repo both succeed", () => {
   const res1 = call("startRun", { idea: "idea A", target_repo: existingRepo }, env());
   const res2 = call("startRun", { idea: "idea B", target_repo: existingRepo }, env());
   assert.equal(res1.status, 0);
@@ -89,8 +87,7 @@ test("two concurrent startRuns against the SAME target_repo both succeed", (t) =
   assert.notEqual(res1.result.run_id, res2.result.run_id);
 });
 
-test("startRun with no target_repo creates a worktree from MINERVA_SEED_REPO", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("startRun with no target_repo creates a worktree from MINERVA_SEED_REPO", () => {
   const res = call("startRun", { idea: "greenfield idea" }, env());
   assert.equal(res.status, 0);
   const runId = res.result.run_id;
@@ -128,8 +125,7 @@ test("target_repo with no dev branch returns a clear VALIDATION_FAILED error, no
   assert.match(res.error.message, /target_repo/);
 });
 
-test("two runs' workspaces are isolated -- writing to one does not affect the other", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("two runs' workspaces are isolated -- writing to one does not affect the other", () => {
   const runA = call("startRun", { idea: "idea A" }, env()).result.run_id;
   const runB = call("startRun", { idea: "idea B" }, env()).result.run_id;
 
@@ -143,8 +139,7 @@ test("two runs' workspaces are isolated -- writing to one does not affect the ot
   assert.ok(existsSync(recB.state_path));
 });
 
-test("getRunStatus on an allocated run persists across separate CLI invocations", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("getRunStatus on an allocated run persists across separate CLI invocations", () => {
   const runId = call("startRun", { idea: "persistence test" }, env()).result.run_id;
   // Each call() is a fresh subprocess -- this genuinely tests disk persistence, not memory.
   const first = call("getRunStatus", { run_id: runId }, env());
@@ -159,8 +154,7 @@ test("getRunStatus on an unknown run_id returns NOT_FOUND", () => {
   assert.equal(res.error.code, "NOT_FOUND");
 });
 
-test("listRuns returns all allocated runs with correct status", (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("listRuns returns all allocated runs with correct status", () => {
   const localHome = mkdtempSync(join(tmpdir(), "minerva-home-listruns-"));
   const localSeedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-listruns-"));
   try {

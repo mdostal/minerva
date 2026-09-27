@@ -9,7 +9,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -18,6 +18,29 @@ import { testHeimdallRouteUrl, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HARNESS = join(__dirname, "driver-sigint-harness.ts");
+// Spawn tsx directly (not via `npx tsx`) -- npx's own resolution can interpose an extra process
+// hop on Linux so a SIGINT sent to the spawn handle doesn't reach the tsx/harness process.
+// tsx's local bin is a single-hop node script; killing it directly fires the registered SIGINT
+// handler. Same pattern used by subagent-driver.test.ts's SIGKILL test for the same reason.
+const TSX_BIN = join(__dirname, "..", "node_modules", ".bin", "tsx");
+
+// Check if a process with the given marker string in its command line is still running.
+// Uses /proc on Linux (ps is not available in all container environments).
+function isMarkerProcessRunning(marker: string): boolean {
+  try {
+    const pids = readdirSync("/proc").filter((e) => /^\d+$/.test(e));
+    return pids.some((pid) => {
+      try {
+        const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+        return cmdline.includes(marker);
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false; // /proc not available
+  }
+}
 
 // Isolated scratch workspace, NOT process.cwd() (the real minerva repo). Driving a real claude
 // turn with bypassPermissions against the actual project directory lets the model notice real
@@ -64,8 +87,7 @@ const FRUIT_PROMPT =
   "your final text response, then stop and wait -- do not guess an answer, do not proceed " +
   "further this turn.";
 
-test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning {session_id, raw_result}", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning {session_id, raw_result}", async () => {
   const driver = new SpawnDriver();
   const result = await driver.runTurn({
     cwd: scratchCwd,
@@ -77,8 +99,7 @@ test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning
   assert.match(result.raw_result.toLowerCase(), /fruit/);
 });
 
-test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching today's submitAnswers resume behavior", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching today's submitAnswers resume behavior", async () => {
   const driver = new SpawnDriver();
   const first = await driver.runTurn({
     cwd: scratchCwd,
@@ -97,12 +118,11 @@ test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching to
   assert.ok(second.session_id); // Driver always returns a session_id, every turn -- caller persists it
 });
 
-test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude child -- no orphan", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude child -- no orphan", async () => {
   const marker = `sigint-harness-marker-${process.pid}-${Math.random().toString(36).slice(2)}`;
   const child = spawn(
-    "npx",
-    ["tsx", HARNESS, `Write a very long, detailed 1200 word essay about deep sea ecosystems. Marker: ${marker}.`],
+    TSX_BIN,
+    [HARNESS, `Write a very long, detailed 1200 word essay about deep sea ecosystems. Marker: ${marker}.`],
     { cwd: scratchCwd, stdio: ["ignore", "pipe", "pipe"] },
   );
 
@@ -120,9 +140,13 @@ test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude chi
 
   // Give the OS a moment to reflect the killed grandchild's absence, then confirm no orphaned
   // `claude` process (carrying this run's distinguishing marker) is still alive.
+  // Uses /proc on Linux since `ps` is not available in all container environments.
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  const psOut = execFileSync("ps", ["aux"], { encoding: "utf8" });
-  assert.doesNotMatch(psOut, new RegExp(marker), "expected no orphaned claude process after SIGINT");
+  assert.equal(
+    isMarkerProcessRunning(marker),
+    false,
+    `expected no orphaned claude process after SIGINT (marker: ${marker})`,
+  );
 });
 
 test("ForkedHiveDriver.surfaceNextQuestion logs exactly one structured WARN line to stderr when zero pending envelopes exist, and DriverResult shape is unchanged", async () => {

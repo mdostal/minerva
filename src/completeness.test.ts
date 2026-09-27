@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call, createSeedRepo } from "./test-cli.ts";
+import { call, createSeedRepo, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 let minervaHome: string;
 let seedRepo: string;
@@ -49,7 +49,8 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("PRD anchored success metric: >=3 ideas in flight concurrently, each progressing idea->spec independently, zero hand-run commands per idea", () => {
+test("PRD anchored success metric: >=3 ideas in flight concurrently, each progressing idea->spec independently, zero hand-run commands per idea", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   // "Zero hand-run commands per idea" is proven structurally: every step below goes through
   // bin/minerva's CLI boundary only (startRun / getQuestions / submitAnswers / getOutput) --
   // nothing here shells out to git/claude directly the way a human operator would.
@@ -93,7 +94,8 @@ test("PRD anchored success metric: >=3 ideas in flight concurrently, each progre
   }
 });
 
-test("listRuns is accurate across a real mix of run states (waiting_on_human, complete, aborted)", () => {
+test("listRuns is accurate across a real mix of run states (waiting_on_human, complete, aborted)", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const waitingRunId = call("startRun", { idea: "a habit streak tracker" }, env()).result.run_id;
 
   const completeRunId = call("startRun", { idea: "a grocery list app" }, env()).result.run_id;

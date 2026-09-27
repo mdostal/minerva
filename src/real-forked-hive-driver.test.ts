@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, statSync } 
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { ForkedHiveDriver, decodeEnvelopePointer, NO_PENDING_SENTINEL, HeimdallRouteError } from "./driver.ts";
-import { testHeimdallRouteUrl } from "./test-cli.ts";
+import { testHeimdallRouteUrl, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 // The hardcoded default below only ever matched one specific developer's home directory --
 // override it with MINERVA_HIVE_PLUGIN_DIR (the same var this test sets for the code under
@@ -191,7 +191,8 @@ function readJsonlLines(path: string): any[] {
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
-test("ForkedHiveDriver.runTurn emits driver_started and driver_succeeded telemetry when spawnRuntime succeeds", async () => {
+test("ForkedHiveDriver.runTurn emits driver_started and driver_succeeded telemetry when spawnRuntime succeeds", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const cwd = newScratchWorkspace();
   const driver = new ForkedHiveDriver();
 

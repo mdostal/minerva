@@ -26,7 +26,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { SubagentDriver } from "./driver.ts";
-import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
+import { call, createSeedRepo, testHeimdallRouteUrl, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
@@ -80,7 +80,8 @@ const FRUIT_PROMPT =
   "your final text response, then stop and wait -- do not guess an answer, do not proceed " +
   "further this turn.";
 
-test("SubagentDriver.runTurn with sessionId: null dispatches via --bg, polls to terminal, stops, and extracts a structured result", async () => {
+test("SubagentDriver.runTurn with sessionId: null dispatches via --bg, polls to terminal, stops, and extracts a structured result", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const driver = new SubagentDriver();
   const result = await driver.runTurn({
     cwd: scratchCwd,
@@ -92,7 +93,8 @@ test("SubagentDriver.runTurn with sessionId: null dispatches via --bg, polls to 
   assert.match(result.raw_result.toLowerCase(), /fruit/);
 });
 
-test("SubagentDriver.runTurn with a non-null sessionId dispatches via --bg --resume and retains context", async () => {
+test("SubagentDriver.runTurn with a non-null sessionId dispatches via --bg --resume and retains context", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const driver = new SubagentDriver();
   const first = await driver.runTurn({
     cwd: scratchCwd,
@@ -115,7 +117,8 @@ test("SubagentDriver.runTurn with a non-null sessionId dispatches via --bg --res
   assert.notEqual(second.session_id, first.session_id);
 });
 
-test("a --bg turn that completes a task rather than asking a question reaches state: done, and SubagentDriver treats it as terminal the same as blocked", async () => {
+test("a --bg turn that completes a task rather than asking a question reaches state: done, and SubagentDriver treats it as terminal the same as blocked", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const driver = new SubagentDriver();
   // No question is asked here -- the turn just performs a quick task and stops, so the
   // background session should settle into state: done rather than blocked. SubagentDriver
@@ -159,7 +162,8 @@ test("a --bg turn that completes a task rather than asking a question reaches st
 // can't be exercised by importing SubagentDriver directly within this same process (the module
 // is already cached with whatever timeout was in effect at first import) -- it goes through the
 // full CLI instead, a fresh process per call (AD-1), which naturally picks up a fresh env.
-test("SubagentDriver poll timeout reaps the underlying --bg session instead of leaving it running", async () => {
+test("SubagentDriver poll timeout reaps the underlying --bg session instead of leaving it running", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-reap-"));
   const seedRepo = createSeedRepo();
   try {
@@ -209,7 +213,8 @@ test("SubagentDriver poll timeout reaps the underlying --bg session instead of l
   }
 });
 
-test("SIGKILL of the launching process does not orphan or lose the underlying --bg session -- it remains independently trackable", async () => {
+test("SIGKILL of the launching process does not orphan or lose the underlying --bg session -- it remains independently trackable", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   // realpath'd: macOS's os.tmpdir() returns /var/folders/... but `claude agents --json`
   // reports the resolved /private/var/folders/... form -- compare like-for-like.
   const scratchCwd = realpathSync(mkdtempSync(join(tmpdir(), "minerva-subagent-sigkill-")));

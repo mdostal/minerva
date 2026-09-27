@@ -8,13 +8,9 @@
 // This is deliberately SEPARATE from src/dispatch.ts's core ABI: the core plugin stays
 // provider-agnostic (no Multica coupling), while this module + bin/minerva-plan.ts are the thin
 // Multica-aware integration entrypoint a router (Auriga) or the `minerva-dev` Multica agent runs.
-// All Multica interaction shells out to the installed `multica` CLI — Minerva never embeds a
-// Multica client of its own.
+// All Multica interaction goes through Pantheon's core-api (POST /api/backlog/issues for ticket
+// filing, GET /api/backlog/issues/:id for reads) — Minerva never calls Multica directly.
 
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { startRun } from "./kickoff-engine.ts";
 import { getRunStatus, readRunRecord, type Question } from "./run-manager.ts";
@@ -68,31 +64,57 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
   return { run_id, status, epic, epics, pending_questions: pending, workspace_path: record.workspace_path };
 }
 
-// --- Multica integration (shell-out to the `multica` CLI) ------------------------------------
+// --- Pantheon core-api client (replaces the direct multica CLI shell-out) -------------------
+//
+// Pantheon's core-api is the ONLY sanctioned path for board-write and board-read operations --
+// no god calls Multica directly. POST /api/backlog/issues creates tickets; GET reads them;
+// PUT /api/backlog/issues/:id/metadata updates ticket metadata.
 
-// The multica CLI runner is indirected through a module-level slot so integration tests can
-// substitute a fake (no real `multica` process). The production path is unchanged.
-let _multicaRunner = (args: string[]): any => {
-  const out = execFileSync("multica", args, { encoding: "utf8" });
-  return out.trim() ? JSON.parse(out) : null;
-};
-
-function multicaJson(args: string[]): any {
-  return _multicaRunner(args);
+function getPantheonCoreApiUrl(): string | null {
+  return process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL ?? null;
 }
 
-// Test-only: swap the multica CLI runner. Returns the previous runner so a test can restore it.
-export function __setMulticaRunnerForTest(fn: (args: string[]) => any): (args: string[]) => any {
-  const prev = _multicaRunner;
-  _multicaRunner = fn;
+type PantheonFetch = (
+  url: string,
+  init: { method: string; headers?: Record<string, string>; body?: string },
+) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+
+// The Pantheon fetch impl is indirected through a module-level slot so tests can substitute a
+// fake (no real HTTP calls). The production path uses globalThis.fetch unchanged.
+let _pantheonFetch: PantheonFetch = globalThis.fetch as unknown as PantheonFetch;
+
+// Test-only: swap the Pantheon fetch impl. Returns the previous impl so a test can restore it.
+export function __setPantheonFetchForTest(fn: PantheonFetch): PantheonFetch {
+  const prev = _pantheonFetch;
+  _pantheonFetch = fn;
   return prev;
+}
+
+async function pantheonRequest(method: string, path: string, body?: unknown): Promise<unknown> {
+  const baseUrl = getPantheonCoreApiUrl();
+  if (!baseUrl) {
+    throw new Error(
+      "Pantheon core-api URL not configured: set PANTHEON_CORE_API_URL or MINERVA_PANTHEON_CORE_API_URL",
+    );
+  }
+  const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
+  const init: { method: string; headers?: Record<string, string>; body?: string } =
+    body !== undefined
+      ? { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
+      : { method };
+  const res = await _pantheonFetch(url, init);
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Pantheon core-api ${method} ${path} failed with HTTP ${res.status}: ${text}`);
+  }
+  return text.length > 0 ? JSON.parse(text) : null;
 }
 
 // Resolve an idea brief from a Multica ticket: `title` + `description`, joined into the prose the
 // kickoff skill expects. Throws if the ticket can't be read/parsed -- a router must not silently
 // plan an empty idea.
-export function resolveIdeaFromTicket(ticketId: string): { idea: string; title: string; targetRepo: string | null } {
-  const issue = multicaJson(["issue", "get", ticketId, "--output", "json"]);
+export async function resolveIdeaFromTicket(ticketId: string): Promise<{ idea: string; title: string; targetRepo: string | null }> {
+  const issue = (await pantheonRequest("GET", `/api/backlog/issues/${encodeURIComponent(ticketId)}`)) as Record<string, unknown>;
   const title = typeof issue.title === "string" ? issue.title : "";
   const description = typeof issue.description === "string" ? issue.description : "";
   const idea = [title, description].filter((s) => s.trim().length > 0).join("\n\n");
@@ -104,8 +126,8 @@ export function resolveIdeaFromTicket(ticketId: string): { idea: string; title: 
   // signal the build lane reads. Null when the seed declares no target (greenfield). This is what
   // lets a RAW seed's build target flow down to its decomposed child stories and into the repo.
   const metaRepo =
-    issue && issue.metadata && typeof issue.metadata.target_repo === "string"
-      ? issue.metadata.target_repo.trim()
+    issue && issue.metadata && typeof (issue.metadata as Record<string, unknown>).target_repo === "string"
+      ? ((issue.metadata as Record<string, unknown>).target_repo as string).trim()
       : "";
   const targetRepo =
     (metaRepo.length > 0 ? metaRepo : parseTargetRepoLine(description) ?? parseTargetRepoLine(title)) || null;
@@ -145,16 +167,17 @@ export interface FiledStory {
   issue_id: string;
 }
 
-// File each decomposed story back to Multica as a sub-issue of the origin ticket (linkage via
-// --parent), leaving them UNASSIGNED per the standing operator policy (Mathew assigns manually;
-// mirrors consus-dev/heimdall-dev instructions). Only the planned stories become dev-agent work
-// items -- exactly the "only PLANNED stories go to dev agents" flow. Returns the created issue
-// ids. Best-effort per story: a single failed create is reported but does not abort the rest.
-export function fileStoriesToMultica(
+// File each decomposed story back to Multica as a sub-issue of the origin ticket via Pantheon's
+// core-api (POST /api/backlog/issues), leaving them UNASSIGNED per the standing operator policy
+// (Mathew assigns manually; mirrors consus-dev/heimdall-dev instructions). Only the planned
+// stories become dev-agent work items -- exactly the "only PLANNED stories go to dev agents" flow.
+// Returns the created issue ids. Best-effort per story: a single failed create is reported but
+// does not abort the rest.
+export async function fileStoriesToMultica(
   ticketId: string,
   epic: CompletedEpic,
   opts: { project?: string; targetRepo?: string; workspacePath?: string } = {},
-): { filed: FiledStory[]; errors: Array<{ story_id: string; error: string }> } {
+): Promise<{ filed: FiledStory[]; errors: Array<{ story_id: string; error: string }> }> {
   const filed: FiledStory[] = [];
   const errors: Array<{ story_id: string; error: string }> = [];
 
@@ -168,12 +191,12 @@ export function fileStoriesToMultica(
   let project = opts.project;
   if (!project) {
     try {
-      const parent = multicaJson(["issue", "get", ticketId, "--output", "json"]);
+      const parent = (await pantheonRequest("GET", `/api/backlog/issues/${encodeURIComponent(ticketId)}`)) as Record<string, unknown>;
       if (parent && typeof parent.project_id === "string" && parent.project_id.length > 0) {
         project = parent.project_id;
       }
     } catch (e) {
-      // Non-fatal: fall back to the CLI default project (legacy behavior) but record why, so a
+      // Non-fatal: fall back to the API default project (legacy behavior) but record why, so a
       // stranded plan is diagnosable rather than silent.
       errors.push({ story_id: "(resolve-project)", error: e instanceof Error ? e.message : String(e) });
     }
@@ -186,95 +209,63 @@ export function fileStoriesToMultica(
   // left opts.targetRepo null, so stampTargetRepo no-op'd and children shipped with no target_repo.
   const effectiveTargetRepo =
     opts.targetRepo ?? (opts.workspacePath ? deriveRepoSlugFromWorkspace(opts.workspacePath) : null);
-  const tmp = mkdtempSync(join(tmpdir(), "minerva-story-"));
+
   // story_id -> created issue_id, and story_id -> its declared depends_on, tracked across the
   // whole epic so the dependency graph can be wired AFTER every sibling exists (a dependency may
   // be filed later in the loop than the story that depends on it).
   const idByStory = new Map<string, string>();
   const dependsByStory = new Map<string, string[]>();
-  try {
-    for (const story of epic.stories) {
-      const { title, description } = storyToIssueFields(story);
-      dependsByStory.set(story.id, parseStoryDependsOn(story));
-      // Stamp the seed's target repo onto every child story description (Gate-2), so the build
-      // lane resolves the SAME repo for the decomposed work it resolved for the seed. Without this
-      // a child story carries no target_repo and the build lane cannot resolve where to build it.
-      const stampedDescription = stampTargetRepo(description, effectiveTargetRepo);
-      const descFile = join(tmp, `${story.id}.txt`);
-      writeFileSync(descFile, stampedDescription);
-      const args = [
-        "issue",
-        "create",
-        "--parent",
-        ticketId,
-        "--title",
-        title,
-        "--description-file",
-        descFile,
-        // Explicit todo status: the router's candidate pool is status==='todo'. Filed stories
-        // must be immediately dispatchable, never parked in backlog.
-        "--status",
-        "todo",
-        "--output",
-        "json",
-      ];
-      if (project) args.push("--project", project);
-      try {
-        const created = multicaJson(args);
-        const issueId = typeof created.id === "string" ? created.id : String(created.id ?? "");
-        filed.push({ story_id: story.id, issue_id: issueId });
-        if (issueId) idByStory.set(story.id, issueId);
-        // Also carry the target repo as ticket metadata (the build lane's secondary signal), best-
-        // effort — the description line above is the primary, CLI-readable signal.
-        if (issueId && effectiveTargetRepo) {
-          try {
-            multicaJson([
-              "issue", "metadata", "set", issueId,
-              "--key", "target_repo", "--value", effectiveTargetRepo, "--type", "string", "--output", "json",
-            ]);
-          } catch (e) {
-            errors.push({ story_id: story.id, error: `target_repo metadata: ${e instanceof Error ? e.message : String(e)}` });
-          }
-        }
-      } catch (e) {
-        errors.push({ story_id: story.id, error: e instanceof Error ? e.message : String(e) });
-      }
-    }
 
-    // Second pass: CARRY the depends_on DAG into Multica as per-issue metadata the Auriga router
-    // reads to enforce ordering — it never dispatches a story whose dependency issues aren't done
-    // (see depsSatisfied in the router's core). We store the resolved sibling ISSUE ids
-    // (comma-separated string) under the `depends_on` metadata key. Best-effort per story: a
-    // metadata failure is recorded but never aborts filing (the story itself is already filed).
-    for (const [storyId, deps] of dependsByStory) {
-      const selfId = idByStory.get(storyId);
-      if (!selfId) continue;
-      const depIssueIds = deps
-        .map((d) => idByStory.get(d))
-        .filter((v): v is string => typeof v === "string" && v.length > 0);
-      if (depIssueIds.length === 0) continue;
-      try {
-        multicaJson([
-          "issue",
-          "metadata",
-          "set",
-          selfId,
-          "--key",
-          "depends_on",
-          "--value",
-          depIssueIds.join(","),
-          "--type",
-          "string",
-          "--output",
-          "json",
-        ]);
-      } catch (e) {
-        errors.push({ story_id: storyId, error: `depends_on metadata: ${e instanceof Error ? e.message : String(e)}` });
-      }
+  for (const story of epic.stories) {
+    const { title, description } = storyToIssueFields(story);
+    dependsByStory.set(story.id, parseStoryDependsOn(story));
+    // Stamp the seed's target repo onto every child story description (Gate-2), so the build
+    // lane resolves the SAME repo for the decomposed work it resolved for the seed. Without this
+    // a child story carries no target_repo and the build lane cannot resolve where to build it.
+    const stampedDescription = stampTargetRepo(description, effectiveTargetRepo);
+    const createBody: Record<string, unknown> = {
+      title,
+      description: stampedDescription,
+      status: "todo",
+      parent: ticketId,
+    };
+    if (project) createBody.project = project;
+    // Also carry the target repo as ticket metadata (the build lane's secondary signal), best-
+    // effort — the description line above is the primary, CLI-readable signal.
+    if (effectiveTargetRepo) createBody.metadata = { target_repo: effectiveTargetRepo };
+    try {
+      const created = (await pantheonRequest("POST", "/api/backlog/issues", createBody)) as Record<string, unknown>;
+      const issueId = typeof created.id === "string" ? created.id : String(created.id ?? "");
+      filed.push({ story_id: story.id, issue_id: issueId });
+      if (issueId) idByStory.set(story.id, issueId);
+    } catch (e) {
+      errors.push({ story_id: story.id, error: e instanceof Error ? e.message : String(e) });
     }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
   }
+
+  // Second pass: CARRY the depends_on DAG into Multica as per-issue metadata the Auriga router
+  // reads to enforce ordering — it never dispatches a story whose dependency issues aren't done
+  // (see depsSatisfied in the router's core). We store the resolved sibling ISSUE ids
+  // (comma-separated string) under the `depends_on` metadata key. Best-effort per story: a
+  // metadata failure is recorded but never aborts filing (the story itself is already filed).
+  // The PUT replaces ALL metadata for the issue, so target_repo must be re-included here to
+  // preserve the value set at creation time.
+  for (const [storyId, deps] of dependsByStory) {
+    const selfId = idByStory.get(storyId);
+    if (!selfId) continue;
+    const depIssueIds = deps
+      .map((d) => idByStory.get(d))
+      .filter((v): v is string => typeof v === "string" && v.length > 0);
+    if (depIssueIds.length === 0) continue;
+    try {
+      const metaBody: Record<string, unknown> = { depends_on: depIssueIds.join(",") };
+      if (effectiveTargetRepo) metaBody.target_repo = effectiveTargetRepo;
+      await pantheonRequest("PUT", `/api/backlog/issues/${encodeURIComponent(selfId)}/metadata`, metaBody);
+    } catch (e) {
+      errors.push({ story_id: storyId, error: `depends_on metadata: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
   return { filed, errors };
 }
 
@@ -284,15 +275,15 @@ export function fileStoriesToMultica(
 // silently dropped the rest. Each story carries an `epic_id` field so the aggregate result stays
 // traceable to its source epic. Best-effort per story (a single failed create never aborts the
 // rest); errors from every epic are aggregated into one report.
-export function fileAllStoriesToMultica(
+export async function fileAllStoriesToMultica(
   ticketId: string,
   epics: CompletedEpic[],
   opts: { project?: string; targetRepo?: string; workspacePath?: string } = {},
-): { filed: Array<FiledStory & { epic_id: string }>; errors: Array<{ story_id: string; epic_id: string; error: string }> } {
+): Promise<{ filed: Array<FiledStory & { epic_id: string }>; errors: Array<{ story_id: string; epic_id: string; error: string }> }> {
   const filed: Array<FiledStory & { epic_id: string }> = [];
   const errors: Array<{ story_id: string; epic_id: string; error: string }> = [];
   for (const epic of epics) {
-    const r = fileStoriesToMultica(ticketId, epic, opts);
+    const r = await fileStoriesToMultica(ticketId, epic, opts);
     for (const f of r.filed) filed.push({ ...f, epic_id: epic.epic_id });
     for (const e of r.errors) errors.push({ ...e, epic_id: epic.epic_id });
   }

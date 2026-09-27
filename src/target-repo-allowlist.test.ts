@@ -5,7 +5,7 @@
 // checking the run either (a) fails downstream for a DIFFERENT, pre-existing reason (target_repo
 // does not exist as a literal path -- the existsSync check in run-manager's
 // allocateWorktreeWorkspace), or (b) actually creates a real worktree before a deliberately broken
-// Heimdall route (MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL pointed at a closed port, same technique
+// Pantheon route (MINERVA_PANTHEON_ROUTE_SELECT_URL pointed at a closed port, same technique
 // kickoff-engine.test.ts's orphan-cleanup tests use) turns the LATER driver-turn step into a fast,
 // deterministic UPSTREAM_ERROR -- never a real API call, never a VALIDATION_FAILED allowlist miss.
 //
@@ -54,7 +54,7 @@ function env() {
 // the same technique). No real `claude` process is ever spawned. This lets a test prove "the
 // allowlist gate passed and a real worktree got created" without any real API cost.
 function brokenHeimdallEnv() {
-  return { ...env(), MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: "http://127.0.0.1:1" };
+  return { ...env(), MINERVA_PANTHEON_ROUTE_SELECT_URL: "http://127.0.0.1:1" };
 }
 
 function listRunIds(): string[] {

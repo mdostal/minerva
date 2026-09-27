@@ -118,7 +118,7 @@ async function main(): Promise<void> {
   let ideaLabel: string;
   let ticketTargetRepo: string | null = null;
   if (args.ticket !== undefined) {
-    const resolved = resolveIdeaFromTicket(args.ticket);
+    const resolved = await resolveIdeaFromTicket(args.ticket);
     idea = resolved.idea;
     ideaLabel = resolved.title || `ticket ${args.ticket}`;
     ticketTargetRepo = resolved.targetRepo;
@@ -184,7 +184,7 @@ async function main(): Promise<void> {
   // ticket. Multi-epic plans (the norm) file all of their stories, not just the first epic's.
   if (args.fileToMultica) {
     if (!args.ticket) throw new Error("--file-to-multica requires --ticket (the parent to link sub-issues under)");
-    const filed = fileAllStoriesToMultica(args.ticket, result.epics, {
+    const filed = await fileAllStoriesToMultica(args.ticket, result.epics, {
       ...(args.project ? { project: args.project } : {}),
       ...(targetRepoSlug ? { targetRepo: targetRepoSlug } : {}),
       // The run workspace's own origin remote is the guaranteed fallback build target, so every

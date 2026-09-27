@@ -53,8 +53,8 @@ let scratchCwd: string;
 let previousRouteUrl: string | undefined;
 
 before(() => {
-  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
+  previousRouteUrl = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
+  process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = testHeimdallRouteUrl();
   scratchCwd = mkdtempSync(join(tmpdir(), "minerva-driver-test-"));
   execFileSync("git", ["init", "-q", scratchCwd]);
   execFileSync("git", ["-C", scratchCwd, "config", "user.name", "Test User"]);
@@ -64,9 +64,9 @@ before(() => {
 
 after(() => {
   if (previousRouteUrl === undefined) {
-    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+    delete process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   } else {
-    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+    process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = previousRouteUrl;
   }
   rmSync(scratchCwd, { recursive: true, force: true });
 });

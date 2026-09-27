@@ -49,16 +49,16 @@ const FORK_MISSING = existsSync(FORK_PATH)
 let previousRouteUrl: string | undefined;
 
 before(() => {
-  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
+  previousRouteUrl = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
+  process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = testHeimdallRouteUrl();
   process.env.MINERVA_HIVE_PLUGIN_DIR = FORK_PATH;
 });
 
 after(() => {
   if (previousRouteUrl === undefined) {
-    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+    delete process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   } else {
-    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+    process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = previousRouteUrl;
   }
   delete process.env.MINERVA_HIVE_PLUGIN_DIR;
 });

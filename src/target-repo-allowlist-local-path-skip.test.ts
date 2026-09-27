@@ -51,7 +51,7 @@ function env() {
 // the run's workspace/worktree. Same technique target-repo-allowlist.test.ts uses to prove "passed
 // the gate" without any real API cost.
 function brokenHeimdallEnv() {
-  return { ...env(), MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: "http://127.0.0.1:1" };
+  return { ...env(), MINERVA_PANTHEON_ROUTE_SELECT_URL: "http://127.0.0.1:1" };
 }
 
 function listRunIds(): string[] {

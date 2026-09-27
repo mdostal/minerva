@@ -19,17 +19,15 @@ export function testHeimdallRouteUrl(model = DEFAULT_TEST_MODEL, cli = "claude")
 
 function withDefaultTestRoute(env: Record<string, string>): Record<string, string> {
   if (
-    env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL ||
-    env.MINERVA_HEIMDALL_URL ||
-    env.HEIMDALL_URL ||
-    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL ||
-    process.env.MINERVA_HEIMDALL_URL ||
-    process.env.HEIMDALL_URL
+    env.MINERVA_PANTHEON_ROUTE_SELECT_URL ||
+    env.MINERVA_PANTHEON_CORE_API_URL ||
+    process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL ||
+    process.env.MINERVA_PANTHEON_CORE_API_URL
   ) {
     return env;
   }
   const model = env.MINERVA_DRIVE_MODEL ?? process.env.MINERVA_DRIVE_MODEL ?? DEFAULT_TEST_MODEL;
-  return { MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl(model), ...env };
+  return { MINERVA_PANTHEON_ROUTE_SELECT_URL: testHeimdallRouteUrl(model), ...env };
 }
 
 export function runCli(
@@ -129,14 +127,9 @@ export const STUB_CLAUDE_ACTIVE: boolean = _detection.stubActive;
 
 export async function mockHeimdallServer(routes: { kickoff?: any; planning?: any }) {
   const server = createServer((req, res) => {
-    if (req.url === "/available-route?task-type=kickoff") {
+    if (req.method === "POST" && req.url === "/api/route/select") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(routes.kickoff || { cli: "claude", model: "claude-haiku-4-5" }));
-      return;
-    }
-    if (req.url === "/available-route?task-type=planning") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(routes.planning || { runtime: "gemini", model: "gemini-2.5-pro" }));
+      res.end(JSON.stringify(routes.planning || routes.kickoff || { runtime: "claude", model: "claude-haiku-4-5" }));
       return;
     }
     res.writeHead(503);

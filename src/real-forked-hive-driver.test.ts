@@ -191,8 +191,7 @@ function readJsonlLines(path: string): any[] {
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
-test("ForkedHiveDriver.runTurn emits driver_started and driver_succeeded telemetry when spawnRuntime succeeds", async (t) => {
-  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
+test("ForkedHiveDriver.runTurn emits driver_started and driver_succeeded telemetry when spawnRuntime succeeds", async () => {
   const cwd = newScratchWorkspace();
   const driver = new ForkedHiveDriver();
 

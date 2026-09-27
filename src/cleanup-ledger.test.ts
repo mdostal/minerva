@@ -5,10 +5,23 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call, createSeedRepo } from "./test-cli.ts";
+
+// Skip, not fail, when the real claude CLI is absent -- same skip-not-fail pattern as FORK_MISSING
+// in real-forked-hive-driver.test.ts. Every test here calls startRun, which spawns a real
+// `claude -p` subprocess via MINERVA_TEST_DRIVE_PROMPT, and has no meaning without the CLI.
+const CLAUDE_MISSING = (() => {
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return false as const;
+  } catch {
+    return "claude CLI not found in PATH — install Claude Code to run this live integration test";
+  }
+})();
 
 let minervaHome: string;
 let seedRepo: string;
@@ -61,7 +74,7 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("abortRun on an in-progress run: ledger + event appended once, status becomes aborted, workspace/state untouched", () => {
+test("abortRun on an in-progress run: ledger + event appended once, status becomes aborted, workspace/state untouched", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a task manager" }, env()).result.run_id;
   const statusBefore = call("getRunStatus", { run_id: runId }, env());
   assert.equal(statusBefore.result.status, "waiting_on_human");
@@ -93,7 +106,7 @@ test("abortRun on an in-progress run: ledger + event appended once, status becom
   assert.equal(eventEntries[0].status, "aborted");
 });
 
-test("abortRun is idempotent -- calling it twice does not double-append the ledger", () => {
+test("abortRun is idempotent -- calling it twice does not double-append the ledger", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a to-do list" }, env()).result.run_id;
   call("abortRun", { run_id: runId }, env());
   call("abortRun", { run_id: runId }, env());
@@ -102,7 +115,7 @@ test("abortRun is idempotent -- calling it twice does not double-append the ledg
   assert.equal(ledgerEntries.length, 1);
 });
 
-test("completion (via output-emitter) also appends exactly one ledger + event record", () => {
+test("completion (via output-emitter) also appends exactly one ledger + event record", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a bug tracker" }, env()).result.run_id;
   const { question: q1, channel } = getPendingQuestion(runId);
 
@@ -123,7 +136,7 @@ test("completion (via output-emitter) also appends exactly one ledger + event re
   assert.equal(eventEntries.length, 1);
 });
 
-test("multiple runs' ledger entries coexist -- not overwritten or merged", () => {
+test("multiple runs' ledger entries coexist -- not overwritten or merged", { skip: CLAUDE_MISSING }, () => {
   const runA = call("startRun", { idea: "app A" }, env()).result.run_id;
   const runB = call("startRun", { idea: "app B" }, env()).result.run_id;
   call("abortRun", { run_id: runA }, env());
@@ -135,7 +148,7 @@ test("multiple runs' ledger entries coexist -- not overwritten or merged", () =>
   assert.ok(idsSeen.has(runB));
 });
 
-test("abortRun validation: missing run_id returns VALIDATION_FAILED; unknown run_id returns NOT_FOUND", () => {
+test("abortRun validation: missing run_id returns VALIDATION_FAILED; unknown run_id returns NOT_FOUND", { skip: CLAUDE_MISSING }, () => {
   const noId = call("abortRun", {}, env());
   assert.equal(noId.status, 1);
   assert.equal(noId.error.code, "VALIDATION_FAILED");

@@ -30,6 +30,18 @@ import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
+
+// Skip, not fail, when the real claude CLI is absent -- same pattern as FORK_MISSING in
+// real-forked-hive-driver.test.ts. Every SubagentDriver test makes live `claude --bg` / `--resume`
+// subprocess calls (AD-1: no mocking the CLI boundary) and has no meaning without the binary.
+const CLAUDE_MISSING = (() => {
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return false as const;
+  } catch {
+    return "claude CLI not found in PATH — install Claude Code to run this live integration test";
+  }
+})();
 // Spawn tsx directly (not via `npx tsx`) -- npx's own resolution can interpose an extra process
 // hop, so a SIGKILL sent to the handle `spawn()` returns doesn't necessarily reach the real
 // work process. tsx's local bin is a single-hop node script; killing it kills the real process.
@@ -80,7 +92,7 @@ const FRUIT_PROMPT =
   "your final text response, then stop and wait -- do not guess an answer, do not proceed " +
   "further this turn.";
 
-test("SubagentDriver.runTurn with sessionId: null dispatches via --bg, polls to terminal, stops, and extracts a structured result", async () => {
+test("SubagentDriver.runTurn with sessionId: null dispatches via --bg, polls to terminal, stops, and extracts a structured result", { skip: CLAUDE_MISSING }, async () => {
   const driver = new SubagentDriver();
   const result = await driver.runTurn({
     cwd: scratchCwd,
@@ -92,7 +104,7 @@ test("SubagentDriver.runTurn with sessionId: null dispatches via --bg, polls to 
   assert.match(result.raw_result.toLowerCase(), /fruit/);
 });
 
-test("SubagentDriver.runTurn with a non-null sessionId dispatches via --bg --resume and retains context", async () => {
+test("SubagentDriver.runTurn with a non-null sessionId dispatches via --bg --resume and retains context", { skip: CLAUDE_MISSING }, async () => {
   const driver = new SubagentDriver();
   const first = await driver.runTurn({
     cwd: scratchCwd,
@@ -115,7 +127,7 @@ test("SubagentDriver.runTurn with a non-null sessionId dispatches via --bg --res
   assert.notEqual(second.session_id, first.session_id);
 });
 
-test("a --bg turn that completes a task rather than asking a question reaches state: done, and SubagentDriver treats it as terminal the same as blocked", async () => {
+test("a --bg turn that completes a task rather than asking a question reaches state: done, and SubagentDriver treats it as terminal the same as blocked", { skip: CLAUDE_MISSING }, async () => {
   const driver = new SubagentDriver();
   // No question is asked here -- the turn just performs a quick task and stops, so the
   // background session should settle into state: done rather than blocked. SubagentDriver
@@ -159,7 +171,7 @@ test("a --bg turn that completes a task rather than asking a question reaches st
 // can't be exercised by importing SubagentDriver directly within this same process (the module
 // is already cached with whatever timeout was in effect at first import) -- it goes through the
 // full CLI instead, a fresh process per call (AD-1), which naturally picks up a fresh env.
-test("SubagentDriver poll timeout reaps the underlying --bg session instead of leaving it running", async () => {
+test("SubagentDriver poll timeout reaps the underlying --bg session instead of leaving it running", { skip: CLAUDE_MISSING }, async () => {
   const minervaHome = mkdtempSync(join(tmpdir(), "minerva-home-reap-"));
   const seedRepo = createSeedRepo();
   try {
@@ -209,7 +221,7 @@ test("SubagentDriver poll timeout reaps the underlying --bg session instead of l
   }
 });
 
-test("SIGKILL of the launching process does not orphan or lose the underlying --bg session -- it remains independently trackable", async () => {
+test("SIGKILL of the launching process does not orphan or lose the underlying --bg session -- it remains independently trackable", { skip: CLAUDE_MISSING }, async () => {
   // realpath'd: macOS's os.tmpdir() returns /var/folders/... but `claude agents --json`
   // reports the resolved /private/var/folders/... form -- compare like-for-like.
   const scratchCwd = realpathSync(mkdtempSync(join(tmpdir(), "minerva-subagent-sigkill-")));

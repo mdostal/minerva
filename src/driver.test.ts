@@ -19,6 +19,18 @@ import { testHeimdallRouteUrl } from "./test-cli.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HARNESS = join(__dirname, "driver-sigint-harness.ts");
 
+// Skip, not fail, when the real claude CLI is absent -- same pattern as FORK_MISSING in
+// real-forked-hive-driver.test.ts. These SpawnDriver tests make live `claude -p` subprocess
+// calls (AD-1: no mocking the CLI boundary) and have no meaning without the actual binary.
+const CLAUDE_MISSING = (() => {
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return false as const;
+  } catch {
+    return "claude CLI not found in PATH — install Claude Code to run this live integration test";
+  }
+})();
+
 // Isolated scratch workspace, NOT process.cwd() (the real minerva repo). Driving a real claude
 // turn with bypassPermissions against the actual project directory lets the model notice real
 // repo/branch context and substitute a genuinely-contextual response instead of following the
@@ -64,7 +76,7 @@ const FRUIT_PROMPT =
   "your final text response, then stop and wait -- do not guess an answer, do not proceed " +
   "further this turn.";
 
-test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning {session_id, raw_result}", async () => {
+test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning {session_id, raw_result}", { skip: CLAUDE_MISSING }, async () => {
   const driver = new SpawnDriver();
   const result = await driver.runTurn({
     cwd: scratchCwd,
@@ -76,7 +88,7 @@ test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning
   assert.match(result.raw_result.toLowerCase(), /fruit/);
 });
 
-test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching today's submitAnswers resume behavior", async () => {
+test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching today's submitAnswers resume behavior", { skip: CLAUDE_MISSING }, async () => {
   const driver = new SpawnDriver();
   const first = await driver.runTurn({
     cwd: scratchCwd,
@@ -95,7 +107,7 @@ test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching to
   assert.ok(second.session_id); // Driver always returns a session_id, every turn -- caller persists it
 });
 
-test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude child -- no orphan", async () => {
+test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude child -- no orphan", { skip: CLAUDE_MISSING }, async () => {
   const marker = `sigint-harness-marker-${process.pid}-${Math.random().toString(36).slice(2)}`;
   const child = spawn(
     "npx",

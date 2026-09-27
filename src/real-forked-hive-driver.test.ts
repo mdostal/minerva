@@ -22,6 +22,17 @@ const FORK_PATH = process.env.MINERVA_HIVE_PLUGIN_DIR || "/Users/dostal/Document
 const FORK_MISSING = existsSync(FORK_PATH)
   ? false
   : `plugin-hive-fork checkout not found at ${FORK_PATH} -- set MINERVA_HIVE_PLUGIN_DIR to a local checkout to run this live integration test`;
+
+// The driver-lifecycle-telemetry success test makes one real `claude -p` call (AD-1). Skip
+// gracefully when the CLI is absent -- same pattern as FORK_MISSING above.
+const CLAUDE_MISSING = (() => {
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return false as const;
+  } catch {
+    return "claude CLI not found in PATH — install Claude Code to run this live integration test";
+  }
+})();
 let previousRouteUrl: string | undefined;
 let previousMinervaHome: string | undefined;
 let minervaHome: string;
@@ -191,7 +202,7 @@ function readJsonlLines(path: string): any[] {
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
-test("ForkedHiveDriver.runTurn emits driver_started and driver_succeeded telemetry when spawnRuntime succeeds", async () => {
+test("ForkedHiveDriver.runTurn emits driver_started and driver_succeeded telemetry when spawnRuntime succeeds", { skip: CLAUDE_MISSING }, async () => {
   const cwd = newScratchWorkspace();
   const driver = new ForkedHiveDriver();
 

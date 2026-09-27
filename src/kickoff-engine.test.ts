@@ -5,10 +5,23 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
+
+// Skip, not fail, when the real claude CLI is absent -- same skip-not-fail pattern as FORK_MISSING
+// in real-forked-hive-driver.test.ts. Every test here ultimately calls startRun, which spawns a
+// real `claude -p` subprocess, and has no meaningful behavior without the CLI installed.
+const CLAUDE_MISSING = (() => {
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return false as const;
+  } catch {
+    return "claude CLI not found in PATH — install Claude Code to run this live integration test";
+  }
+})();
 
 let minervaHome: string;
 let seedRepo: string;
@@ -38,7 +51,7 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("startRun drives a real headless session to its first question; getQuestions surfaces raw prose on the human channel only", () => {
+test("startRun drives a real headless session to its first question; getQuestions surfaces raw prose on the human channel only", { skip: CLAUDE_MISSING }, () => {
   const started = call("startRun", { idea: "a tiny CLI todo app" }, env());
   assert.equal(started.status, 0);
   const runId = started.result.run_id;
@@ -58,7 +71,7 @@ test("startRun drives a real headless session to its first question; getQuestion
   assert.equal(agent.result.questions.length, 0);
 });
 
-test("No Autonomous Progress: polling getRunStatus repeatedly never advances a waiting_on_human run", () => {
+test("No Autonomous Progress: polling getRunStatus repeatedly never advances a waiting_on_human run", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a note-taking app" }, env()).result.run_id;
   const before1 = call("getRunStatus", { run_id: runId }, env()).result.status;
   const before2 = call("getRunStatus", { run_id: runId }, env()).result.status;
@@ -68,7 +81,7 @@ test("No Autonomous Progress: polling getRunStatus repeatedly never advances a w
   assert.equal(before3, "waiting_on_human");
 });
 
-test("submitAnswers resumes the real session with correct context, mirroring the spike's own resume proof", () => {
+test("submitAnswers resumes the real session with correct context, mirroring the spike's own resume proof", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a habit tracker" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
@@ -101,7 +114,7 @@ test("submitAnswers resumes the real session with correct context, mirroring the
   assert.equal(stillPendingHuman.result.questions.length, 1); // only q2, not q1+q2
 });
 
-test("WRONG_CHANNEL: submitting on the wrong channel is rejected and the run does not advance", () => {
+test("WRONG_CHANNEL: submitting on the wrong channel is rejected and the run does not advance", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a recipe box" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
@@ -121,7 +134,7 @@ test("WRONG_CHANNEL: submitting on the wrong channel is rejected and the run doe
   assert.equal(stillPending.result.questions[0].status, "pending");
 });
 
-test("questions carry real escalation-classification fields, not the old hardcoded stub", () => {
+test("questions carry real escalation-classification fields, not the old hardcoded stub", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a bookmark manager" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
@@ -136,7 +149,7 @@ test("questions carry real escalation-classification fields, not the old hardcod
   assert.equal(q1.channel, q1.suggested_channel);
 });
 
-test("submitAnswers validation: missing/invalid params return VALIDATION_FAILED without spawning claude", () => {
+test("submitAnswers validation: missing/invalid params return VALIDATION_FAILED without spawning claude", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "a link shortener" }, env()).result.run_id;
 
   const noChannel = call("submitAnswers", { run_id: runId, answers: [{ question_id: "q-1", answer: "x" }] }, env());
@@ -192,7 +205,7 @@ function readRecord(runId: string) {
 // regardless of what a mock Heimdall server returns. The test below confirms that guard holds
 // even when Heimdall explicitly offers a non-claude runtime, rather than asserting the freeze
 // itself (which needs a non-test-mode path -- see triage t-007).
-test("planning route stays absent in test mode even when Heimdall offers a non-claude runtime (bulletproof claude fallback)", async () => {
+test("planning route stays absent in test mode even when Heimdall offers a non-claude runtime (bulletproof claude fallback)", { skip: CLAUDE_MISSING }, async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
@@ -208,7 +221,7 @@ test("planning route stays absent in test mode even when Heimdall offers a non-c
   }
 });
 
-test("planning route falls back to claude (absent fields) when Heimdall is unreachable or returns 500", async () => {
+test("planning route falls back to claude (absent fields) when Heimdall is unreachable or returns 500", { skip: CLAUDE_MISSING }, async () => {
   const mock = await createMockHeimdall({}, 500);
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
@@ -224,7 +237,7 @@ test("planning route falls back to claude (absent fields) when Heimdall is unrea
   }
 });
 
-test("planning route stays absent when Heimdall explicitly returns claude", async () => {
+test("planning route stays absent when Heimdall explicitly returns claude", { skip: CLAUDE_MISSING }, async () => {
   const mock = await createMockHeimdall({ runtime: "claude", model: "claude-3-5-sonnet" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
@@ -244,7 +257,7 @@ test("planning route stays absent when Heimdall explicitly returns claude", asyn
 // mode, so "no drift" here means submitAnswers doesn't introduce a spurious plan_runtime value
 // on a run that started with none -- not that a frozen non-claude value survives a continuation
 // turn (that positive path is untested anywhere yet -- see triage t-007).
-test("submitAnswers introduces no plan_runtime drift on a run that never froze one, and falls back correctly if CLI is missing", async () => {
+test("submitAnswers introduces no plan_runtime drift on a run that never froze one, and falls back correctly if CLI is missing", { skip: CLAUDE_MISSING }, async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
     const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl(), HIVE_PLAN_AGNOSTIC_CLI: "/does/not/exist" };
@@ -300,7 +313,7 @@ function readEventLines(): any[] {
   return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 }
 
-test("orphan cleanup: a first-turn failure (Heimdall routing failure, no fallback configured) auto-aborts the run, writes exactly one ledger record + one cleanup_needed event, and the caller still receives an error, not silence", () => {
+test("orphan cleanup: a first-turn failure (Heimdall routing failure, no fallback configured) auto-aborts the run, writes exactly one ledger record + one cleanup_needed event, and the caller still receives an error, not silence", { skip: CLAUDE_MISSING }, () => {
   // MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL pointed at an unreachable port, with no
   // MINERVA_FALLBACK_CLI/MODEL configured, forces SpawnDriver.runTurn's resolveRuntimeRoute()
   // to throw HeimdallRouteError before any real `claude` process is ever spawned -- fast, and
@@ -353,7 +366,7 @@ test("orphan cleanup: a first-turn failure (Heimdall routing failure, no fallbac
   assert.equal(ledgerEntriesAfterSecondAbort.length, 1);
 });
 
-test("orphan cleanup boundary: a run that already reached waiting_on_human is NOT auto-aborted by a later-stage (submitAnswers) failure -- that is a stall, protected by AD-5, out of scope for this hook", () => {
+test("orphan cleanup boundary: a run that already reached waiting_on_human is NOT auto-aborted by a later-stage (submitAnswers) failure -- that is a stall, protected by AD-5, out of scope for this hook", { skip: CLAUDE_MISSING }, () => {
   // First turn succeeds for real (default working test route + haiku), reaching waiting_on_human
   // -- a real question has been surfaced, so this run is no longer an "orphan" by this story's
   // own definition.

@@ -43,8 +43,8 @@ let realEventsSnapshotBefore: Record<string, number>;
 before(() => {
   realEventsSnapshotBefore = snapshotRealEventsDir();
 
-  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
+  previousRouteUrl = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
+  process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = testHeimdallRouteUrl();
   process.env.MINERVA_HIVE_PLUGIN_DIR = FORK_PATH;
 
   // driver-lifecycle-telemetry (H1): isolate MINERVA_HOME under a throwaway temp dir for the
@@ -58,9 +58,9 @@ before(() => {
 
 after(() => {
   if (previousRouteUrl === undefined) {
-    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+    delete process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   } else {
-    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+    process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = previousRouteUrl;
   }
   delete process.env.MINERVA_HIVE_PLUGIN_DIR;
 
@@ -246,8 +246,8 @@ test("ForkedHiveDriver.runTurn emits driver_started and driver_failed (never dri
   // throw from inside runTurn()'s body, the same shape a spawnRuntime() failure would take from
   // this test's perspective (both are exceptions runTurn() must record via driver_failed and
   // rethrow unchanged).
-  const savedRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = `data:application/json,${encodeURIComponent(JSON.stringify({}))}`;
+  const savedRouteUrl = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
+  process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = `data:application/json,${encodeURIComponent(JSON.stringify({}))}`;
   try {
     await assert.rejects(
       driver.runTurn({ cwd, sessionId: null, prompt: "irrelevant -- route resolution fails before any CLI spawn" }),
@@ -259,9 +259,9 @@ test("ForkedHiveDriver.runTurn emits driver_started and driver_failed (never dri
     );
   } finally {
     if (savedRouteUrl === undefined) {
-      delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+      delete process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
     } else {
-      process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = savedRouteUrl;
+      process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = savedRouteUrl;
     }
   }
 

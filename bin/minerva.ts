@@ -208,7 +208,7 @@ async function resumeRun(params: Record<string, unknown>): Promise<Record<string
   if (after.status === "complete" && fileToMultica) {
     const output = getOutput({ run_id: runId }) as { epic: CompletedEpic | null; epics?: CompletedEpic[] };
     const epics = output.epics ?? (output.epic ? [output.epic] : []);
-    const filed = fileAllStoriesToMultica(parentIssueId!, epics, {
+    const filed = await fileAllStoriesToMultica(parentIssueId!, epics, {
       project: typeof params.project === "string" ? params.project : undefined,
       targetRepo: typeof params.target_repo === "string" ? params.target_repo : undefined,
     });

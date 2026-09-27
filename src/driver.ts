@@ -42,7 +42,6 @@ import { listEnvelopes } from "./envelope-detection.ts";
 import { emitTelemetryEvent } from "./telemetry.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
-const DEFAULT_HEIMDALL_URL = "http://127.0.0.1:4870";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
 // Heimdall routes by runtime/provider; Minerva needs the spawnable CLI.
 const RUNTIME_CLI: Record<string, string> = {
@@ -117,7 +116,7 @@ export interface RuntimeRoute {
 
 type RouteFetch = (
   input: string,
-  init: { method: "GET"; signal: AbortSignal },
+  init: { method: "POST"; headers: Record<string, string>; body: string; signal: AbortSignal },
 ) => Promise<{
   ok: boolean;
   status: number;
@@ -137,20 +136,21 @@ function resolveRouteTimeoutMs(): number {
   return parsed;
 }
 
-// Heimdall's /available-route only accepts task-type=planning|build|review (a closed enum --
-// see heimdall/src/core/task-type.ts's TASK_TYPES); "kickoff" was never a valid value and Heimdall
-// rejects it with HTTP 400 invalid_task_type. This driver's turns (SpawnDriver/SubagentDriver/
-// ForkedHiveDriver) exclusively serve startRun, which drives plugin-hive's kickoff+plan skills to
-// completion (research, design discussion, story decomposition -- see src/plan-runner.ts) and
-// never touches code implementation or code review. That makes "planning" the correct task type
-// here, corroborated by src/agnostic-plan-driver.ts's resolvePlanningRoute(), which already calls
-// Heimdall with task-type=planning for Minerva's own planning-flavored turns and is confirmed
-// working against a live Heimdall instance.
-function availableRouteUrl(): string {
-  const exact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+// Route selection goes through Pantheon's core-api facade (POST /api/route/select) — Minerva
+// never calls Heimdall directly. The task_type is always "planning": this driver's turns
+// (SpawnDriver/SubagentDriver/ForkedHiveDriver) exclusively serve startRun, which drives
+// plugin-hive's kickoff+plan skills (research, design, story decomposition) and never touches
+// code implementation or review.
+function getPantheonRouteSelectUrl(): string {
+  const exact = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   if (exact) return exact;
-  const base = process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? DEFAULT_HEIMDALL_URL;
-  return new URL("/available-route?task-type=planning", base.endsWith("/") ? base : `${base}/`).toString();
+  const base = process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL;
+  if (!base) {
+    throw new Error(
+      "Pantheon core-api URL not configured: set PANTHEON_CORE_API_URL or MINERVA_PANTHEON_CORE_API_URL",
+    );
+  }
+  return `${base.replace(/\/+$/, "")}/api/route/select`;
 }
 
 // getAdapter()'s own known/distinguished CLI set (opencode, codex; anything else -- including
@@ -223,46 +223,55 @@ export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
   return { cli: cli.trim(), model: model.trim() };
 }
 
-export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fetch): Promise<RuntimeRoute> {
+export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fetch as unknown as RouteFetch): Promise<RuntimeRoute> {
   // Read + validate the operator fallback config FIRST, unconditionally -- malformed config
-  // (partial pair, unrecognized CLI) fails loudly here regardless of whether Heimdall is even
-  // reachable. This intentionally throws a plain Error (matching this file's other
+  // (partial pair, unrecognized CLI) fails loudly here regardless of whether Pantheon core-api
+  // is reachable. This intentionally throws a plain Error (matching this file's other
   // invalid-env-var precedents), not HeimdallRouteError: it's an operator config mistake, not a
-  // Heimdall routing failure.
+  // routing failure.
   const fallback = resolveFallbackRoute();
 
-  const endpoint = availableRouteUrl();
+  // Resolve the URL and build the request inside the try block so a misconfigured or missing
+  // PANTHEON_CORE_API_URL falls through to the fallback path (same as an unreachable service)
+  // rather than propagating a plain uncaught Error.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolveRouteTimeoutMs());
   try {
-    const res = await fetchImpl(endpoint, { method: "GET", signal: controller.signal });
+    const endpoint = getPantheonRouteSelectUrl();
+    const reqBody = JSON.stringify({ task_id: randomUUID(), task_type: "planning" });
+    const res = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: reqBody,
+      signal: controller.signal,
+    });
     const body = await res.text();
     if (!res.ok) {
-      throw new Error(`Heimdall /available-route failed with HTTP ${res.status} ${res.statusText}: ${body}`);
+      throw new Error(`Pantheon /api/route/select failed with HTTP ${res.status} ${res.statusText}: ${body}`);
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(body);
     } catch (e) {
-      throw new Error(`Heimdall /available-route returned non-JSON output: ${e instanceof Error ? e.message : String(e)}`);
+      throw new Error(`Pantheon /api/route/select returned non-JSON output: ${e instanceof Error ? e.message : String(e)}`);
     }
     return parseAvailableRoutePayload(parsed);
   } catch (e) {
-    // Heimdall failed (unreachable, non-2xx, malformed/timed-out body). If the operator declared
-    // an explicit fallback pair, honor it verbatim -- no inference, exactly what they configured.
-    // Otherwise fail fast with a distinguishable, typed error (not a plain Error) rather than the
-    // untyped throw this story fixes: every call site (SpawnDriver/SubagentDriver/
-    // ForkedHiveDriver.dispatchFresh/.classify, plus submitAnswers) inherits this automatically,
-    // since none of them wrap this call in their own try/catch.
+    // Route selection failed (unreachable, non-2xx, malformed/timed-out body). If the operator
+    // declared an explicit fallback pair, honor it verbatim -- no inference, exactly what they
+    // configured. Otherwise fail fast with a distinguishable, typed error (not a plain Error):
+    // every call site (SpawnDriver/SubagentDriver/ForkedHiveDriver.dispatchFresh/.classify, plus
+    // submitAnswers) inherits this automatically, since none of them wrap this call in their own
+    // try/catch.
     if (fallback) return fallback;
     const reason =
       e instanceof Error && e.name === "AbortError"
-        ? `Heimdall /available-route timed out after ${resolveRouteTimeoutMs()}ms`
+        ? `Pantheon /api/route/select timed out after ${resolveRouteTimeoutMs()}ms`
         : e instanceof Error
           ? e.message
           : String(e);
     throw new HeimdallRouteError(
-      `Heimdall routing failed and no MINERVA_FALLBACK_CLI/MINERVA_FALLBACK_MODEL fallback is configured: ${reason}`,
+      `Route selection failed and no MINERVA_FALLBACK_CLI/MINERVA_FALLBACK_MODEL fallback is configured: ${reason}`,
       e,
     );
   } finally {

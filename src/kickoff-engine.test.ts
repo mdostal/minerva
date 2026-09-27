@@ -195,7 +195,7 @@ function readRecord(runId: string) {
 test("planning route stays absent in test mode even when Heimdall offers a non-claude runtime (bulletproof claude fallback)", async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
-    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
+    const customEnv = { ...env(), MINERVA_PANTHEON_CORE_API_URL: mock.url, MINERVA_PANTHEON_ROUTE_SELECT_URL: testHeimdallRouteUrl() };
     const started = call("startRun", { idea: "freeze test" }, customEnv);
     assert.equal(started.status, 0);
     const runId = started.result.run_id;
@@ -211,7 +211,7 @@ test("planning route stays absent in test mode even when Heimdall offers a non-c
 test("planning route falls back to claude (absent fields) when Heimdall is unreachable or returns 500", async () => {
   const mock = await createMockHeimdall({}, 500);
   try {
-    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
+    const customEnv = { ...env(), MINERVA_PANTHEON_CORE_API_URL: mock.url, MINERVA_PANTHEON_ROUTE_SELECT_URL: testHeimdallRouteUrl() };
     const started = call("startRun", { idea: "fallback test" }, customEnv);
     assert.equal(started.status, 0);
     const runId = started.result.run_id;
@@ -227,7 +227,7 @@ test("planning route falls back to claude (absent fields) when Heimdall is unrea
 test("planning route stays absent when Heimdall explicitly returns claude", async () => {
   const mock = await createMockHeimdall({ runtime: "claude", model: "claude-3-5-sonnet" });
   try {
-    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl() };
+    const customEnv = { ...env(), MINERVA_PANTHEON_CORE_API_URL: mock.url, MINERVA_PANTHEON_ROUTE_SELECT_URL: testHeimdallRouteUrl() };
     const started = call("startRun", { idea: "claude explicit test" }, customEnv);
     assert.equal(started.status, 0);
     const runId = started.result.run_id;
@@ -247,7 +247,7 @@ test("planning route stays absent when Heimdall explicitly returns claude", asyn
 test("submitAnswers introduces no plan_runtime drift on a run that never froze one, and falls back correctly if CLI is missing", async () => {
   const mock = await createMockHeimdall({ runtime: "gemini", model: "gemini-2.0-flash-exp" });
   try {
-    const customEnv = { ...env(), MINERVA_HEIMDALL_URL: mock.url, MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl(), HIVE_PLAN_AGNOSTIC_CLI: "/does/not/exist" };
+    const customEnv = { ...env(), MINERVA_PANTHEON_CORE_API_URL: mock.url, MINERVA_PANTHEON_ROUTE_SELECT_URL: testHeimdallRouteUrl(), HIVE_PLAN_AGNOSTIC_CLI: "/does/not/exist" };
     const started = call("startRun", { idea: "continuation test" }, customEnv);
     assert.equal(started.status, 0);
     const runId = started.result.run_id;
@@ -301,11 +301,11 @@ function readEventLines(): any[] {
 }
 
 test("orphan cleanup: a first-turn failure (Heimdall routing failure, no fallback configured) auto-aborts the run, writes exactly one ledger record + one cleanup_needed event, and the caller still receives an error, not silence", () => {
-  // MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL pointed at an unreachable port, with no
+  // MINERVA_PANTHEON_ROUTE_SELECT_URL pointed at an unreachable port, with no
   // MINERVA_FALLBACK_CLI/MODEL configured, forces SpawnDriver.runTurn's resolveRuntimeRoute()
   // to throw HeimdallRouteError before any real `claude` process is ever spawned -- fast, and
   // no real API cost, matching the exact failure shape this epic is fixing.
-  const brokenEnv = { ...env(), MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: "http://127.0.0.1:1" };
+  const brokenEnv = { ...env(), MINERVA_PANTHEON_ROUTE_SELECT_URL: "http://127.0.0.1:1" };
 
   const before = new Set(listRunIds());
   const started = call("startRun", { idea: "an idea whose first turn will fail" }, brokenEnv);
@@ -373,7 +373,7 @@ test("orphan cleanup boundary: a run that already reached waiting_on_human is NO
   // Now force a Heimdall routing failure on submitAnswers's own (later-stage) drive turn -- this
   // is NOT the run's first turn, so startRun's new auto-cleanup hook must not have any bearing
   // on it (submitAnswers's own call site is untouched by this story).
-  const brokenEnv = { ...env(), MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: "http://127.0.0.1:1" };
+  const brokenEnv = { ...env(), MINERVA_PANTHEON_ROUTE_SELECT_URL: "http://127.0.0.1:1" };
   const submitted = call(
     "submitAnswers",
     { run_id: runId, channel: "human", answers: [{ question_id: q1.id, answer: "mango" }] },

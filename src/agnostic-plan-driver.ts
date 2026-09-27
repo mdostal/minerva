@@ -19,10 +19,11 @@ import { spawn, execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 
-function getHeimdallUrl() {
-  return process.env.MINERVA_HEIMDALL_URL ?? process.env.HEIMDALL_URL ?? "http://localhost:4870";
+function getPantheonCoreApiUrl(): string | null {
+  return process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL ?? null;
 }
 const ROUTE_TIMEOUT_MS = Number(process.env.MINERVA_PLAN_ROUTE_TIMEOUT_MS ?? 2000);
 const TURN_TIMEOUT_MS = Number(process.env.MINERVA_TURN_TIMEOUT_MS ?? 600_000);
@@ -91,14 +92,20 @@ function opencodeAvailable(): boolean {
 }
 
 /**
- * Ask Heimdall which runtime serves planning. Fail-open: any network/parse/timeout error, a
- * non-200, or a malformed body yields null (→ claude fallback upstream).
+ * Ask Pantheon's core-api route facade which runtime serves planning. Routes through
+ * POST /api/route/select (never directly to Heimdall). Fail-open: any network/parse/timeout
+ * error, a non-200, or a malformed body yields null (→ claude fallback upstream).
  */
 export async function resolvePlanningRoute(): Promise<PlanningRoute | null> {
+  const baseUrl = getPantheonCoreApiUrl();
+  if (!baseUrl) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ROUTE_TIMEOUT_MS);
   try {
-    const res = await fetch(`${getHeimdallUrl()}/available-route?task-type=planning`, {
+    const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/route/select`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task_id: randomUUID(), task_type: "planning" }),
       signal: controller.signal,
     });
     if (!res.ok) return null;

@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call, createSeedRepo } from "./test-cli.ts";
+import { call, createSeedRepo, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 let minervaHome: string;
 let seedRepo: string;
@@ -61,7 +61,8 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("abortRun on an in-progress run: ledger + event appended once, status becomes aborted, workspace/state untouched", () => {
+test("abortRun on an in-progress run: ledger + event appended once, status becomes aborted, workspace/state untouched", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const runId = call("startRun", { idea: "a task manager" }, env()).result.run_id;
   const statusBefore = call("getRunStatus", { run_id: runId }, env());
   assert.equal(statusBefore.result.status, "waiting_on_human");
@@ -93,7 +94,8 @@ test("abortRun on an in-progress run: ledger + event appended once, status becom
   assert.equal(eventEntries[0].status, "aborted");
 });
 
-test("abortRun is idempotent -- calling it twice does not double-append the ledger", () => {
+test("abortRun is idempotent -- calling it twice does not double-append the ledger", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const runId = call("startRun", { idea: "a to-do list" }, env()).result.run_id;
   call("abortRun", { run_id: runId }, env());
   call("abortRun", { run_id: runId }, env());
@@ -102,7 +104,8 @@ test("abortRun is idempotent -- calling it twice does not double-append the ledg
   assert.equal(ledgerEntries.length, 1);
 });
 
-test("completion (via output-emitter) also appends exactly one ledger + event record", () => {
+test("completion (via output-emitter) also appends exactly one ledger + event record", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const runId = call("startRun", { idea: "a bug tracker" }, env()).result.run_id;
   const { question: q1, channel } = getPendingQuestion(runId);
 
@@ -123,7 +126,8 @@ test("completion (via output-emitter) also appends exactly one ledger + event re
   assert.equal(eventEntries.length, 1);
 });
 
-test("multiple runs' ledger entries coexist -- not overwritten or merged", () => {
+test("multiple runs' ledger entries coexist -- not overwritten or merged", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const runA = call("startRun", { idea: "app A" }, env()).result.run_id;
   const runB = call("startRun", { idea: "app B" }, env()).result.run_id;
   call("abortRun", { run_id: runA }, env());

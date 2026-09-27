@@ -1,12 +1,12 @@
 // Shared test helper: spawn the real bin/minerva.ts subprocess (no mocking the CLI
 // boundary, per AD-1). Used across every story's tests from run-workspace-allocation on.
 
-import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { createServer, Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,6 +65,29 @@ export function createSeedRepo(prefix = "minerva-seed-repo-"): string {
   execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   return repo;
 }
+
+// Probe whether `claude -p` can successfully make API calls. Runs a real (cheap) subprocess
+// call synchronously; returns false immediately on any error or non-zero exit. Integration
+// tests that depend on a live claude -p call guard themselves with this flag so they skip
+// gracefully rather than fail in environments without valid Claude auth credentials.
+function detectClaudeAuthAvailable(): boolean {
+  if (process.env.MINERVA_SKIP_CLAUDE_INTEGRATION === "1") return false;
+  const result = spawnSync(
+    "claude",
+    ["-p", "--model", DEFAULT_TEST_MODEL, "--output-format", "json",
+     "--permission-mode", "bypassPermissions", "--session-id",
+     "00000000-0000-0000-0000-000000000001", "ping"],
+    { encoding: "utf8", timeout: 10_000 },
+  );
+  if (result.error || result.status !== 0) return false;
+  try {
+    return !(JSON.parse(result.stdout) as { is_error?: boolean }).is_error;
+  } catch {
+    return false;
+  }
+}
+
+export const CLAUDE_AUTH_AVAILABLE: boolean = detectClaudeAuthAvailable();
 
 export async function mockHeimdallServer(routes: { kickoff?: any; planning?: any }) {
   const server = createServer((req, res) => {

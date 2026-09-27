@@ -14,7 +14,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { SpawnDriver, ForkedHiveDriver, NO_PENDING_SENTINEL, type DriverResult } from "./driver.ts";
-import { testHeimdallRouteUrl } from "./test-cli.ts";
+import { testHeimdallRouteUrl, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HARNESS = join(__dirname, "driver-sigint-harness.ts");
@@ -64,7 +64,8 @@ const FRUIT_PROMPT =
   "your final text response, then stop and wait -- do not guess an answer, do not proceed " +
   "further this turn.";
 
-test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning {session_id, raw_result}", async () => {
+test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning {session_id, raw_result}", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const driver = new SpawnDriver();
   const result = await driver.runTurn({
     cwd: scratchCwd,
@@ -76,7 +77,8 @@ test("SpawnDriver.runTurn with sessionId: null starts a fresh session, returning
   assert.match(result.raw_result.toLowerCase(), /fruit/);
 });
 
-test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching today's submitAnswers resume behavior", async () => {
+test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching today's submitAnswers resume behavior", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const driver = new SpawnDriver();
   const first = await driver.runTurn({
     cwd: scratchCwd,
@@ -95,7 +97,8 @@ test("SpawnDriver.runTurn with a non-null sessionId resumes context, matching to
   assert.ok(second.session_id); // Driver always returns a session_id, every turn -- caller persists it
 });
 
-test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude child -- no orphan", async () => {
+test("SIGINT to a live SpawnDriver-driven process kills the in-flight claude child -- no orphan", async (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const marker = `sigint-harness-marker-${process.pid}-${Math.random().toString(36).slice(2)}`;
   const child = spawn(
     "npx",

@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "nod
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call } from "./test-cli.ts";
+import { call, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 import { findCompletedEpic, findCompletedEpics, ensureEpicNotGitIgnored, commitAndPushPlan, checkAndMarkComplete } from "./output-emitter.ts";
 import { allocateRun, readRunRecord } from "./run-manager.ts";
 import { parse as parseYaml } from "yaml";
@@ -46,14 +46,16 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("getOutput on an incomplete run returns NOT_READY, never a partial artifact", () => {
+test("getOutput on an incomplete run returns NOT_READY, never a partial artifact", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const runId = call("startRun", { idea: "a weather app" }, env()).result.run_id;
   const output = call("getOutput", { run_id: runId }, env());
   assert.equal(output.status, 1);
   assert.equal(output.error.code, "NOT_READY");
 });
 
-test("a run that writes epic.yaml + story files is detected as complete and served via getOutput", () => {
+test("a run that writes epic.yaml + story files is detected as complete and served via getOutput", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const runId = call("startRun", { idea: "a recipe organizer" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
 
@@ -245,7 +247,8 @@ test("ensureEpicNotGitIgnored is a no-op when the epic dir is already trackable"
 // genuinely flows from allocateRun through the run record into completion detection for a real
 // target_repo, matching the exact real-world shape of the Heimdall regression (a target_repo
 // whose dev branch already has a shipped epic).
-test("startRun against a target_repo with a pre-existing epic on dev correctly reports the NEW epic, not the pre-existing one", () => {
+test("startRun against a target_repo with a pre-existing epic on dev correctly reports the NEW epic, not the pre-existing one", (t) => {
+  if (!CLAUDE_AUTH_AVAILABLE) return t.skip("claude auth not available");
   const targetRepo = mkdtempSync(join(tmpdir(), "minerva-target-with-epic-"));
   execFileSync("git", ["init", "-q", "-b", "dev", targetRepo]);
   execFileSync("git", ["-C", targetRepo, "-c", "user.email=t@t.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);

@@ -253,7 +253,7 @@ test("ForkedHiveDriver.runTurn emits driver_started and driver_failed (never dri
       driver.runTurn({ cwd, sessionId: null, prompt: "irrelevant -- route resolution fails before any CLI spawn" }),
       (err: unknown) => {
         assert.ok(err instanceof HeimdallRouteError, `expected a HeimdallRouteError, got ${err}`);
-        assert.match((err as Error).message, /Heimdall routing failed/);
+        assert.match((err as Error).message, /Route selection failed/);
         return true;
       },
     );
@@ -277,7 +277,7 @@ test("ForkedHiveDriver.runTurn emits driver_started and driver_failed (never dri
   assert.equal(failedEvent.event, "driver_failed");
   assert.match(failedEvent.emitted_at, ISO_TIMESTAMP_RE, "expected an ISO emitted_at timestamp");
   assert.equal(typeof failedEvent.message, "string");
-  assert.match(failedEvent.message, /Heimdall routing failed/, "expected the driver_failed payload to carry err.message");
+  assert.match(failedEvent.message, /Route selection failed/, "expected the driver_failed payload to carry err.message");
 
   rmSync(cwd, { recursive: true, force: true });
 });

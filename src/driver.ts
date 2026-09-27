@@ -218,7 +218,7 @@ export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
       : undefined;
   const model = route?.model ?? route?.model_name ?? route?.modelName;
   if (typeof cli !== "string" || cli.trim() === "" || typeof model !== "string" || model.trim() === "") {
-    throw new Error(`Heimdall /available-route response must include non-empty cli and model strings`);
+    throw new Error(`Pantheon /api/route/select response must include non-empty cli and model strings`);
   }
   return { cli: cli.trim(), model: model.trim() };
 }

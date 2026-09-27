@@ -4,8 +4,8 @@
 // is a Claude-Code slash command: non-Claude runtimes never load it, so they IMPLEMENT instead
 // of DECOMPOSE and write zero `.pHive` YAML — coupling planning to a Claude balance.
 //
-// This driver removes that coupling. It asks Heimdall which runtime should serve planning
-// (`/available-route?task-type=planning`) and, when that runtime is NOT claude, spawns the
+// This driver removes that coupling. It asks Pantheon core-api which runtime should serve planning
+// (`POST /api/route/select`, task_type "planning") and, when that runtime is NOT claude, spawns the
 // ported entrypoint (plugin-hive `hive/agnostic/plan-agnostic.mjs`) which feeds the identical
 // DECOMPOSE contract to the routed runtime (gemini/codex via opencode) and lets it WRITE the
 // `.pHive/epics/<id>/epic.yaml` + `stories/*.yaml` that output-emitter files to Multica.

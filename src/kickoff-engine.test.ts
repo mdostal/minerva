@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
+import { call, createSeedRepo, testHeimdallRouteUrl, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 let minervaHome: string;
 let seedRepo: string;

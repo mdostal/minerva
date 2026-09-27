@@ -26,6 +26,11 @@ const FORK_MISSING = existsSync(FORK_PATH)
 // The driver-lifecycle-telemetry success test makes one real `claude -p` call (AD-1). Skip
 // gracefully when the CLI is absent -- same pattern as FORK_MISSING above.
 const CLAUDE_MISSING = (() => {
+  // `which claude` alone is insufficient — the binary may exist but require interactive
+  // disclaimer acceptance before non-interactive use. Require explicit opt-in via CLAUDE_AVAILABLE=1.
+  if (process.env.CLAUDE_AVAILABLE !== "1") {
+    return "CLAUDE_AVAILABLE=1 not set — configure it in environments where claude CLI is fully set up for non-interactive use";
+  }
   try {
     execFileSync("which", ["claude"], { stdio: "pipe" });
     return false as const;

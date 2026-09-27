@@ -15,6 +15,11 @@ import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
 // in real-forked-hive-driver.test.ts. Every test here ultimately calls startRun, which spawns a
 // real `claude -p` subprocess, and has no meaningful behavior without the CLI installed.
 const CLAUDE_MISSING = (() => {
+  // `which claude` alone is insufficient — the binary may exist but require interactive
+  // disclaimer acceptance before non-interactive use. Require explicit opt-in via CLAUDE_AVAILABLE=1.
+  if (process.env.CLAUDE_AVAILABLE !== "1") {
+    return "CLAUDE_AVAILABLE=1 not set — configure it in environments where claude CLI is fully set up for non-interactive use";
+  }
   try {
     execFileSync("which", ["claude"], { stdio: "pipe" });
     return false as const;

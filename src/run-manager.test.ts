@@ -10,6 +10,22 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call } from "./test-cli.ts";
 
+// Skip, not fail, when the real claude CLI is absent or not configured for non-interactive use.
+// Same skip-not-fail pattern as FORK_MISSING in real-forked-hive-driver.test.ts. Tests that
+// call startRun spawn a real `claude -p` subprocess. `which claude` alone is insufficient;
+// CLAUDE_AVAILABLE=1 is required as explicit opt-in.
+const CLAUDE_MISSING = (() => {
+  if (process.env.CLAUDE_AVAILABLE !== "1") {
+    return "CLAUDE_AVAILABLE=1 not set — configure it in environments where claude CLI is fully set up for non-interactive use";
+  }
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return false as const;
+  } catch {
+    return "claude CLI not found in PATH — install Claude Code to run this live integration test";
+  }
+})();
+
 let minervaHome: string;
 let existingRepo: string; // throwaway repo WITH a dev branch, for the worktree case
 let noDevRepo: string; // throwaway repo WITHOUT a dev branch
@@ -61,7 +77,7 @@ after(() => {
   rmSync(noDevRepo, { recursive: true, force: true });
 });
 
-test("startRun with target_repo checks out a NEW run-scoped branch, not dev itself", () => {
+test("startRun with target_repo checks out a NEW run-scoped branch, not dev itself", { skip: CLAUDE_MISSING }, () => {
   const res = call("startRun", { idea: "test idea", target_repo: existingRepo }, env());
   assert.equal(res.status, 0);
   const runId = res.result.run_id;
@@ -79,7 +95,7 @@ test("startRun with target_repo checks out a NEW run-scoped branch, not dev itse
   assert.doesNotMatch(ourBlock!, /branch refs\/heads\/dev$/m);
 });
 
-test("two concurrent startRuns against the SAME target_repo both succeed", () => {
+test("two concurrent startRuns against the SAME target_repo both succeed", { skip: CLAUDE_MISSING }, () => {
   const res1 = call("startRun", { idea: "idea A", target_repo: existingRepo }, env());
   const res2 = call("startRun", { idea: "idea B", target_repo: existingRepo }, env());
   assert.equal(res1.status, 0);
@@ -87,7 +103,7 @@ test("two concurrent startRuns against the SAME target_repo both succeed", () =>
   assert.notEqual(res1.result.run_id, res2.result.run_id);
 });
 
-test("startRun with no target_repo creates a worktree from MINERVA_SEED_REPO", () => {
+test("startRun with no target_repo creates a worktree from MINERVA_SEED_REPO", { skip: CLAUDE_MISSING }, () => {
   const res = call("startRun", { idea: "greenfield idea" }, env());
   assert.equal(res.status, 0);
   const runId = res.result.run_id;
@@ -125,7 +141,7 @@ test("target_repo with no dev branch returns a clear VALIDATION_FAILED error, no
   assert.match(res.error.message, /target_repo/);
 });
 
-test("two runs' workspaces are isolated -- writing to one does not affect the other", () => {
+test("two runs' workspaces are isolated -- writing to one does not affect the other", { skip: CLAUDE_MISSING }, () => {
   const runA = call("startRun", { idea: "idea A" }, env()).result.run_id;
   const runB = call("startRun", { idea: "idea B" }, env()).result.run_id;
 
@@ -139,7 +155,7 @@ test("two runs' workspaces are isolated -- writing to one does not affect the ot
   assert.ok(existsSync(recB.state_path));
 });
 
-test("getRunStatus on an allocated run persists across separate CLI invocations", () => {
+test("getRunStatus on an allocated run persists across separate CLI invocations", { skip: CLAUDE_MISSING }, () => {
   const runId = call("startRun", { idea: "persistence test" }, env()).result.run_id;
   // Each call() is a fresh subprocess -- this genuinely tests disk persistence, not memory.
   const first = call("getRunStatus", { run_id: runId }, env());
@@ -154,7 +170,7 @@ test("getRunStatus on an unknown run_id returns NOT_FOUND", () => {
   assert.equal(res.error.code, "NOT_FOUND");
 });
 
-test("listRuns returns all allocated runs with correct status", () => {
+test("listRuns returns all allocated runs with correct status", { skip: CLAUDE_MISSING }, () => {
   const localHome = mkdtempSync(join(tmpdir(), "minerva-home-listruns-"));
   const localSeedRepo = mkdtempSync(join(tmpdir(), "minerva-seed-repo-listruns-"));
   try {

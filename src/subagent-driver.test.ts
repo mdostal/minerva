@@ -35,6 +35,11 @@ const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
 // real-forked-hive-driver.test.ts. Every SubagentDriver test makes live `claude --bg` / `--resume`
 // subprocess calls (AD-1: no mocking the CLI boundary) and has no meaning without the binary.
 const CLAUDE_MISSING = (() => {
+  // `which claude` alone is insufficient — the binary may exist but require interactive
+  // disclaimer acceptance before non-interactive use. Require explicit opt-in via CLAUDE_AVAILABLE=1.
+  if (process.env.CLAUDE_AVAILABLE !== "1") {
+    return "CLAUDE_AVAILABLE=1 not set — configure it in environments where claude CLI is fully set up for non-interactive use";
+  }
   try {
     execFileSync("which", ["claude"], { stdio: "pipe" });
     return false as const;

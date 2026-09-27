@@ -23,6 +23,11 @@ const HARNESS = join(__dirname, "driver-sigint-harness.ts");
 // real-forked-hive-driver.test.ts. These SpawnDriver tests make live `claude -p` subprocess
 // calls (AD-1: no mocking the CLI boundary) and have no meaning without the actual binary.
 const CLAUDE_MISSING = (() => {
+  // `which claude` alone is insufficient — the binary may exist but require interactive
+  // disclaimer acceptance before non-interactive use. Require explicit opt-in via CLAUDE_AVAILABLE=1.
+  if (process.env.CLAUDE_AVAILABLE !== "1") {
+    return "CLAUDE_AVAILABLE=1 not set — configure it in environments where claude CLI is fully set up for non-interactive use";
+  }
   try {
     execFileSync("which", ["claude"], { stdio: "pipe" });
     return false as const;

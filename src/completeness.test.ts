@@ -22,6 +22,22 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { call, createSeedRepo } from "./test-cli.ts";
 
+// Skip, not fail, when the real claude CLI is absent or not configured for non-interactive use.
+// Same skip-not-fail pattern as FORK_MISSING in real-forked-hive-driver.test.ts. Every test
+// here calls startRun, which spawns a real `claude -p` subprocess, and has no meaning without
+// a fully configured CLI. `which claude` alone is insufficient; CLAUDE_AVAILABLE=1 is required.
+const CLAUDE_MISSING = (() => {
+  if (process.env.CLAUDE_AVAILABLE !== "1") {
+    return "CLAUDE_AVAILABLE=1 not set — configure it in environments where claude CLI is fully set up for non-interactive use";
+  }
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return false as const;
+  } catch {
+    return "claude CLI not found in PATH — install Claude Code to run this live integration test";
+  }
+})();
+
 let minervaHome: string;
 let seedRepo: string;
 
@@ -49,7 +65,7 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("PRD anchored success metric: >=3 ideas in flight concurrently, each progressing idea->spec independently, zero hand-run commands per idea", () => {
+test("PRD anchored success metric: >=3 ideas in flight concurrently, each progressing idea->spec independently, zero hand-run commands per idea", { skip: CLAUDE_MISSING }, () => {
   // "Zero hand-run commands per idea" is proven structurally: every step below goes through
   // bin/minerva's CLI boundary only (startRun / getQuestions / submitAnswers / getOutput) --
   // nothing here shells out to git/claude directly the way a human operator would.
@@ -93,7 +109,7 @@ test("PRD anchored success metric: >=3 ideas in flight concurrently, each progre
   }
 });
 
-test("listRuns is accurate across a real mix of run states (waiting_on_human, complete, aborted)", () => {
+test("listRuns is accurate across a real mix of run states (waiting_on_human, complete, aborted)", { skip: CLAUDE_MISSING }, () => {
   const waitingRunId = call("startRun", { idea: "a habit streak tracker" }, env()).result.run_id;
 
   const completeRunId = call("startRun", { idea: "a grocery list app" }, env()).result.run_id;

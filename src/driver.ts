@@ -40,6 +40,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
 import { listEnvelopes } from "./envelope-detection.ts";
 import { emitTelemetryEvent } from "./telemetry.ts";
+import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
@@ -51,6 +52,13 @@ const RUNTIME_CLI: Record<string, string> = {
   grok: "opencode",
   opencode: "opencode",
 };
+
+// Model used when the route response names a lane but no model -- core-api's live
+// /api/route/select shape ({decision_id, chosen_lane, ...}) never carries one (PANT-901).
+const DEFAULT_DRIVE_MODEL = "claude-haiku-4-5-20251001";
+function resolveDriveModel(): string {
+  return process.env.MINERVA_DRIVE_MODEL?.trim() || DEFAULT_DRIVE_MODEL;
+}
 
 // Production finding (2026-07-26): a real kickoff->planning transition turn legitimately runs
 // past the old hardcoded 120s ceiling, causing SubagentDriver's poll to time out short of
@@ -109,9 +117,18 @@ export class HeimdallRouteError extends Error {
   }
 }
 
+// Core-api's routing-decision identifiers, carried back to the run record so a decision can be
+// tied to the run's outcome. Present only when the route/select response included them.
+export interface RouteDecision {
+  decision_id: string;
+  chosen_lane: string | null;
+  experiment_arm: string | null;
+}
+
 export interface RuntimeRoute {
   cli: string;
   model: string;
+  decision?: RouteDecision;
 }
 
 type RouteFetch = (
@@ -144,12 +161,8 @@ function resolveRouteTimeoutMs(): number {
 function getPantheonRouteSelectUrl(): string {
   const exact = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   if (exact) return exact;
-  const base = process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL;
-  if (!base) {
-    throw new Error(
-      "Pantheon core-api URL not configured: set PANTHEON_CORE_API_URL or MINERVA_PANTHEON_CORE_API_URL",
-    );
-  }
+  const base = resolvePantheonCoreApiUrl();
+  if (!base) throw new Error(PANTHEON_CORE_API_URL_MISSING);
   return `${base.replace(/\/+$/, "")}/api/route/select`;
 }
 
@@ -211,16 +224,42 @@ export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
 
   const rawCli = route?.cli ?? route?.command ?? route?.executable ?? route?.cli_command ?? route?.tool;
   const runtimeName = route?.runtime ?? route?.provider;
+  const rawModel = route?.model ?? route?.model_name ?? route?.modelName;
+  const chosenLane = typeof root?.chosen_lane === "string" && root.chosen_lane.trim() ? root.chosen_lane.trim() : null;
+  const decision = parseRouteDecision(root, chosenLane);
+
+  // Live core-api shape: {decision_id, chosen_lane: "claude@ffevents", ...} with no cli/model.
+  // The lane id's prefix before "@" names the runtime; an unmapped lane throws, which
+  // resolveRuntimeRoute turns into the operator fallback (or a HeimdallRouteError).
+  if (!(typeof rawCli === "string" && rawCli.trim()) && !(typeof runtimeName === "string" && runtimeName.trim()) && chosenLane) {
+    const cli = RUNTIME_CLI[chosenLane.split("@")[0]!.trim().toLowerCase()];
+    if (!cli) {
+      throw new Error(`Pantheon /api/route/select chose lane "${chosenLane}", which maps to no known CLI`);
+    }
+    const model = typeof rawModel === "string" && rawModel.trim() ? rawModel.trim() : resolveDriveModel();
+    return { cli, model, ...(decision ? { decision } : {}) };
+  }
+
   const cli = typeof rawCli === "string" && rawCli.trim()
     ? rawCli.trim()
     : typeof runtimeName === "string" && runtimeName.trim()
       ? RUNTIME_CLI[runtimeName.trim().toLowerCase()] ?? runtimeName.trim()
       : undefined;
-  const model = route?.model ?? route?.model_name ?? route?.modelName;
-  if (typeof cli !== "string" || cli.trim() === "" || typeof model !== "string" || model.trim() === "") {
+  if (typeof cli !== "string" || cli.trim() === "" || typeof rawModel !== "string" || rawModel.trim() === "") {
     throw new Error(`Pantheon /api/route/select response must include non-empty cli and model strings`);
   }
-  return { cli: cli.trim(), model: model.trim() };
+  return { cli: cli.trim(), model: rawModel.trim(), ...(decision ? { decision } : {}) };
+}
+
+function parseRouteDecision(root: Record<string, unknown> | null, chosenLane: string | null): RouteDecision | undefined {
+  const decisionId = root?.decision_id;
+  const arm = root?.experiment_arm;
+  if (typeof decisionId !== "string" || !decisionId.trim()) return undefined;
+  return {
+    decision_id: decisionId.trim(),
+    chosen_lane: chosenLane,
+    experiment_arm: typeof arm === "string" && arm.trim() ? arm.trim() : null,
+  };
 }
 
 export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fetch as unknown as RouteFetch): Promise<RuntimeRoute> {
@@ -232,7 +271,7 @@ export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fet
   const fallback = resolveFallbackRoute();
 
   // Resolve the URL and build the request inside the try block so a misconfigured or missing
-  // PANTHEON_CORE_API_URL falls through to the fallback path (same as an unreachable service)
+  // core-api URL falls through to the fallback path (same as an unreachable service)
   // rather than propagating a plain uncaught Error.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolveRouteTimeoutMs());
@@ -283,21 +322,35 @@ export interface DriverInput {
   cwd: string;
   sessionId: string | null;
   prompt: string;
+  // PANT-923: the envelope qid of the question this prompt answers, when the run record has one.
+  // A parked envelope set can hold several pending questions, so the answer must be written onto
+  // the one actually answered rather than the one the session pointer happens to name. Drivers
+  // without envelope questions ignore it.
+  qid?: string;
 }
 
 export interface DriverResult {
   session_id: string;
   raw_result: string;
-  // The route lane this turn actually ran on, when the driver resolved one. Optional so scripted
-  // test drivers and turns that made no live call (e.g. ForkedHiveDriver surfacing a sibling
+  // The core-api routing decision that picked this turn's runtime, when there was one.
+  route_decision?: RouteDecision;
+  // The route this turn's real work ran on, when the driver resolved one. Optional so scripted
+  // test drivers and turns that made no live dispatch (e.g. ForkedHiveDriver surfacing a sibling
   // question from an already-written envelope) can omit it. Recorded into RunMetrics.lane.
   route?: RuntimeRoute;
 }
 
-// Stable "<cli>:<model>" label for a route lane, used to group runs in getMetrics. A colon, not a
-// slash, because opencode-style model ids already contain slashes ("anthropic/claude-...").
+// Attach the route a turn ran on, plus its core-api decision when there was one.
+function withRouteDecision(result: DriverResult, route: RuntimeRoute): DriverResult {
+  return { ...result, route, ...(route.decision ? { route_decision: route.decision } : {}) };
+}
+
+// Route-lane label used to group runs in getMetrics: core-api's chosen_lane (the Heimdall lane,
+// e.g. "claude@ffevents") when the route came with a decision, otherwise "<cli>:<model>". A colon,
+// not a slash, because opencode-style model ids already contain slashes ("anthropic/claude-...").
 export function laneOf(route: RuntimeRoute | undefined): string | undefined {
-  return route ? `${route.cli}:${route.model}` : undefined;
+  if (!route) return undefined;
+  return route.decision?.chosen_lane ?? `${route.cli}:${route.model}`;
 }
 
 // driver-lifecycle-telemetry: every Driver wraps its whole runTurn() in the same
@@ -729,7 +782,7 @@ export class SpawnDriver implements Driver {
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(route.model, input.sessionId, input.prompt, classificationSchemaArgs());
     const result = await spawnRuntime(route, input.cwd, args, adapter.parseTurnResult.bind(adapter));
-    return { session_id: result.session_id, raw_result: result.result, route };
+    return withRouteDecision({ session_id: result.session_id, raw_result: result.result }, route);
   }
 }
 
@@ -829,7 +882,7 @@ export class SubagentDriver implements Driver {
 
     const args = adapter.formatTurnArgs(route.model, fullSessionId, EXTRACTION_INSTRUCTION, classificationSchemaArgs());
     const result = await spawnRuntime(route, input.cwd, args, adapter.parseTurnResult.bind(adapter));
-    return { session_id: result.session_id, raw_result: result.result, route };
+    return withRouteDecision({ session_id: result.session_id, raw_result: result.result }, route);
   }
 }
 
@@ -1009,10 +1062,13 @@ export class ForkedHiveDriver implements Driver {
       // "never guess, but degrade gracefully" discipline for an odd-but-not-catastrophic input.
       return this.dispatchFresh(input.cwd, input.prompt);
     }
-    return this.answerAndContinue(input.cwd, pointer, input.prompt);
+    // PANT-923: answer the question the caller actually answered. The pointer names only the
+    // first question of the surfaced set; any sibling of that envelope may be the one answered.
+    const target = input.qid ? { ...pointer, qid: input.qid } : pointer;
+    return this.answerAndContinue(input.cwd, target, input.prompt);
   }
 
-  private async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
+  protected async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(
@@ -1022,9 +1078,7 @@ export class ForkedHiveDriver implements Driver {
       pluginDirArgs()
     );
     await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter), { HIVE_HEADLESS: "1" });
-    // The skill dispatch is this turn's real work, so its route is the turn's lane (not the
-    // classification call's, which surfaceNextQuestion may report).
-    return { ...(await this.surfaceNextQuestion(cwd, skillPrompt)), route };
+    return withRouteDecision(await this.surfaceNextQuestion(cwd, skillPrompt), route);
   }
 
   private async answerAndContinue(cwd: string, pointer: EnvelopePointer, answerText: string): Promise<DriverResult> {
@@ -1040,7 +1094,7 @@ export class ForkedHiveDriver implements Driver {
     return this.dispatchFresh(cwd, pointer.skillPrompt);
   }
 
-  private async surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult> {
+  protected async surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult> {
     const pending = listEnvelopes(cwd).find((e) => e.status === "pending");
     if (!pending) {
       // Zero-envelopes observability: this placeholder fires both when a run legitimately
@@ -1073,11 +1127,12 @@ export class ForkedHiveDriver implements Driver {
       };
     }
 
-    // Surface the next unanswered question in encounter order -- required or optional. Only
-    // required questions gate the closure invariant, but any unanswered question (including an
-    // optional one encountered before all required ones are done) is still surfaced rather than
-    // silently skipped, so no information the skill asked for is ever lost.
-    const next = pending.questions.find((q) => q.answer === null || q.answer === undefined);
+    // Surface every unanswered question in encounter order -- required or optional -- as one
+    // open question set (PANT-923). Only required questions gate the closure invariant, but any
+    // unanswered question is still surfaced rather than silently skipped, so no information the
+    // skill asked for is ever lost. All of them are knowable now with no new dispatch.
+    const unanswered = pending.questions.filter((q) => q.answer === null || q.answer === undefined);
+    const next = unanswered[0];
     if (!next) {
       // Defensive: every question already has an answer, yet the envelope is still `pending`.
       // Should not happen if writeAnswerOntoEnvelope's own closure check is correct, but this
@@ -1094,21 +1149,40 @@ export class ForkedHiveDriver implements Driver {
       };
     }
 
-    const { classification, route } = await this.classify(cwd, next.text);
+    const questions = [];
+    for (const q of unanswered) {
+      const classification = await this.classify(cwd, q.text);
+      questions.push({
+        text: q.text,
+        kind: q.kind,
+        options: q.options,
+        qid: q.qid,
+        required: q.required,
+        suggested_channel: classification.suggested_channel,
+        confidence: classification.confidence,
+        reason: classification.reason,
+      });
+    }
+    const first = questions[0]!;
+    // The pointer names the first question; the engine passes DriverInput.qid when a sibling is
+    // the one answered. The top-level question/qid fields mirror the first entry so a parser that
+    // predates `questions` still reads one well-formed question.
     const pointer: EnvelopePointer = { envelopePath: pending.path, qid: next.qid, skillPrompt };
     const rawResult = JSON.stringify({
-      question: next.text,
-      suggested_channel: classification.suggested_channel,
-      confidence: classification.confidence,
-      reason: classification.reason,
-      kind: next.kind,
-      options: next.options,
-      qid: next.qid,
+      question: first.text,
+      suggested_channel: first.suggested_channel,
+      confidence: first.confidence,
+      reason: first.reason,
+      kind: first.kind,
+      options: first.options,
+      qid: first.qid,
+      set_id: pending.id,
+      questions,
     });
-    return { session_id: encodeEnvelopePointer(pointer), raw_result: rawResult, route };
+    return { session_id: encodeEnvelopePointer(pointer), raw_result: rawResult };
   }
 
-  private async classify(cwd: string, questionText: string) {
+  protected async classify(cwd: string, questionText: string) {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(
@@ -1118,6 +1192,6 @@ export class ForkedHiveDriver implements Driver {
       classificationOnlySchemaArgs()
     );
     const result = await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter));
-    return { classification: extractClassification(result.result), route };
+    return extractClassification(result.result);
   }
 }

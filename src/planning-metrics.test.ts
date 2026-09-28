@@ -6,9 +6,9 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { abortRun } from "./cleanup-ledger.ts";
-import type { Driver, DriverInput, DriverResult, RuntimeRoute } from "./driver.ts";
+import { laneOf, type Driver, type DriverInput, type DriverResult, type RuntimeRoute } from "./driver.ts";
 import { getQuestions, startRun, submitAnswers, __setDriverForTest } from "./kickoff-engine.ts";
-import { readRunRecord, getRunStatus, type RunMetrics } from "./run-manager.ts";
+import { readRunRecord, getRunStatus, recordHumanEscalations, type RunMetrics } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
 import { createSeedRepo } from "./test-cli.ts";
 
@@ -194,6 +194,25 @@ test("getRunStatus surfaces the persisted metrics via the ABI", async () => {
   assert.ok(res.metrics.started_at);
 });
 
+test("getRunStatus surfaces the core-api route decision behind the run's turns (PANT-901)", async () => {
+  __setDriverForTest({
+    async runTurn(input: DriverInput): Promise<DriverResult> {
+      const result = await new MetricsDriver("human-question").runTurn(input);
+      return {
+        ...result,
+        route_decision: { decision_id: "dec-123", chosen_lane: "claude@ffevents", experiment_arm: null },
+      };
+    },
+  });
+  const { run_id: runId } = (await startRun({ idea: "metrics route decision test" })) as { run_id: string };
+
+  const res = getRunStatus({ run_id: runId }) as { metrics: RunMetrics };
+  assert.equal(res.metrics.decision_id, "dec-123");
+  assert.equal(res.metrics.chosen_lane, "claude@ffevents");
+  assert.equal(res.metrics.experiment_arm, null);
+  assert.equal(res.metrics.turns, 1);
+});
+
 test("getOutput surfaces the finalized metrics via the ABI", async () => {
   __setDriverForTest(new MetricsDriver("complete"));
   const { run_id: runId } = (await startRun({ idea: "metrics ABI test complete" })) as { run_id: string };
@@ -205,3 +224,34 @@ test("getOutput surfaces the finalized metrics via the ABI", async () => {
   assert.ok(res.metrics.finalized_at);
 });
 
+
+test("re-running the locked escalation sweep never re-counts an already-stamped question", async () => {
+  const { run_id: runId } = (await startRun({ idea: "locked sweep" })) as { run_id: string };
+  const stamped = readRunRecord(runId).questions[0]!.escalated_at;
+
+  for (let i = 0; i < 5; i++) {
+    recordHumanEscalations(runId);
+    getQuestions({ run_id: runId, channel: "human" });
+  }
+
+  const record = readRunRecord(runId);
+  assert.equal(record.metrics?.escalations, 1);
+  assert.equal(record.questions[0]!.escalated_at, stamped);
+});
+
+test("laneOf prefers core-api's chosen_lane and falls back to <cli>:<model>", () => {
+  assert.equal(laneOf(undefined), undefined);
+  assert.equal(laneOf({ cli: "claude", model: "claude-sonnet-5" }), "claude:claude-sonnet-5");
+  assert.equal(
+    laneOf({
+      cli: "claude",
+      model: "claude-sonnet-5",
+      decision: { decision_id: "d-1", chosen_lane: "claude@ffevents", experiment_arm: null },
+    }),
+    "claude@ffevents",
+  );
+  assert.equal(
+    laneOf({ cli: "codex", model: "gpt-5", decision: { decision_id: "d-2", chosen_lane: null, experiment_arm: null } }),
+    "codex:gpt-5",
+  );
+});

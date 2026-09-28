@@ -18,6 +18,7 @@ import { getOutput } from "./output-emitter.ts";
 import type { CompletedEpic } from "./output-emitter.ts";
 import type { PlanDefaultsMode } from "./plan-defaults.ts";
 import { parseTargetRepoLine, stampTargetRepo, deriveRepoSlugFromWorkspace } from "./target-repo-signal.ts";
+import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
 
 export interface PlanRequest {
   idea: string;
@@ -70,10 +71,6 @@ export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
 // no god calls Multica directly. POST /api/backlog/issues creates tickets; GET reads them;
 // PUT /api/backlog/issues/:id/metadata updates ticket metadata.
 
-function getPantheonCoreApiUrl(): string | null {
-  return process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL ?? null;
-}
-
 type PantheonFetch = (
   url: string,
   init: { method: string; headers?: Record<string, string>; body?: string },
@@ -91,12 +88,8 @@ export function __setPantheonFetchForTest(fn: PantheonFetch): PantheonFetch {
 }
 
 async function pantheonRequest(method: string, path: string, body?: unknown): Promise<unknown> {
-  const baseUrl = getPantheonCoreApiUrl();
-  if (!baseUrl) {
-    throw new Error(
-      "Pantheon core-api URL not configured: set PANTHEON_CORE_API_URL or MINERVA_PANTHEON_CORE_API_URL",
-    );
-  }
+  const baseUrl = resolvePantheonCoreApiUrl();
+  if (!baseUrl) throw new Error(PANTHEON_CORE_API_URL_MISSING);
   const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
   const init: { method: string; headers?: Record<string, string>; body?: string } =
     body !== undefined

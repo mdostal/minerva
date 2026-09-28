@@ -121,10 +121,13 @@ Check the current status of a run.
 | `escalations` | number | `human`-channel questions parked for a human, each counted once when parked (reading via `getQuestions` never counts) |
 | `auto_resolutions` | number | Questions answered in-process from plan defaults |
 | `driver` | string | Driver that ran the turns (e.g. `spawn`, `subagent`, or an agnostic-plan runtime) |
-| `lane` | string? | Route lane `"<cli>:<model>"` of the run's first driver turn that reported one |
+| `lane` | string? | Route lane of the run's first driver turn that reported one: core-api's `chosen_lane` (e.g. `claude@ffevents`) when the route came with a decision, otherwise `"<cli>:<model>"` |
 | `started_at` | string | ISO 8601 timestamp |
 | `elapsed_ms` | number? | Set once the run finishes or is aborted |
 | `finalized_at` | string? | ISO 8601 timestamp, set with `elapsed_ms` |
+| `decision_id` | string? | core-api `/api/route/select` decision behind the latest routed turn |
+| `chosen_lane` | string \| null? | Lane that decision picked (e.g. `claude@ffevents`) |
+| `experiment_arm` | string \| null? | Routing experiment arm, when core-api reports one |
 
 **Status meanings:**
 
@@ -200,11 +203,20 @@ Get pending questions for a run, filtered by channel.
 | `suggested_channel` | `"agent"` \| `"human"` | Escalation classifier's suggestion (not enforced) |
 | `confidence` | number | 0.0–1.0 — classifier's confidence in `suggested_channel` |
 | `reason` | string | Why the classifier suggested this channel |
-| `status` | `"pending"` \| `"answered"` | Whether this question has been answered |
+| `status` | `"pending"` \| `"answered"` \| `"superseded"` | `superseded`: an optional envelope question left unanswered when its set closed (never returned by `getQuestions`) |
 | `kind` | string? | Optional: `"single-select"`, `"multi-select"`, `"free-text"` |
 | `options` | string[] \| null? | Available options (present for `single-select`/`multi-select` kinds) |
 | `qid` | string? | Envelope question id — used for `answers` matching in plan defaults |
+| `set_id` | string? | Open question set this question belongs to. Forked-driver envelope questions share the envelope id; a prose driver's question is a set of 1 (`set_id` = its own `id`). Absent on records written before this field |
+| `required` | boolean? | Envelope questions only: whether the envelope needs an answer to this question before it closes |
 | `escalated_at` | string? | ISO 8601 — when this question was first parked on the `human` queue (see [`getMetrics`](#getmetrics)) |
+
+!!! note "Open question sets"
+    When a run parks, it records every question Minerva can know without driving another turn.
+    A forked-driver envelope with several questions parks all of them at once, sharing one
+    `set_id`. Answering one of them (via `submitAnswers`) does not drive a new turn until every
+    `required` question of the set is answered. Prose drivers (spawn/subagent/agnostic) still
+    park one question at a time, because each later gate depends on the earlier answer.
 
 !!! note "Channel semantics"
     `getQuestions` and `submitAnswers` gate on the **enforced** `channel`, never on
@@ -252,7 +264,12 @@ Minerva auto-answers routine gate questions in-process from the run's plan defau
 completes, or `max_auto_answers` (default `40`) answers have been given. With plan-defaults
 mode `off`, nothing is auto-answered.
 
-Only the **first** entry of `answers` is applied per call.
+Each call answers exactly **one** question: `answers` must contain exactly one entry. A request
+with more than one entry is rejected with `VALIDATION_FAILED` and the run is left unchanged.
+
+If the resumed turn fails (timeout after retries, auth, routing), the error is returned and the
+question goes back to `pending` with the run back in `waiting_on_human`. The same question can be
+answered again with another `submitAnswers` call.
 
 **Params:**
 
@@ -260,7 +277,7 @@ Only the **first** entry of `answers` is applied per call.
 |-------|------|-------------|
 | `run_id` | string (UUID) | The run to advance |
 | `channel` | `"agent"` \| `"human"` | Must match the enforced `channel` of every answered question |
-| `answers` | Answer[] | Non-empty list of answers; only the first is applied |
+| `answers` | Answer[] | Exactly one answer |
 
 **`Answer` shape:**
 
@@ -278,7 +295,7 @@ response is `{"result":{"result":{}}}`.
 |------|---------|
 | `WRONG_CHANNEL` | `channel` in the request doesn't match the question's enforced `channel` |
 | `NOT_FOUND` | `run_id` doesn't exist, or `question_id` is not a pending question on it |
-| `VALIDATION_FAILED` | Malformed payload (e.g. `answers` empty, or an entry missing `question_id`) |
+| `VALIDATION_FAILED` | Malformed payload (e.g. `answers` empty or with more than one entry, or an entry missing `question_id`), or the run has no drive session to resume |
 
 **Example:**
 ```bash
@@ -381,10 +398,10 @@ network.
 | `skipped_records` | number | Run records that could not be parsed and were left out |
 | `overall` | MetricsGroup | Every run |
 | `by_driver` | `{[driver]: MetricsGroup}` | Keyed by `metrics.driver` (`spawn`, `subagent`, `forked`, or an agnostic runtime such as `opencode`) |
-| `by_lane` | `{[lane]: MetricsGroup}` | Keyed by route lane `"<cli>:<model>"`, the lane the run's first driver turn ran on |
+| `by_lane` | `{[lane]: MetricsGroup}` | Keyed by `metrics.lane`: the lane the run's first driver turn ran on (core-api's `chosen_lane`, or `"<cli>:<model>"` when there was no routing decision) |
 
 Runs recorded before a field existed are grouped under `"unknown"`. A legacy run with no captured
-lane falls back to its frozen `plan_runtime:plan_model` when present.
+lane falls back to `metrics.chosen_lane`, then to its frozen `plan_runtime:plan_model`, when present.
 
 **`MetricsGroup` shape:**
 
@@ -422,7 +439,7 @@ npx tsx bin/minerva.ts metrics
       "time_to_spec_ms": {"median": 184000, "p90": 412000}
     },
     "by_driver": {"spawn": {"runs": 3, "...": "same MetricsGroup shape"}},
-    "by_lane": {"claude:claude-sonnet-5": {"runs": 3, "...": "same MetricsGroup shape"}}
+    "by_lane": {"claude@ffevents": {"runs": 3, "...": "same MetricsGroup shape"}}
   }
 }
 ```

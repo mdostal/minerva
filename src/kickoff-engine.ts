@@ -8,6 +8,8 @@ import {
   allocateRun,
   readRunRecord,
   updateRunRecord,
+  mutateRunRecord,
+  isTerminalStatus,
   normalizeQuestionKind,
   recordDriverTurn,
   recordHumanEscalations,
@@ -194,13 +196,60 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
 // whatever the schema-forced response said once completion is detected.
 export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
-    return; // run is complete -- no pending question to append, ever
+    // Run is terminal (complete or aborted) -- no pending question to append, ever. Optional
+    // leftovers of an envelope set can no longer be answered either.
+    mutateRunRecord(runId, (record) => {
+      const questions = supersedeClosedSets(record.questions, undefined);
+      return questions === record.questions ? null : { questions };
+    });
+    return;
   }
-  const record = readRunRecord(runId);
-  const classified = extractClassifiedQuestion(rawResult);
-  const shape = extractQuestionShape(rawResult);
-  const question: Question = {
-    id: `q-${record.questions.length + 1}`,
+  const set = extractQuestionSet(rawResult);
+  // Built from the freshest record under the run lock (PANT-904): an abortRun that landed while
+  // this turn was in flight wins -- the run stays aborted and no question is parked on it.
+  mutateRunRecord(runId, (record) => {
+    if (isTerminalStatus(record.status)) return null;
+    if (set) {
+      // PANT-923: the driver surfaced a whole open question set (ForkedHiveDriver's pending
+      // envelope). Park every question of it at once. After a sibling is answered the driver
+      // re-surfaces the rest of the same set, so a qid already pending in this set is kept as is
+      // (its channel may have been escalated since) rather than parked twice.
+      const kept = supersedeClosedSets(record.questions, set.set_id);
+      const alreadyPending = new Set(
+        kept.filter((q) => q.status === "pending" && q.set_id === set.set_id && q.qid).map((q) => q.qid),
+      );
+      const added: Question[] = [];
+      for (const entry of set.entries) {
+        if (entry.shape.qid !== undefined && alreadyPending.has(entry.shape.qid)) continue;
+        added.push({
+          ...buildQuestion(`q-${kept.length + added.length + 1}`, entry.classified, entry.shape),
+          set_id: set.set_id,
+          required: entry.required,
+        });
+      }
+      return { status: "waiting_on_human", questions: [...kept, ...added] };
+    }
+    const id = `q-${record.questions.length + 1}`;
+    // Prose drivers park one question per turn (the one-question guard in
+    // question-extraction.ts): a set of 1 whose set_id is its own id.
+    const question: Question = {
+      ...buildQuestion(id, extractClassifiedQuestion(rawResult), extractQuestionShape(rawResult)),
+      set_id: id,
+    };
+    return {
+      status: "waiting_on_human",
+      questions: [...supersedeClosedSets(record.questions, id), question],
+    };
+  });
+}
+
+function buildQuestion(
+  id: string,
+  classified: ReturnType<typeof extractClassifiedQuestion>,
+  shape: Partial<Pick<Question, "kind" | "options" | "qid">>,
+): Question {
+  return {
+    id,
     text: classified.text,
     suggested_channel: classified.suggested_channel,
     confidence: classified.confidence,
@@ -216,10 +265,50 @@ export async function recordTurn(runId: string, rawResult: string): Promise<void
     // single/multi-select gate instead of only ever answering free-text.
     ...shape,
   };
-  updateRunRecord(runId, {
-    status: "waiting_on_human",
-    questions: [...record.questions, question],
-  });
+}
+
+// An envelope set closes once every required question is answered, and the driver then moves
+// on. Its optional questions still pending at that point can never be answered, so they are
+// marked superseded when a turn surfaces a different set (or the run ends). Only envelope-set
+// questions (those carrying `required`) are touched: a prose question is always answered before
+// the next turn runs. Returns the input array unchanged when nothing was superseded.
+function supersedeClosedSets(questions: Question[], currentSetId: string | undefined): Question[] {
+  const stale = (q: Question) => q.status === "pending" && q.required !== undefined && q.set_id !== currentSetId;
+  if (!questions.some(stale)) return questions;
+  return questions.map((q) => (stale(q) ? { ...q, status: "superseded" as const } : q));
+}
+
+interface QuestionSetEntry {
+  classified: ReturnType<typeof extractClassifiedQuestion>;
+  shape: Partial<Pick<Question, "kind" | "options" | "qid">>;
+  required: boolean;
+}
+
+// Parse the open question set a driver may return in raw_result (ForkedHiveDriver:
+// `{set_id, questions: [{text, kind, options, qid, required, suggested_channel, confidence,
+// reason}]}`). Null when absent or malformed, so the caller falls back to the single-question
+// path exactly as before. Each entry goes through the same parsers as a single question.
+function extractQuestionSet(rawResult: string): { set_id: string; entries: QuestionSetEntry[] } | null {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(rawResult);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || typeof parsed.set_id !== "string" || !Array.isArray(parsed.questions)) {
+    return null;
+  }
+  const entries: QuestionSetEntry[] = [];
+  for (const q of parsed.questions) {
+    if (!q || typeof q !== "object" || typeof q.text !== "string" || q.text.trim().length === 0) continue;
+    const entryJson = JSON.stringify({ ...q, question: q.text });
+    entries.push({
+      classified: extractClassifiedQuestion(entryJson),
+      shape: extractQuestionShape(entryJson),
+      required: q.required === true,
+    });
+  }
+  return entries.length > 0 ? { set_id: parsed.set_id, entries } : null;
 }
 
 // Best-effort parse of the structured envelope fields a driver may embed alongside the question
@@ -292,12 +381,23 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result, route } = await runTurnResumable(driverForRecord(record), {
-      cwd: record.workspace_path,
-      sessionId: record.session_id,
-      prompt: answerPrompt,
-    });
-    recordDriverTurn(runId, laneOf(route));
+    let session_id: string;
+    let raw_result: string;
+    let route_decision: DriverResult["route_decision"];
+    let route: DriverResult["route"];
+    try {
+      ({ session_id, raw_result, route_decision, route } = await runTurnResumable(driverForRecord(record), {
+        cwd: record.workspace_path,
+        sessionId: record.session_id,
+        prompt: answerPrompt,
+        qid: pending.qid,
+      }));
+    } catch (err) {
+      // Same stranding risk as submitAnswers (PANT-903): leave the gate answerable.
+      restorePendingQuestion(runId, pending.id);
+      throw err;
+    }
+    recordDriverTurn(runId, route_decision, laneOf(route));
     recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
     await recordTurn(runId, raw_result);
@@ -382,9 +482,10 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // been reached) -- that is a stall, explicitly protected by AD-5 and out of scope here.
   let sessionId: string;
   let rawResult: string;
+  let routeDecision: DriverResult["route_decision"];
   let route: DriverResult["route"];
   try {
-    ({ session_id: sessionId, raw_result: rawResult, route } = await runTurnResumable(driver, {
+    ({ session_id: sessionId, raw_result: rawResult, route_decision: routeDecision, route } = await runTurnResumable(driver, {
       cwd: record.workspace_path,
       sessionId: null,
       prompt: drivePrompt,
@@ -393,7 +494,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     abortRun({ run_id: runId });
     throw err;
   }
-  recordDriverTurn(runId, laneOf(route));
+  recordDriverTurn(runId, routeDecision, laneOf(route));
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
@@ -444,6 +545,15 @@ export function isAnswerArray(value: unknown): value is Answer[] {
   );
 }
 
+// Undo a mark-answered after its resumed turn failed: the question goes back to pending and the
+// run back to waiting_on_human (what recordTurn set when it surfaced the question), so a later
+// answer can advance it again.
+function restorePendingQuestion(runId: string, questionId: string): void {
+  const current = readRunRecord(runId);
+  const questions = current.questions.map((q) => (q.id === questionId ? { ...q, status: "pending" as const } : q));
+  updateRunRecord(runId, { questions, status: "waiting_on_human" });
+}
+
 export async function submitAnswers(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const runId = params.run_id;
   const channel = params.channel as Channel | undefined;
@@ -458,10 +568,18 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   if (!isAnswerArray(answers) || answers.length === 0) {
     throw new MinervaError("VALIDATION_FAILED", "submitAnswers requires a non-empty answers array of {question_id, answer}");
   }
+  // PANT-903: the engine drives exactly one question per turn, so only one answer can ever be
+  // applied per call. Reject extras loudly instead of silently dropping them (batch staging of
+  // partial answers is PANT-697).
+  if (answers.length > 1) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `submitAnswers got ${answers.length} answers; submit one answer per call (batch staging is PANT-697)`,
+    );
+  }
 
   const record = readRunRecord(runId);
-  const firstAnswer = answers[0] as Answer;
-  const { question_id: questionId, answer } = firstAnswer;
+  const { question_id: questionId, answer } = answers[0] as Answer;
   const question = record.questions.find((q) => q.id === questionId && q.status === "pending");
 
   if (!question) {
@@ -474,7 +592,12 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
     );
   }
   if (!record.session_id) {
-    throw new MinervaError("VALIDATION_FAILED", `Run ${runId} has no active drive session to resume`);
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Run ${runId} has no active drive session to resume: its record has no session_id (the driver ` +
+        `returned an empty one on its last turn, e.g. plan-agnostic output without session_id). ` +
+        `The run cannot be advanced; abortRun it and start a new run.`,
+    );
   }
 
   // Mark answered BEFORE resuming -- this is the run's only advancement path (see
@@ -487,12 +610,26 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult, route } = await runTurnResumable(driverForRecord(record), {
-    cwd: record.workspace_path,
-    sessionId: record.session_id,
-    prompt: answerPrompt,
-  });
-  recordDriverTurn(runId, laneOf(route));
+  let newSessionId: string;
+  let rawResult: string;
+  let routeDecision: DriverResult["route_decision"];
+  let route: DriverResult["route"];
+  try {
+    ({ session_id: newSessionId, raw_result: rawResult, route_decision: routeDecision, route } = await runTurnResumable(driverForRecord(record), {
+      cwd: record.workspace_path,
+      sessionId: record.session_id,
+      prompt: answerPrompt,
+      qid: question.qid,
+    }));
+  } catch (err) {
+    // PANT-903: the resumed turn never happened, so the answer was never delivered. Put the
+    // question back to pending and the run back to waiting_on_human, so the same question can be
+    // answered again. Without this the run is stranded in_progress with no pending question and
+    // nothing can ever advance it. The caller still gets the error.
+    restorePendingQuestion(runId, questionId);
+    throw err;
+  }
+  recordDriverTurn(runId, routeDecision, laneOf(route));
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });

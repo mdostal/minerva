@@ -67,6 +67,8 @@ before(() => {
   writeFixture("aborted", { driver: "forked", lane: opencode, turns: 3, escalations: 1, auto_resolutions: 0, elapsed_ms: 700 });
   // Legacy agnostic run recorded before lane capture: lane falls back to plan_runtime:plan_model.
   writeFixture("in_progress", { driver: "opencode", turns: 1 }, { plan_runtime: "opencode", plan_model: "openai/gpt-5" });
+  // Record from before lane capture but with a core-api decision: lane falls back to chosen_lane.
+  writeFixture("complete", { driver: "subagent", chosen_lane: "claude@ffevents", turns: 2, elapsed_ms: 4000 });
   // Legacy record with no metrics at all: counted by status, contributes no samples.
   writeFixture("in_progress", null);
   // A corrupt record is skipped, not fatal.
@@ -83,7 +85,7 @@ after(() => {
 
 test("getMetrics aggregates per driver", () => {
   const res = getMetrics({}) as { by_driver: Record<string, MetricsGroup>; skipped_records: number };
-  assert.deepEqual(Object.keys(res.by_driver), ["forked", "opencode", "spawn", "unknown"]);
+  assert.deepEqual(Object.keys(res.by_driver), ["forked", "opencode", "spawn", "subagent", "unknown"]);
   assert.equal(res.skipped_records, 1);
 
   const spawn = res.by_driver.spawn!;
@@ -112,7 +114,8 @@ test("getMetrics aggregates per driver", () => {
 
 test("getMetrics aggregates per route lane, falling back to the frozen plan runtime for legacy runs", () => {
   const res = getMetrics({}) as { by_lane: Record<string, MetricsGroup> };
-  assert.deepEqual(Object.keys(res.by_lane), ["claude:claude-sonnet-5", "opencode:openai/gpt-5", "unknown"]);
+  assert.deepEqual(Object.keys(res.by_lane), ["claude:claude-sonnet-5", "claude@ffevents", "opencode:openai/gpt-5", "unknown"]);
+  assert.equal(res.by_lane["claude@ffevents"]!.runs, 1);
 
   const claude = res.by_lane["claude:claude-sonnet-5"]!;
   assert.equal(claude.runs, 5);
@@ -133,10 +136,11 @@ test("getMetrics reports an overall summary and is reachable through the ABI", a
   const response = await dispatch({ method: "getMetrics", params: {} });
   assert.ok("result" in response);
   const overall = (response.result as { overall: MetricsGroup }).overall;
-  assert.equal(overall.runs, 9);
-  assert.deepEqual(overall.by_status, { in_progress: 2, waiting_on_human: 1, complete: 4, aborted: 2 });
-  assert.equal(overall.completion_rate, 4 / 6);
-  assert.deepEqual(overall.time_to_spec_ms, { median: 3000, p90: 20000 });
+  assert.equal(overall.runs, 10);
+  assert.deepEqual(overall.by_status, { in_progress: 2, waiting_on_human: 1, complete: 5, aborted: 2 });
+  assert.equal(overall.completion_rate, 5 / 7);
+  // [1000,3000,4000,9000,20000]
+  assert.deepEqual(overall.time_to_spec_ms, { median: 4000, p90: 20000 });
 });
 
 test("getMetrics over an empty MINERVA_HOME returns zeroed groups, not an error", () => {

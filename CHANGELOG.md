@@ -13,18 +13,38 @@ All notable changes to Minerva are documented in this file.
   `dispatch.ts` is missing from `mkdocs_docs/abi-reference.md` (or the reverse), and if the
   documented `submitAnswers` example no longer passes the handler's answer validation.
 - **`stub-claude` test harness**: `bin/stub-claude.ts` is a fake `claude` CLI (`-p`, `--bg`,
-  `agents --json`, `stop`). The test suite uses it when real Claude auth is unavailable, replacing
-  35 skip guards so the full suite runs auth-free.
+  `agents --json`, `stop`). The test suite uses it by default (see PANT-905 below), replacing 35
+  skip guards so the full suite runs auth-free.
 - **`getMetrics` ABI method** (PANT-906): cross-run planning KPIs from local run records only
   (no network), overall, by driver and by route lane: run count by status, completion rate, and
   median/p90 turns, escalations, auto-resolutions and time-to-spec. Also exposed as an MCP tool
-  and as `minerva metrics`. Runs now record their route lane (`metrics.lane`, `"<cli>:<model>"`).
+  and as `minerva metrics`. Runs now record their route lane (`metrics.lane`: core-api's `chosen_lane` when the route came with a decision, else `"<cli>:<model>"`).
 - **Driver lifecycle telemetry for every driver**: `SpawnDriver` and `SubagentDriver` now emit
   the same `driver_started`/`driver_succeeded`/`driver_failed` events as `ForkedHiveDriver`.
   Events carry a `driver` field; `driver_succeeded` carries `lane`.
 
 ### Changed
 
+- **A parked run records its whole open question set** (PANT-923): `ForkedHiveDriver` surfaces
+  every unanswered question of the pending envelope at once, and the run parks all of them with a
+  shared `set_id` and the envelope's `required` flags. Answers are written onto the answered
+  question's own `qid`. Optional questions left when the envelope closes become `superseded`.
+  Prose drivers still park one question per turn (`set_id` = its own id). Both fields are
+  optional, so older run records still load.
+- **Hermetic test suite; typecheck enforced in CI** (PANT-905): `npm test` always uses the stub
+  `claude` and never probes or calls the real CLI; set `MINERVA_TEST_REAL_CLAUDE=1` for live
+  integration. If the stub can't be installed the suite fails loudly instead of falling through
+  to a real `claude` on PATH. `npm run test:hermetic` runs the suite behind a tripwire `claude`
+  that fails if invoked. The plugin-hive-fork tests drop their hardcoded developer path and skip
+  with a reason unless `MINERVA_HIVE_PLUGIN_DIR` and `MINERVA_TEST_REAL_CLAUDE=1` are set. A new
+  `build` script (alias for `typecheck`) makes the shared CI workflow's `npm run build
+  --if-present` step enforce `tsc --noEmit`.
+- **Route selection accepts core-api's live `chosen_lane` shape** (PANT-901): `/api/route/select`
+  returns `{decision_id, chosen_lane, ...}` with no `cli`/`model`. The CLI now comes from the lane
+  id's runtime prefix (`claude@ffevents` → `claude`, `gemini` → `opencode`) and the model from the
+  response or `MINERVA_DRIVE_MODEL`. An unmapped lane still goes to the
+  `MINERVA_FALLBACK_CLI`/`MINERVA_FALLBACK_MODEL` fallback or fails with `HeimdallRouteError`. The
+  latest `decision_id`, `chosen_lane` and `experiment_arm` are recorded in `getRunStatus` metrics.
 - **Sibling-god calls go through Pantheon core-api** (PANT-255): `plan-runner.ts` no longer shells
   out to the Multica CLI; it uses core-api's `/api/backlog/issues` endpoints via
   `PANTHEON_CORE_API_URL`. `driver.ts` and `agnostic-plan-driver.ts` no longer call Heimdall over
@@ -34,6 +54,21 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Core-api URL under the Pantheon runtime** (PANT-900): Minerva now also reads
+  `PANTHEON_API_URL`, the variable the Pantheon runtime actually exports, so `minerva-plan` runs
+  under Pantheon find core-api. One resolver (`src/pantheon-core-api.ts`) serves route select and
+  backlog calls, with precedence `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` >
+  `PANTHEON_API_URL`. The `--ticket` help text no longer claims the ticket comes from the multica CLI.
+- **Target repos clone over https by default** (PANT-902): a bare `owner/repo` `target_repo` slug
+  is now cloned from `https://github.com/<slug>.git` instead of `git@github.com:<slug>.git`, which
+  failed with "Host key verification failed" in runner containers. Set
+  `MINERVA_GIT_CLONE_PROTOCOL=ssh` to keep ssh. Explicit URLs are used as given, and a clone failure
+  now names the URL and the variable.
+- **Run-record races** (PANT-904): `run.yaml` is written atomically (temp file in the same
+  directory, fsync, rename), every read-modify-write holds a per-run lockfile (`run.lock`,
+  broken after `MINERVA_RUN_LOCK_STALE_MS`, default 10s), and `complete`/`aborted` are sticky. An
+  `abortRun` that lands while a turn is in flight now stays `aborted`, and concurrent ABI calls
+  no longer lose each other's fields or metrics counts.
 - **Stale worktree base**: `startRun` now fetches and fast-forwards `origin/dev` in the target repo
   before cutting the run's worktree (non-fatal if offline or diverged).
 - **Docs drift** (PANT-907): the ABI reference, quickstart, architecture page, README and VISION

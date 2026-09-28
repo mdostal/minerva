@@ -68,10 +68,12 @@ function driverKey(r: RunRecord): string {
   return r.metrics?.driver ?? UNKNOWN_GROUP;
 }
 
-// Runs recorded before lane capture fall back to the agnostic planner's frozen runtime+model when
-// present -- the same "<cli>:<model>" shape laneOf() produces.
+// Runs recorded before lane capture fall back to the core-api decision's chosen_lane (PANT-901),
+// then to the agnostic planner's frozen runtime+model -- the same "<cli>:<model>" shape laneOf()
+// produces when a route carries no decision.
 function laneKey(r: RunRecord): string {
   if (r.metrics?.lane) return r.metrics.lane;
+  if (r.metrics?.chosen_lane) return r.metrics.chosen_lane;
   if (r.plan_runtime && r.plan_model) return `${r.plan_runtime}:${r.plan_model}`;
   return UNKNOWN_GROUP;
 }

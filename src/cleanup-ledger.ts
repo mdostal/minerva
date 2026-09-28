@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { MinervaError } from "./errors.ts";
-import { finalizeRunMetrics, readRunRecord, updateRunRecord, type RunStatus } from "./run-manager.ts";
+import { finalizeRunMetrics, isTerminalStatus, mutateRunRecord, readRunRecord } from "./run-manager.ts";
 
 function minervaHome(): string {
   return process.env.MINERVA_HOME ?? join(homedir(), ".minerva");
@@ -54,23 +54,24 @@ export function recordCleanup(runId: string, closedStatus: "complete" | "aborted
   appendJsonLine(eventsPath(), { event: "cleanup_needed", ...ledgerRecord, emitted_at: closedAt });
 }
 
-const TERMINAL_STATUSES: RunStatus[] = ["complete", "aborted"];
-
 export function abortRun(params: Record<string, unknown>): Record<string, unknown> {
   const runId = params.run_id;
   if (typeof runId !== "string") {
     throw new MinervaError("VALIDATION_FAILED", "abortRun requires a string run_id");
   }
-  const record = readRunRecord(runId);
 
   // Idempotent on an already-terminal run -- do not double-record a ledger entry (the "exactly
   // one CleanupLedgerRecord" acceptance criterion holds even if abortRun is called more than
-  // once, or called after the run already completed on its own).
-  if (TERMINAL_STATUSES.includes(record.status)) {
+  // once, or called after the run already completed on its own). The terminal check and the
+  // transition happen under the run lock, so two racing aborts (or an abort racing completion)
+  // produce exactly one transition.
+  const { changed } = mutateRunRecord(runId, (record) =>
+    isTerminalStatus(record.status) ? null : { status: "aborted" },
+  );
+  if (!changed) {
     return { result: {} };
   }
 
-  updateRunRecord(runId, { status: "aborted" });
   finalizeRunMetrics(runId);
   recordCleanup(runId, "aborted");
   return { result: {} };

@@ -26,7 +26,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { SubagentDriver } from "./driver.ts";
-import { call, createSeedRepo, testHeimdallRouteUrl } from "./test-cli.ts";
+import { call, createSeedRepo, testHeimdallRouteUrl, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
@@ -45,8 +45,8 @@ let scratchCwd: string;
 let previousRouteUrl: string | undefined;
 
 before(() => {
-  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
+  previousRouteUrl = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
+  process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = testHeimdallRouteUrl();
   scratchCwd = mkdtempSync(join(tmpdir(), "minerva-subagent-driver-test-"));
   execFileSync("git", ["init", "-q", scratchCwd]);
   execFileSync("git", ["-C", scratchCwd, "config", "user.name", "Test User"]);
@@ -56,9 +56,9 @@ before(() => {
 
 after(() => {
   if (previousRouteUrl === undefined) {
-    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+    delete process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   } else {
-    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+    process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = previousRouteUrl;
   }
   rmSync(scratchCwd, { recursive: true, force: true });
 });
@@ -169,6 +169,7 @@ test("SubagentDriver poll timeout reaps the underlying --bg session instead of l
       MINERVA_DRIVER: "subagent",
       MINERVA_DRIVE_MODEL: "claude-haiku-4-5-20251001",
       MINERVA_TURN_TIMEOUT_MS: "3000", // deliberately tiny -- forces a poll timeout fast
+      MINERVA_STUB_BG_STUCK: "1",  // stub keeps bg session in "running" state so poll times out
     };
 
     const started = call("startRun", { idea: "a tiny scratch project" }, env);

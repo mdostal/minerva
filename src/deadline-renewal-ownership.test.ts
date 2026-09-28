@@ -35,30 +35,33 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ForkedHiveDriver, decodeEnvelopePointer, NO_PENDING_SENTINEL } from "./driver.ts";
-import { testHeimdallRouteUrl } from "./test-cli.ts";
+import { testHeimdallRouteUrl, REAL_CLAUDE_ACTIVE } from "./test-cli.ts";
 
-// The hardcoded default below only ever matched one specific developer's home directory --
-// override it with MINERVA_HIVE_PLUGIN_DIR (the same var this test sets for the code under
-// test) to point at your own local plugin-hive-fork checkout. Skip, don't fail, when neither
-// resolves to a real checkout: this is a deliberate live integration test (AD-1, no mocking the
-// CLI boundary), not something every machine is expected to have set up.
-const FORK_PATH = process.env.MINERVA_HIVE_PLUGIN_DIR || "/Users/dostal/Documents/work/dostal/code/plugin-hive-fork";
-const FORK_MISSING = existsSync(FORK_PATH)
-  ? false
-  : `plugin-hive-fork checkout not found at ${FORK_PATH} -- set MINERVA_HIVE_PLUGIN_DIR to a local checkout to run this live integration test`;
+// Point MINERVA_HIVE_PLUGIN_DIR (the same var this test sets for the code under test) at your own
+// local plugin-hive-fork checkout, and set MINERVA_TEST_REAL_CLAUDE=1. Skip, don't fail, when
+// either is missing: this is a deliberate live integration test (AD-1, no mocking the CLI
+// boundary), not something every machine is expected to have set up.
+const FORK_PATH = process.env.MINERVA_HIVE_PLUGIN_DIR ?? "";
+const FORK_MISSING = !FORK_PATH
+  ? "MINERVA_HIVE_PLUGIN_DIR is unset -- point it at a local plugin-hive-fork checkout to run this live integration test"
+  : !existsSync(FORK_PATH)
+    ? `plugin-hive-fork checkout not found at MINERVA_HIVE_PLUGIN_DIR=${FORK_PATH}`
+    : !REAL_CLAUDE_ACTIVE
+      ? "live plugin-hive-fork integration needs the real claude CLI -- set MINERVA_TEST_REAL_CLAUDE=1 (with working auth)"
+      : false;
 let previousRouteUrl: string | undefined;
 
 before(() => {
-  previousRouteUrl = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
-  process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = testHeimdallRouteUrl();
+  previousRouteUrl = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
+  process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = testHeimdallRouteUrl();
   process.env.MINERVA_HIVE_PLUGIN_DIR = FORK_PATH;
 });
 
 after(() => {
   if (previousRouteUrl === undefined) {
-    delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+    delete process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   } else {
-    process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousRouteUrl;
+    process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL = previousRouteUrl;
   }
   delete process.env.MINERVA_HIVE_PLUGIN_DIR;
 });

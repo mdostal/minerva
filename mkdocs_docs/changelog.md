@@ -13,11 +13,19 @@ All notable changes to Minerva are documented in this file.
   `dispatch.ts` is missing from `mkdocs_docs/abi-reference.md` (or the reverse), and if the
   documented `submitAnswers` example no longer passes the handler's answer validation.
 - **`stub-claude` test harness**: `bin/stub-claude.ts` is a fake `claude` CLI (`-p`, `--bg`,
-  `agents --json`, `stop`). The test suite uses it when real Claude auth is unavailable, replacing
-  35 skip guards so the full suite runs auth-free.
+  `agents --json`, `stop`). The test suite uses it by default (see PANT-905 below), replacing 35
+  skip guards so the full suite runs auth-free.
 
 ### Changed
 
+- **Hermetic test suite; typecheck enforced in CI** (PANT-905): `npm test` always uses the stub
+  `claude` and never probes or calls the real CLI; set `MINERVA_TEST_REAL_CLAUDE=1` for live
+  integration. If the stub can't be installed the suite fails loudly instead of falling through
+  to a real `claude` on PATH. `npm run test:hermetic` runs the suite behind a tripwire `claude`
+  that fails if invoked. The plugin-hive-fork tests drop their hardcoded developer path and skip
+  with a reason unless `MINERVA_HIVE_PLUGIN_DIR` and `MINERVA_TEST_REAL_CLAUDE=1` are set. A new
+  `build` script (alias for `typecheck`) makes the shared CI workflow's `npm run build
+  --if-present` step enforce `tsc --noEmit`.
 - **Sibling-god calls go through Pantheon core-api** (PANT-255): `plan-runner.ts` no longer shells
   out to the Multica CLI; it uses core-api's `/api/backlog/issues` endpoints via
   `PANTHEON_CORE_API_URL`. `driver.ts` and `agnostic-plan-driver.ts` no longer call Heimdall over

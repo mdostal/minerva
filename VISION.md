@@ -16,7 +16,7 @@ Pick a rung and jump in.
 
 ## ① Current — what runs today
 
-Minerva is real, tested code (TDD, `npm run ci`), version `0.2.0`. It is **not** a long-running
+Minerva is real, tested code (TDD, `npm run ci`), version `0.3.0`. It is **not** a long-running
 service — it's a subprocess driven one JSON call at a time.
 
 - **Runs where you invoke it.** No daemon, no server, no port. `bin/minerva.ts` reads one JSON
@@ -28,25 +28,30 @@ service — it's a subprocess driven one JSON call at a time.
   `{result}` / `{error}` envelope, wire-compatible with plugin-hive's task-tracking adapter ABI
   (v1.0.0).
 - **It really drives plugin-hive.** The Kickoff+Plan engine invokes plugin-hive's `kickoff` +
-  `plan` skills headlessly against a **per-run isolated git workspace** — a worktree cut from the
-  target repo's `dev` branch for an existing codebase, or a fresh `git init` scratch repo for a
-  greenfield idea.
+  `plan` skills headlessly against a **per-run isolated git worktree** cut from `dev` — of the
+  target repo for an existing codebase, or, for a greenfield idea, of a resolved repo (a
+  `MINERVA_REPO_MAP` god repo, `MINERVA_INCUBATOR_REPO`, or the seed repo).
 - **Questions are extracted and routed.** Each headless turn's question is pulled via a constrained
   `--json-schema` call and self-classified `agent` vs `human`, so callers only ever see clean,
   routed questions.
-- **No autonomous progress.** A run advances **only** when a caller invokes `submitAnswers`.
-  `getRunStatus: in_progress` between calls does not mean background work is happening.
+- **No autonomous progress between calls.** Nothing runs in the background: `getRunStatus:
+  in_progress` between calls does not mean work is happening. Within a `startRun` or
+  `submitAnswers` call, Minerva auto-answers routine gate questions in-process from pre-baked plan
+  defaults (up to `max_auto_answers`, default 40); a question with no default parks the run until
+  a caller invokes `submitAnswers`.
 - **Swappable Driver (working):**
   - `SpawnDriver` (default) — `claude -p` / `--resume`, with real SIGINT/SIGTERM hardening.
   - `SubagentDriver` (opt-in, `MINERVA_DRIVER=subagent`) — `claude --bg` + poll + stop + resume,
     which survives its launching process being killed, closing the orphaned-subprocess failure mode.
-  - `ForkedHiveDriver` — **an intentional stub that throws.** plugin-hive-fork does not exist yet;
-    it fails loudly rather than fabricating a result.
+  - `ForkedHiveDriver` (`MINERVA_DRIVER=forked`) — real: drives plugin-hive's structured
+    headless-question protocol directly. Until `firefly-events/plugin-hive#341` merges it needs
+    `MINERVA_HIVE_PLUGIN_DIR` pointing at a local `plugin-hive-fork` checkout.
 - **Cleanup is external.** Every run's completion or abort is recorded in an append-only cleanup
   ledger for outside garbage collection — **Minerva itself never deletes a workspace.**
 
-**Honest status: working (wip).** The core loop and both live drivers are proven and tested; the
-fork-based driver is a stub, and Minerva does not yet run as a hosted service.
+**Honest status: working (wip).** The core loop and all three drivers are real and tested; the
+fork-based driver still depends on an unreleased plugin-hive checkout, and Minerva does not yet
+run as a hosted service.
 
 ## ② Goals — near-term next steps
 

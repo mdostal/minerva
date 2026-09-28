@@ -27,8 +27,8 @@ The wire format is compatible with plugin-hive's task-tracking adapter ABI (v1.0
 
 ## `capabilities`
 
-Declare the ABI version. Call this once from any long-lived caller to discover which methods are
-available.
+Declare the ABI version. Call this once from any long-lived caller to check which ABI it is
+talking to. It does **not** list methods; the method set is the one documented on this page.
 
 **Params:** none
 
@@ -37,14 +37,13 @@ available.
 | Field | Type | Description |
 |-------|------|-------------|
 | `abi_version` | string | Semver — the Minerva ABI version (currently `1.0.0`) |
-| `methods` | string[] | List of all registered method names |
 
 **Example:**
 ```bash
 echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
 ```
 ```json
-{"result":{"abi_version":"1.0.0","methods":["capabilities","startRun","getRunStatus","listRuns","getQuestions","submitAnswers","getOutput","abortRun"]}}
+{"result":{"abi_version":"1.0.0"}}
 ```
 
 ---
@@ -59,9 +58,10 @@ loop.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `idea` | string | yes | The idea or feature brief to plan |
-| `target_repo` | string | no | Absolute path to an existing local repo. If present, Minerva cuts a git worktree off that repo's `dev` branch. If absent, Minerva creates a fresh `git init` scratch repo (greenfield). |
-| `constraints` | object | no | Optional planning constraints passed to the kickoff engine |
+| `target_repo` | string | no | Absolute path to an existing local repo. Minerva cuts a git worktree off that repo's `dev` branch. If absent, see *Workspace allocation* below. |
 | `defaults` | object | no | Per-run plan-defaults override (see [Configuration](configuration.md)) |
+
+Any other params are ignored.
 
 **Returns:**
 
@@ -78,9 +78,21 @@ echo '{"method":"startRun","params":{"idea":"add SSO to the billing app"}}' \
 {"result":{"run_id":"f47ac10b-58cc-4372-a567-0e02b2c3d479"}}
 ```
 
+`startRun` returns only after the first drive turn and any in-process auto-answering (see
+[`submitAnswers`](#submitanswers)) have finished.
+
 !!! note "Workspace allocation"
-    - `target_repo` present → worktree cut from that repo's `dev` branch
-    - `target_repo` absent → fresh `git init` scratch repo in `~/.minerva/runs/<run_id>/`
+    The workspace is always a git worktree (branch `run/<run_id>`, cut from `dev`) at
+    `MINERVA_HOME/runs/<run_id>/workspace`. The repo it is cut from is resolved in this order:
+
+    1. `target_repo`, if given
+    2. a god/component repo from `MINERVA_REPO_MAP` whose key matches the idea
+    3. `MINERVA_INCUBATOR_REPO`, if set
+    4. otherwise the seed repo: `MINERVA_SEED_REPO`, defaulting to `~/repos/consus-seeds`.
+       If that path doesn't exist, `startRun` fails with `VALIDATION_FAILED`.
+
+    If `MINERVA_ALLOWED_TARGET_REPOS` is set, a repo resolved by steps 1–3 must be on that
+    allowlist or `startRun` fails with `VALIDATION_FAILED`.
 
 ---
 
@@ -99,6 +111,19 @@ Check the current status of a run.
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | One of: `in_progress`, `waiting_on_human`, `complete`, `aborted` |
+| `metrics` | RunMetrics \| null | Per-run planning metrics (`null` for runs recorded before metrics existed) |
+
+**`RunMetrics` shape:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `turns` | number | Driver turns taken so far |
+| `escalations` | number | `getQuestions` calls on the `human` channel that returned at least one question |
+| `auto_resolutions` | number | Questions answered in-process from plan defaults |
+| `driver` | string | Driver that ran the turns (e.g. `spawn`, `subagent`, or an agnostic-plan runtime) |
+| `started_at` | string | ISO 8601 timestamp |
+| `elapsed_ms` | number? | Set once the run finishes or is aborted |
+| `finalized_at` | string? | ISO 8601 timestamp, set with `elapsed_ms` |
 
 **Status meanings:**
 
@@ -115,7 +140,7 @@ echo '{"method":"getRunStatus","params":{"run_id":"<run_id>"}}' \
   | npx tsx bin/minerva.ts
 ```
 ```json
-{"result":{"status":"waiting_on_human"}}
+{"result":{"status":"waiting_on_human","metrics":{"turns":3,"escalations":1,"auto_resolutions":2,"driver":"spawn","started_at":"2026-09-28T04:00:00.000Z"}}}
 ```
 
 ---
@@ -139,7 +164,6 @@ List all known runs with summary information.
 | `run_id` | string | UUID |
 | `status` | string | Current status |
 | `created_at` | string | ISO 8601 timestamp |
-| `idea` | string | The idea brief that started this run |
 
 **Example:**
 ```bash
@@ -176,8 +200,8 @@ Get pending questions for a run, filtered by channel.
 | `confidence` | number | 0.0–1.0 — classifier's confidence in `suggested_channel` |
 | `reason` | string | Why the classifier suggested this channel |
 | `status` | `"pending"` \| `"answered"` | Whether this question has been answered |
-| `kind` | string? | Optional: `"select"`, `"multiselect"`, `"freetext"` |
-| `options` | string[]? | Available options (present for `select`/`multiselect` kinds) |
+| `kind` | string? | Optional: `"single-select"`, `"multi-select"`, `"free-text"` |
+| `options` | string[] \| null? | Available options (present for `single-select`/`multi-select` kinds) |
 | `qid` | string? | Envelope question id — used for `answers` matching in plan defaults |
 
 !!! note "Channel semantics"
@@ -211,9 +235,16 @@ echo '{"method":"getQuestions","params":{"run_id":"<run_id>","channel":"human"}}
 
 ## `submitAnswers`
 
-Submit answers to pending questions, advancing the run.
+Submit an answer to a pending question, advancing the run.
 
-**This is the only method that advances a run.** Between calls, nothing moves.
+**This is the only ABI method that advances a run past a question it has surfaced.** Between
+calls, nothing moves in the background. Within a `startRun` or `submitAnswers` call, though,
+Minerva auto-answers routine gate questions in-process from the run's plan defaults (see
+[Configuration](configuration.md)) until it hits a question with no default, the run
+completes, or `max_auto_answers` (default `40`) answers have been given. With plan-defaults
+mode `off`, nothing is auto-answered.
+
+Only the **first** entry of `answers` is applied per call.
 
 **Params:**
 
@@ -221,35 +252,36 @@ Submit answers to pending questions, advancing the run.
 |-------|------|-------------|
 | `run_id` | string (UUID) | The run to advance |
 | `channel` | `"agent"` \| `"human"` | Must match the enforced `channel` of every answered question |
-| `answers` | Answer[] | Answers to submit |
+| `answers` | Answer[] | Non-empty list of answers; only the first is applied |
 
 **`Answer` shape:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | The question id from `getQuestions` |
-| `answer` | string | The answer text |
+| `question_id` | string | The question `id` from `getQuestions` |
+| `answer` | string \| string[] | The answer text; a string array for `multi-select` questions |
 
-**Returns:** `{}` on success.
+**Returns:** an empty object on success. Note that the handler currently wraps it, so the wire
+response is `{"result":{"result":{}}}`.
 
 **Errors:**
 
 | Code | Meaning |
 |------|---------|
-| `WRONG_CHANNEL` | `channel` in the request doesn't match a question's enforced `channel` |
-| `NOT_FOUND` | `run_id` doesn't exist |
-| `VALIDATION_FAILED` | Malformed payload |
+| `WRONG_CHANNEL` | `channel` in the request doesn't match the question's enforced `channel` |
+| `NOT_FOUND` | `run_id` doesn't exist, or `question_id` is not a pending question on it |
+| `VALIDATION_FAILED` | Malformed payload (e.g. `answers` empty, or an entry missing `question_id`) |
 
 **Example:**
 ```bash
 echo '{"method":"submitAnswers","params":{
   "run_id":"<run_id>",
   "channel":"human",
-  "answers":[{"id":"q-001","answer":"Required for all users — no opt-out"}]
+  "answers":[{"question_id":"q-001","answer":"Required for all users — no opt-out"}]
 }}' | npx tsx bin/minerva.ts
 ```
 ```json
-{"result":{}}
+{"result":{"result":{}}}
 ```
 
 ---
@@ -268,7 +300,19 @@ Retrieve the approved epic + stories for a completed run.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `epic` | object | The approved epic + stories in plugin-hive's native `.pHive/epics/` schema |
+| `epic` | CompletedEpic | The first of the run's epics (kept for backward compatibility) |
+| `epics` | CompletedEpic[] | All epics the run produced — a single plan can produce several |
+| `metrics` | RunMetrics \| null | Final run metrics (see [`getRunStatus`](#getrunstatus)) |
+
+**`CompletedEpic` shape:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `epic_id` | string | The epic's id |
+| `epic_yaml` | string | Raw epic YAML in plugin-hive's native `.pHive/epics/` schema |
+| `stories` | `{id, content}[]` | The epic's stories, each as raw YAML |
+| `entry_name` | string | The directory or file name under `.pHive/epics/` |
+| `layout` | `"nested"` \| `"flat"` | `<id>/epic.yaml` + `stories/*.yaml`, or one `NN-name.yaml` file |
 
 **Errors:**
 
@@ -299,7 +343,8 @@ write and event as a side effect.
 |-------|------|-------------|
 | `run_id` | string (UUID) | The run to abort |
 
-**Returns:** `{}` on success.
+**Returns:** an empty object on success, wrapped the same way as `submitAnswers`. Idempotent:
+aborting an already `complete` or `aborted` run records nothing new.
 
 **Example:**
 ```bash
@@ -307,7 +352,7 @@ echo '{"method":"abortRun","params":{"run_id":"<run_id>"}}' \
   | npx tsx bin/minerva.ts
 ```
 ```json
-{"result":{}}
+{"result":{"result":{}}}
 ```
 
 ---

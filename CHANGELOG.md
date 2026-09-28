@@ -4,9 +4,43 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **MkDocs documentation site** (PANT-188): a full MkDocs Material reference site under
+  `mkdocs_docs/`, a custom landing page at `site/index.html`, and a two-zone GitHub Pages deploy
+  workflow that only ever writes the `/docs/` subdirectory of `gh-pages`.
+- **Docs-contract test** (PANT-907): `src/docs-contract.test.ts` fails if a method registered in
+  `dispatch.ts` is missing from `mkdocs_docs/abi-reference.md` (or the reverse), and if the
+  documented `submitAnswers` example no longer passes the handler's answer validation.
+- **`stub-claude` test harness**: `bin/stub-claude.ts` is a fake `claude` CLI (`-p`, `--bg`,
+  `agents --json`, `stop`). The test suite uses it by default (see PANT-905 below), replacing 35
+  skip guards so the full suite runs auth-free.
+
 ### Changed
 
-- **Hermetic test suite; typecheck enforced in CI** (PANT-905). `npm test` always runs against the stub `claude` (`bin/stub-claude.ts`) and never probes or calls the real CLI; set `MINERVA_TEST_REAL_CLAUDE=1` for live integration. If the stub can't be installed the suite fails loudly rather than falling through to a real `claude` on PATH. New `npm run test:hermetic` runs the suite behind a tripwire `claude`. The plugin-hive-fork tests no longer fall back to a hardcoded developer path; they skip with a reason unless `MINERVA_HIVE_PLUGIN_DIR` and `MINERVA_TEST_REAL_CLAUDE=1` are set. New `build` script (alias for `typecheck`) makes the shared CI workflow's `npm run build --if-present` step enforce `tsc --noEmit`.
+- **Hermetic test suite; typecheck enforced in CI** (PANT-905): `npm test` always uses the stub
+  `claude` and never probes or calls the real CLI; set `MINERVA_TEST_REAL_CLAUDE=1` for live
+  integration. If the stub can't be installed the suite fails loudly instead of falling through
+  to a real `claude` on PATH. `npm run test:hermetic` runs the suite behind a tripwire `claude`
+  that fails if invoked. The plugin-hive-fork tests drop their hardcoded developer path and skip
+  with a reason unless `MINERVA_HIVE_PLUGIN_DIR` and `MINERVA_TEST_REAL_CLAUDE=1` are set. A new
+  `build` script (alias for `typecheck`) makes the shared CI workflow's `npm run build
+  --if-present` step enforce `tsc --noEmit`.
+- **Sibling-god calls go through Pantheon core-api** (PANT-255): `plan-runner.ts` no longer shells
+  out to the Multica CLI; it uses core-api's `/api/backlog/issues` endpoints via
+  `PANTHEON_CORE_API_URL`. `driver.ts` and `agnostic-plan-driver.ts` no longer call Heimdall over
+  HTTP; route selection is `POST /api/route/select` via `MINERVA_PANTHEON_ROUTE_SELECT_URL` or
+  `MINERVA_PANTHEON_CORE_API_URL`. The old `MINERVA_HEIMDALL_URL` and
+  `MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL` variables are no longer read.
+
+### Fixed
+
+- **Stale worktree base**: `startRun` now fetches and fast-forwards `origin/dev` in the target repo
+  before cutting the run's worktree (non-fatal if offline or diverged).
+- **Docs drift** (PANT-907): the ABI reference, quickstart, architecture page, README and VISION
+  now match the code. Covers the `submitAnswers` `question_id` field, the `capabilities` result,
+  the removed `startRun.constraints`, seed-repo workspace allocation, `getRunStatus.metrics`,
+  `getOutput.epics`, the `ForkedHiveDriver` status, the version and in-process auto-answering.
 
 ## [0.3.0] - 2026-08-20
 

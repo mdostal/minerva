@@ -123,10 +123,10 @@ echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
 echo '{"method":"startRun","params":{"idea":"add SSO to the billing app"}}' | npx tsx bin/minerva.ts
 
 # Pull the pending questions for a run
-echo '{"method":"getQuestions","params":{"run_id":"<run_id>"}}' | npx tsx bin/minerva.ts
+echo '{"method":"getQuestions","params":{"run_id":"<run_id>","channel":"human"}}' | npx tsx bin/minerva.ts
 
 # Answer them (this is the only write path that advances a run)
-echo '{"method":"submitAnswers","params":{"run_id":"<run_id>","answers":[...]}}' | npx tsx bin/minerva.ts
+echo '{"method":"submitAnswers","params":{"run_id":"<run_id>","channel":"human","answers":[{"question_id":"<id>","answer":"..."}]}}' | npx tsx bin/minerva.ts
 
 # Fetch the approved epic + stories once the run is complete
 echo '{"method":"getOutput","params":{"run_id":"<run_id>"}}' | npx tsx bin/minerva.ts

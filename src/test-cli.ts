@@ -153,4 +153,3 @@ export async function mockHeimdallServer(routes: { kickoff?: any; planning?: any
     }
   };
 }
-export const __pant905TypeErrorProbe: number = "deliberate type error (PANT-905 CI proof, reverted)";

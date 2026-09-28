@@ -40,6 +40,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
 import { listEnvelopes } from "./envelope-detection.ts";
 import { emitTelemetryEvent } from "./telemetry.ts";
+import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
@@ -144,12 +145,8 @@ function resolveRouteTimeoutMs(): number {
 function getPantheonRouteSelectUrl(): string {
   const exact = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   if (exact) return exact;
-  const base = process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL;
-  if (!base) {
-    throw new Error(
-      "Pantheon core-api URL not configured: set PANTHEON_CORE_API_URL or MINERVA_PANTHEON_CORE_API_URL",
-    );
-  }
+  const base = resolvePantheonCoreApiUrl();
+  if (!base) throw new Error(PANTHEON_CORE_API_URL_MISSING);
   return `${base.replace(/\/+$/, "")}/api/route/select`;
 }
 
@@ -232,7 +229,7 @@ export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fet
   const fallback = resolveFallbackRoute();
 
   // Resolve the URL and build the request inside the try block so a misconfigured or missing
-  // PANTHEON_CORE_API_URL falls through to the fallback path (same as an unreachable service)
+  // core-api URL falls through to the fallback path (same as an unreachable service)
   // rather than propagating a plain uncaught Error.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolveRouteTimeoutMs());

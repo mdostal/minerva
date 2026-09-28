@@ -8,6 +8,10 @@
 | `MINERVA_DRIVE_MODEL` | Model used to drive a planning turn | `claude-haiku-4-5-20251001` |
 | `MINERVA_TURN_TIMEOUT_MS` | Per-turn ceiling in milliseconds | `600000` (10 min) |
 | `MINERVA_HOME` | Run-state root directory | `~/.minerva` |
+| `PANTHEON_API_URL` | Pantheon core-api base URL, used for route selection (`/api/route/select`) and backlog reads/writes (`/api/backlog/issues`). The Pantheon runtime exports it. | unset |
+| `PANTHEON_CORE_API_URL` | Overrides `PANTHEON_API_URL` | unset |
+| `MINERVA_PANTHEON_CORE_API_URL` | Minerva-only override; wins over both of the above | unset |
+| `MINERVA_PANTHEON_ROUTE_SELECT_URL` | Exact route-select URL; bypasses the core-api base URL for route selection only | unset |
 | `MINERVA_PLAN_DEFAULTS` | Path to a plan-defaults YAML/JSON config file | unset |
 | `MINERVA_PLAN_DEFAULTS_MODE` | Quick mode switch: `off`, `agent`, or `auto` | `off` |
 | `MINERVA_HIVE_PLUGIN_DIR` | Path to a local `plugin-hive-fork` checkout — required for `MINERVA_DRIVER=forked` until plugin-hive#341 merges | unset |

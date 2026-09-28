@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import type { PlanDefaults } from "./plan-defaults.ts";
+import type { RouteDecision } from "./driver.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
 export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
@@ -28,6 +29,11 @@ export interface RunMetrics {
   started_at: string;
   elapsed_ms?: number;
   finalized_at?: string;
+  // Latest core-api routing decision behind this run's turns (PANT-901), so a decision can be
+  // joined to the run's outcome. Absent until a routed turn has run.
+  decision_id?: string;
+  chosen_lane?: string | null;
+  experiment_arm?: string | null;
 }
 
 // Never throws, never guesses a channel-like value -- any value outside the three documented
@@ -209,10 +215,11 @@ export function updateRunMetricsDriver(runId: string, driverName: string): RunRe
   return updateRunRecord(runId, { metrics: { ...metrics, driver: driverName } });
 }
 
-export function recordDriverTurn(runId: string): RunRecord {
+// routeDecision is the core-api decision behind this turn (DriverResult.route_decision), if any.
+export function recordDriverTurn(runId: string, routeDecision?: RouteDecision): RunRecord {
   const record = readRunRecord(runId);
   const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
-  return updateRunRecord(runId, { metrics: { ...metrics, turns: metrics.turns + 1 } });
+  return updateRunRecord(runId, { metrics: { ...metrics, ...routeDecision, turns: metrics.turns + 1 } });
 }
 
 export function recordHumanEscalation(runId: string): RunRecord {

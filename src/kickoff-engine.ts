@@ -292,12 +292,12 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result } = await runTurnResumable(driverForRecord(record), {
+    const { session_id, raw_result, route_decision } = await runTurnResumable(driverForRecord(record), {
       cwd: record.workspace_path,
       sessionId: record.session_id,
       prompt: answerPrompt,
     });
-    recordDriverTurn(runId);
+    recordDriverTurn(runId, route_decision);
     recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
     await recordTurn(runId, raw_result);
@@ -382,8 +382,9 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // been reached) -- that is a stall, explicitly protected by AD-5 and out of scope here.
   let sessionId: string;
   let rawResult: string;
+  let routeDecision: DriverResult["route_decision"];
   try {
-    ({ session_id: sessionId, raw_result: rawResult } = await runTurnResumable(driver, {
+    ({ session_id: sessionId, raw_result: rawResult, route_decision: routeDecision } = await runTurnResumable(driver, {
       cwd: record.workspace_path,
       sessionId: null,
       prompt: drivePrompt,
@@ -392,7 +393,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     abortRun({ run_id: runId });
     throw err;
   }
-  recordDriverTurn(runId);
+  recordDriverTurn(runId, routeDecision);
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
@@ -486,12 +487,12 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult } = await runTurnResumable(driverForRecord(record), {
+  const { session_id: newSessionId, raw_result: rawResult, route_decision: routeDecision } = await runTurnResumable(driverForRecord(record), {
     cwd: record.workspace_path,
     sessionId: record.session_id,
     prompt: answerPrompt,
   });
-  recordDriverTurn(runId);
+  recordDriverTurn(runId, routeDecision);
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });

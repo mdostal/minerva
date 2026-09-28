@@ -4,6 +4,47 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **MkDocs documentation site** (PANT-188): a full MkDocs Material reference site under
+  `mkdocs_docs/`, a custom landing page at `site/index.html`, and a two-zone GitHub Pages deploy
+  workflow that only ever writes the `/docs/` subdirectory of `gh-pages`.
+- **Docs-contract test** (PANT-907): `src/docs-contract.test.ts` fails if a method registered in
+  `dispatch.ts` is missing from `mkdocs_docs/abi-reference.md` (or the reverse), and if the
+  documented `submitAnswers` example no longer passes the handler's answer validation.
+- **`stub-claude` test harness**: `bin/stub-claude.ts` is a fake `claude` CLI (`-p`, `--bg`,
+  `agents --json`, `stop`). The test suite uses it when real Claude auth is unavailable, replacing
+  35 skip guards so the full suite runs auth-free.
+- **`getMetrics` ABI method** (PANT-906): cross-run planning KPIs from local run records only
+  (no network), overall, by driver and by route lane: run count by status, completion rate, and
+  median/p90 turns, escalations, auto-resolutions and time-to-spec. Also exposed as an MCP tool
+  and as `minerva metrics`. Runs now record their route lane (`metrics.lane`, `"<cli>:<model>"`).
+- **Driver lifecycle telemetry for every driver**: `SpawnDriver` and `SubagentDriver` now emit
+  the same `driver_started`/`driver_succeeded`/`driver_failed` events as `ForkedHiveDriver`.
+  Events carry a `driver` field; `driver_succeeded` carries `lane`.
+
+### Changed
+
+- **Sibling-god calls go through Pantheon core-api** (PANT-255): `plan-runner.ts` no longer shells
+  out to the Multica CLI; it uses core-api's `/api/backlog/issues` endpoints via
+  `PANTHEON_CORE_API_URL`. `driver.ts` and `agnostic-plan-driver.ts` no longer call Heimdall over
+  HTTP; route selection is `POST /api/route/select` via `MINERVA_PANTHEON_ROUTE_SELECT_URL` or
+  `MINERVA_PANTHEON_CORE_API_URL`. The old `MINERVA_HEIMDALL_URL` and
+  `MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL` variables are no longer read.
+
+### Fixed
+
+- **Stale worktree base**: `startRun` now fetches and fast-forwards `origin/dev` in the target repo
+  before cutting the run's worktree (non-fatal if offline or diverged).
+- **Docs drift** (PANT-907): the ABI reference, quickstart, architecture page, README and VISION
+  now match the code. Covers the `submitAnswers` `question_id` field, the `capabilities` result,
+  the removed `startRun.constraints`, seed-repo workspace allocation, `getRunStatus.metrics`,
+  `getOutput.epics`, the `ForkedHiveDriver` status, the version and in-process auto-answering.
+- **Escalations no longer inflate on polling** (PANT-906): `metrics.escalations` counted every
+  `getQuestions(channel: "human")` call that returned questions, so polling a parked run counted
+  the same escalation many times. Each human-channel question now counts once, when it is parked
+  on the human queue (stamped `escalated_at`); `getQuestions` is read-only.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

@@ -8,6 +8,8 @@ import {
   allocateRun,
   readRunRecord,
   updateRunRecord,
+  mutateRunRecord,
+  isTerminalStatus,
   normalizeQuestionKind,
   recordDriverTurn,
   recordHumanEscalation,
@@ -194,31 +196,35 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
 // whatever the schema-forced response said once completion is detected.
 export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
-    return; // run is complete -- no pending question to append, ever
+    return; // run is terminal (complete or aborted) -- no pending question to append, ever
   }
-  const record = readRunRecord(runId);
   const classified = extractClassifiedQuestion(rawResult);
   const shape = extractQuestionShape(rawResult);
-  const question: Question = {
-    id: `q-${record.questions.length + 1}`,
-    text: classified.text,
-    suggested_channel: classified.suggested_channel,
-    confidence: classified.confidence,
-    reason: classified.reason,
-    // Enforced channel defaults to the classifier's suggestion (v1: no Vesta/Delphi override
-    // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
-    channel: classified.suggested_channel,
-    status: "pending",
-    // Structured envelope fields (kind/options/qid) carried through when the driver supplies
-    // them (ForkedHiveDriver's envelope-sourced questions do; SpawnDriver/SubagentDriver's prose
-    // questions don't). Additive -- undefined for prose questions, which then resolve via the
-    // free-text default path. These are what let the auto-answer loop pick a real option for a
-    // single/multi-select gate instead of only ever answering free-text.
-    ...shape,
-  };
-  updateRunRecord(runId, {
-    status: "waiting_on_human",
-    questions: [...record.questions, question],
+  // Built from the freshest record under the run lock (PANT-904): an abortRun that landed while
+  // this turn was in flight wins -- the run stays aborted and no question is parked on it.
+  mutateRunRecord(runId, (record) => {
+    if (isTerminalStatus(record.status)) return null;
+    const question: Question = {
+      id: `q-${record.questions.length + 1}`,
+      text: classified.text,
+      suggested_channel: classified.suggested_channel,
+      confidence: classified.confidence,
+      reason: classified.reason,
+      // Enforced channel defaults to the classifier's suggestion (v1: no Vesta/Delphi override
+      // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
+      channel: classified.suggested_channel,
+      status: "pending",
+      // Structured envelope fields (kind/options/qid) carried through when the driver supplies
+      // them (ForkedHiveDriver's envelope-sourced questions do; SpawnDriver/SubagentDriver's prose
+      // questions don't). Additive -- undefined for prose questions, which then resolve via the
+      // free-text default path. These are what let the auto-answer loop pick a real option for a
+      // single/multi-select gate instead of only ever answering free-text.
+      ...shape,
+    };
+    return {
+      status: "waiting_on_human",
+      questions: [...record.questions, question],
+    };
   });
 }
 

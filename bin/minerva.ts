@@ -125,6 +125,9 @@ async function mainArgs(argv: string[]): Promise<void> {
       case "--file-to-multica":
         params.file_to_multica = true;
         break;
+      case "--park":
+        params.park = true;
+        break;
       case "-h":
       case "--help":
         process.stdout.write(ARG_HELP);
@@ -217,6 +220,7 @@ async function resumeRun(params: Record<string, unknown>): Promise<Record<string
     const epics = output.epics ?? (output.epic ? [output.epic] : []);
     const filed = await fileAllStoriesToMultica(parentIssueId!, epics, {
       project: typeof params.project === "string" ? params.project : undefined,
+      park: params.park === true,
       targetRepo: typeof params.target_repo === "string" ? params.target_repo : undefined,
     });
     result.filed_stories = filed.filed;
@@ -229,7 +233,7 @@ async function resumeRun(params: Record<string, unknown>): Promise<Record<string
 const ARG_HELP = `minerva — JSON-over-stdio
 
   minerva --resume <run_id> --question <question_id> --answer "<answer>" [--channel human|agent]
-          [--file-to-multica --parent <issue_id>] [--project <project_id>] [--target-repo owner/repo]
+          [--file-to-multica --parent <issue_id> [--park]] [--project <project_id>] [--target-repo owner/repo]
   minerva metrics             cross-run planning KPIs (getMetrics) by driver and route lane
   minerva mcp                 run as an MCP server (stdio transport) exposing the full ABI as tools
   minerva agent init          detect installed agent CLIs, register the MCP server, install usage skills

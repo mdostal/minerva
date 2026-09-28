@@ -15,6 +15,7 @@ import {
   storyToIssueFields,
   parseStoryDependsOn,
   fileStoriesToMultica,
+  promoteParkedStories,
   __setPantheonFetchForTest,
 } from "./plan-runner.ts";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
@@ -223,7 +224,9 @@ test("fileStoriesToMultica: files into the SEED ticket's project (not the API de
       assert.equal(b.project, "d8ecfab4-pantheon-core");
       assert.equal(b.status, "todo");
       assert.equal(b.parent, "SEED");
+      assert.ok(!("assignee" in b) && !("assignee_id" in b), "filed stories are never assigned at creation");
     }
+    assert.ok(!calls.some((c) => c.url.includes("/assign")), "filing never calls the assign route");
 
     // s2's depends_on [s1] was carried as metadata pointing at s1's RESOLVED issue id.
     const metaPuts = calls.filter((c) => c.method === "PUT" && c.url.includes("/metadata"));
@@ -231,6 +234,70 @@ test("fileStoriesToMultica: files into the SEED ticket's project (not the API de
     const metaBody = metaPuts[0]!.body as Record<string, unknown>;
     assert.equal(metaBody.depends_on, "ISSUE-1");
     // s1 has no deps -> no metadata PUT for it (only one metadata PUT total).
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+// PANT-929: Multica runs any agent-assigned issue whatever its status, so a parked story that is
+// assigned at creation runs straight through its gate. Parked stories must be backlog AND unassigned.
+test("fileStoriesToMultica: park files stories in backlog with no assignee", async () => {
+  type Call = { method: string; url: string; body: unknown };
+  const calls: Call[] = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, url, body });
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST" && url.endsWith("/api/backlog/issues")) {
+      const title = String((body as Record<string, unknown>).title ?? "");
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" }) };
+    }
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    const epic = {
+      epic_id: "e1",
+      stories: [
+        { id: "s1", content: "id: s1\ntitle: First\ndepends_on: []\n" },
+        { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: [s1]\n" },
+      ],
+    } as any;
+    const r = await fileStoriesToMultica("SEED", epic, { park: true });
+    assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+
+    const creates = calls.filter((c) => c.method === "POST" && c.url.endsWith("/api/backlog/issues"));
+    assert.equal(creates.length, 2);
+    for (const c of creates) {
+      const b = c.body as Record<string, unknown>;
+      assert.equal(b.status, "backlog");
+      assert.ok(!("assignee" in b) && !("assignee_id" in b), "parked stories have no assignee");
+    }
+    // Nothing after creation assigns them or moves them out of backlog either.
+    assert.ok(!calls.some((c) => c.url.includes("/assign") || c.url.includes("/status")));
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+test("promoteParkedStories: moves each story to todo via the status route, never assigns", async () => {
+  type Call = { method: string; url: string; body: unknown };
+  const calls: Call[] = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    calls.push({ method: init.method, url, body: init.body ? JSON.parse(init.body) : null });
+    if (url.includes("/BAD/")) return { ok: false, status: 502, text: async () => "boom" };
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    const r = await promoteParkedStories(["ISSUE-1", "BAD", "ISSUE-2"]);
+    assert.deepEqual(r.promoted, ["ISSUE-1", "ISSUE-2"]);
+    assert.equal(r.errors.length, 1);
+    assert.equal(r.errors[0]!.issue_id, "BAD");
+    assert.equal(calls.length, 3);
+    for (const c of calls) {
+      assert.equal(c.method, "POST");
+      assert.match(c.url, /\/api\/backlog\/issues\/[^/]+\/status$/);
+      assert.deepEqual(c.body, { status: "todo" });
+    }
   } finally {
     __setPantheonFetchForTest(prev);
   }

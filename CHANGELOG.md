@@ -54,6 +54,14 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Parked stories no longer run before their gate opens** (PANT-929): Multica runs any
+  agent-assigned issue regardless of status, so stories filed in `backlog` with an assignee ran
+  straight through the decision gate. `fileStoriesToMultica` never sends an assignee (now covered
+  by tests). A new `park` option (`--park` on `minerva-plan` and `minerva --resume`) files the
+  stories in `backlog`, and `promoteParkedStories` / `minerva-plan --promote <ids>` moves them to
+  `todo` once the gate opens, still unassigned. The minerva-dev agent instructions now say the same
+  for stories created by hand.
+
 - **Core-api URL under the Pantheon runtime** (PANT-900): Minerva now also reads
   `PANTHEON_API_URL`, the variable the Pantheon runtime actually exports, so `minerva-plan` runs
   under Pantheon find core-api. One resolver (`src/pantheon-core-api.ts`) serves route select and

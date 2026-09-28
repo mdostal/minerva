@@ -164,12 +164,26 @@ export interface FiledStory {
 // core-api (POST /api/backlog/issues), leaving them UNASSIGNED per the standing operator policy
 // (Mathew assigns manually; mirrors consus-dev/heimdall-dev instructions). Only the planned
 // stories become dev-agent work items -- exactly the "only PLANNED stories go to dev agents" flow.
+// The create body never carries an assignee: Multica runs ANY agent-assigned issue regardless of
+// status, so an assignee set at creation would start the story immediately (PANT-929: PANT-923 was
+// filed in backlog already assigned, ran, and merged before the operator's decision gate opened).
+// opts.park files the stories in `backlog` instead of `todo` so they wait behind a gate; Auriga
+// never dispatches backlog, and promoteParkedStories moves them to `todo` (still unassigned) once
+// the gate opens.
 // Returns the created issue ids. Best-effort per story: a single failed create is reported but
 // does not abort the rest.
+export interface FileStoriesOptions {
+  project?: string;
+  targetRepo?: string;
+  workspacePath?: string;
+  // File the stories parked in `backlog` (waiting on a gate) instead of ready in `todo`.
+  park?: boolean;
+}
+
 export async function fileStoriesToMultica(
   ticketId: string,
   epic: CompletedEpic,
-  opts: { project?: string; targetRepo?: string; workspacePath?: string } = {},
+  opts: FileStoriesOptions = {},
 ): Promise<{ filed: FiledStory[]; errors: Array<{ story_id: string; error: string }> }> {
   const filed: FiledStory[] = [];
   const errors: Array<{ story_id: string; error: string }> = [];
@@ -219,7 +233,7 @@ export async function fileStoriesToMultica(
     const createBody: Record<string, unknown> = {
       title,
       description: stampedDescription,
-      status: "todo",
+      status: opts.park ? "backlog" : "todo",
       parent: ticketId,
     };
     if (project) createBody.project = project;
@@ -271,7 +285,7 @@ export async function fileStoriesToMultica(
 export async function fileAllStoriesToMultica(
   ticketId: string,
   epics: CompletedEpic[],
-  opts: { project?: string; targetRepo?: string; workspacePath?: string } = {},
+  opts: FileStoriesOptions = {},
 ): Promise<{ filed: Array<FiledStory & { epic_id: string }>; errors: Array<{ story_id: string; epic_id: string; error: string }> }> {
   const filed: Array<FiledStory & { epic_id: string }> = [];
   const errors: Array<{ story_id: string; epic_id: string; error: string }> = [];
@@ -281,4 +295,23 @@ export async function fileAllStoriesToMultica(
     for (const e of r.errors) errors.push({ ...e, epic_id: epic.epic_id });
   }
   return { filed, errors };
+}
+
+// Open the gate on stories filed with { park: true }: move each from `backlog` to `todo` via
+// core-api's status route. Status only -- the stories stay unassigned, so Pantheon/Auriga assign
+// and dispatch them. Best-effort per issue: one failed promote is reported, the rest still go.
+export async function promoteParkedStories(
+  issueIds: string[],
+): Promise<{ promoted: string[]; errors: Array<{ issue_id: string; error: string }> }> {
+  const promoted: string[] = [];
+  const errors: Array<{ issue_id: string; error: string }> = [];
+  for (const id of issueIds) {
+    try {
+      await pantheonRequest("POST", `/api/backlog/issues/${encodeURIComponent(id)}/status`, { status: "todo" });
+      promoted.push(id);
+    } catch (e) {
+      errors.push({ issue_id: id, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return { promoted, errors };
 }

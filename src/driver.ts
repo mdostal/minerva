@@ -40,6 +40,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassification } from "./escalation-classification.ts";
 import { listEnvelopes } from "./envelope-detection.ts";
 import { emitTelemetryEvent } from "./telemetry.ts";
+import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
@@ -51,6 +52,13 @@ const RUNTIME_CLI: Record<string, string> = {
   grok: "opencode",
   opencode: "opencode",
 };
+
+// Model used when the route response names a lane but no model -- core-api's live
+// /api/route/select shape ({decision_id, chosen_lane, ...}) never carries one (PANT-901).
+const DEFAULT_DRIVE_MODEL = "claude-haiku-4-5-20251001";
+function resolveDriveModel(): string {
+  return process.env.MINERVA_DRIVE_MODEL?.trim() || DEFAULT_DRIVE_MODEL;
+}
 
 // Production finding (2026-07-26): a real kickoff->planning transition turn legitimately runs
 // past the old hardcoded 120s ceiling, causing SubagentDriver's poll to time out short of
@@ -109,9 +117,18 @@ export class HeimdallRouteError extends Error {
   }
 }
 
+// Core-api's routing-decision identifiers, carried back to the run record so a decision can be
+// tied to the run's outcome. Present only when the route/select response included them.
+export interface RouteDecision {
+  decision_id: string;
+  chosen_lane: string | null;
+  experiment_arm: string | null;
+}
+
 export interface RuntimeRoute {
   cli: string;
   model: string;
+  decision?: RouteDecision;
 }
 
 type RouteFetch = (
@@ -144,12 +161,8 @@ function resolveRouteTimeoutMs(): number {
 function getPantheonRouteSelectUrl(): string {
   const exact = process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL;
   if (exact) return exact;
-  const base = process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL;
-  if (!base) {
-    throw new Error(
-      "Pantheon core-api URL not configured: set PANTHEON_CORE_API_URL or MINERVA_PANTHEON_CORE_API_URL",
-    );
-  }
+  const base = resolvePantheonCoreApiUrl();
+  if (!base) throw new Error(PANTHEON_CORE_API_URL_MISSING);
   return `${base.replace(/\/+$/, "")}/api/route/select`;
 }
 
@@ -211,16 +224,42 @@ export function parseAvailableRoutePayload(payload: unknown): RuntimeRoute {
 
   const rawCli = route?.cli ?? route?.command ?? route?.executable ?? route?.cli_command ?? route?.tool;
   const runtimeName = route?.runtime ?? route?.provider;
+  const rawModel = route?.model ?? route?.model_name ?? route?.modelName;
+  const chosenLane = typeof root?.chosen_lane === "string" && root.chosen_lane.trim() ? root.chosen_lane.trim() : null;
+  const decision = parseRouteDecision(root, chosenLane);
+
+  // Live core-api shape: {decision_id, chosen_lane: "claude@ffevents", ...} with no cli/model.
+  // The lane id's prefix before "@" names the runtime; an unmapped lane throws, which
+  // resolveRuntimeRoute turns into the operator fallback (or a HeimdallRouteError).
+  if (!(typeof rawCli === "string" && rawCli.trim()) && !(typeof runtimeName === "string" && runtimeName.trim()) && chosenLane) {
+    const cli = RUNTIME_CLI[chosenLane.split("@")[0]!.trim().toLowerCase()];
+    if (!cli) {
+      throw new Error(`Pantheon /api/route/select chose lane "${chosenLane}", which maps to no known CLI`);
+    }
+    const model = typeof rawModel === "string" && rawModel.trim() ? rawModel.trim() : resolveDriveModel();
+    return { cli, model, ...(decision ? { decision } : {}) };
+  }
+
   const cli = typeof rawCli === "string" && rawCli.trim()
     ? rawCli.trim()
     : typeof runtimeName === "string" && runtimeName.trim()
       ? RUNTIME_CLI[runtimeName.trim().toLowerCase()] ?? runtimeName.trim()
       : undefined;
-  const model = route?.model ?? route?.model_name ?? route?.modelName;
-  if (typeof cli !== "string" || cli.trim() === "" || typeof model !== "string" || model.trim() === "") {
+  if (typeof cli !== "string" || cli.trim() === "" || typeof rawModel !== "string" || rawModel.trim() === "") {
     throw new Error(`Pantheon /api/route/select response must include non-empty cli and model strings`);
   }
-  return { cli: cli.trim(), model: model.trim() };
+  return { cli: cli.trim(), model: rawModel.trim(), ...(decision ? { decision } : {}) };
+}
+
+function parseRouteDecision(root: Record<string, unknown> | null, chosenLane: string | null): RouteDecision | undefined {
+  const decisionId = root?.decision_id;
+  const arm = root?.experiment_arm;
+  if (typeof decisionId !== "string" || !decisionId.trim()) return undefined;
+  return {
+    decision_id: decisionId.trim(),
+    chosen_lane: chosenLane,
+    experiment_arm: typeof arm === "string" && arm.trim() ? arm.trim() : null,
+  };
 }
 
 export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fetch as unknown as RouteFetch): Promise<RuntimeRoute> {
@@ -232,7 +271,7 @@ export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fet
   const fallback = resolveFallbackRoute();
 
   // Resolve the URL and build the request inside the try block so a misconfigured or missing
-  // PANTHEON_CORE_API_URL falls through to the fallback path (same as an unreachable service)
+  // core-api URL falls through to the fallback path (same as an unreachable service)
   // rather than propagating a plain uncaught Error.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolveRouteTimeoutMs());
@@ -288,6 +327,12 @@ export interface DriverInput {
 export interface DriverResult {
   session_id: string;
   raw_result: string;
+  // The core-api routing decision that picked this turn's runtime, when there was one.
+  route_decision?: RouteDecision;
+}
+
+function withRouteDecision(result: DriverResult, route: RuntimeRoute): DriverResult {
+  return route.decision ? { ...result, route_decision: route.decision } : result;
 }
 
 // One constrained turn -> structured result. session_id is always returned fresh, every turn
@@ -698,7 +743,7 @@ export class SpawnDriver implements Driver {
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(route.model, input.sessionId, input.prompt, classificationSchemaArgs());
     const result = await spawnRuntime(route, input.cwd, args, adapter.parseTurnResult.bind(adapter));
-    return { session_id: result.session_id, raw_result: result.result };
+    return withRouteDecision({ session_id: result.session_id, raw_result: result.result }, route);
   }
 }
 
@@ -794,7 +839,7 @@ export class SubagentDriver implements Driver {
 
     const args = adapter.formatTurnArgs(route.model, fullSessionId, EXTRACTION_INSTRUCTION, classificationSchemaArgs());
     const result = await spawnRuntime(route, input.cwd, args, adapter.parseTurnResult.bind(adapter));
-    return { session_id: result.session_id, raw_result: result.result };
+    return withRouteDecision({ session_id: result.session_id, raw_result: result.result }, route);
   }
 }
 
@@ -998,7 +1043,7 @@ export class ForkedHiveDriver implements Driver {
       pluginDirArgs()
     );
     await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter), { HIVE_HEADLESS: "1" });
-    return this.surfaceNextQuestion(cwd, skillPrompt);
+    return withRouteDecision(await this.surfaceNextQuestion(cwd, skillPrompt), route);
   }
 
   private async answerAndContinue(cwd: string, pointer: EnvelopePointer, answerText: string): Promise<DriverResult> {

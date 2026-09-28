@@ -3,12 +3,26 @@
 // so concurrent runs against the same target_repo don't collide).
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import type { PlanDefaults } from "./plan-defaults.ts";
+import type { RouteDecision } from "./driver.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
 export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
@@ -28,6 +42,11 @@ export interface RunMetrics {
   started_at: string;
   elapsed_ms?: number;
   finalized_at?: string;
+  // Latest core-api routing decision behind this run's turns (PANT-901), so a decision can be
+  // joined to the run's outcome. Absent until a routed turn has run.
+  decision_id?: string;
+  chosen_lane?: string | null;
+  experiment_arm?: string | null;
 }
 
 // Never throws, never guesses a channel-like value -- any value outside the three documented
@@ -167,9 +186,39 @@ function resolveSeedRepo(): string {
   return seedRepo;
 }
 
+// Atomic write (PANT-904): the record is written to a temp file in the same directory, fsynced,
+// then renamed over run.yaml. rename(2) within one filesystem is atomic, so a reader (or a crash)
+// only ever sees the previous complete record or the new complete record -- never a truncated one.
+// A crash between the temp write and the rename leaves an orphaned run.yaml.tmp-* file beside an
+// intact run.yaml; nothing reads those. MINERVA_TEST_CRASH_BEFORE_RENAME is a test seam that
+// SIGKILLs the process at exactly that point.
 function writeRunRecord(record: RunRecord): void {
-  mkdirSync(runDir(record.run_id), { recursive: true });
-  writeFileSync(runRecordPath(record.run_id), JSON.stringify(record, null, 2));
+  const dir = runDir(record.run_id);
+  mkdirSync(dir, { recursive: true });
+  const finalPath = runRecordPath(record.run_id);
+  const tmpPath = `${finalPath}.tmp-${process.pid}-${randomUUID()}`;
+  const fd = openSync(tmpPath, "w");
+  try {
+    writeSync(fd, JSON.stringify(record, null, 2));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  if (process.env.MINERVA_TEST_CRASH_BEFORE_RENAME === "1") {
+    process.kill(process.pid, "SIGKILL");
+  }
+  renameSync(tmpPath, finalPath);
+  // Persist the rename itself. Best-effort: some platforms can't open/fsync a directory.
+  try {
+    const dirFd = openSync(dir, "r");
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
+  } catch {
+    // non-fatal
+  }
 }
 
 export function readRunRecord(runId: string): RunRecord {
@@ -180,13 +229,141 @@ export function readRunRecord(runId: string): RunRecord {
   return JSON.parse(readFileSync(path, "utf8")) as RunRecord;
 }
 
-// Read-modify-write patch helper. Every mutation goes through here so state always round-trips
+// Per-run lock (PANT-904). Every ABI call is its own process, so a read-modify-write of run.yaml
+// must be serialized across processes, not just within one. The lock is a lockfile created with
+// O_EXCL next to run.yaml; its content is a unique token. Critical sections are a synchronous
+// read + atomic write (milliseconds), so a lock older than MINERVA_RUN_LOCK_STALE_MS (default 10s)
+// belongs to a process that died holding it and is broken.
+const DEFAULT_LOCK_STALE_MS = 10_000;
+const LOCK_RETRY_MS = 5;
+
+function runLockPath(runId: string): string {
+  return join(runDir(runId), "run.lock");
+}
+
+function lockStaleMs(): number {
+  const raw = Number(process.env.MINERVA_RUN_LOCK_STALE_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_LOCK_STALE_MS;
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function readLockToken(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// Break a stale lock without clobbering a fresh one another process may have just taken in its
+// place: move the lock aside (atomic, only one breaker wins), then check it is still the token we
+// judged stale. If it isn't, we moved a live lock -- put it back (link fails if the path was
+// retaken meanwhile, which is equally fine: that holder is live either way).
+function breakStaleLock(lockPath: string, staleToken: string): void {
+  const aside = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
+  try {
+    renameSync(lockPath, aside);
+  } catch {
+    return; // already broken or released by someone else
+  }
+  if (readLockToken(aside) !== staleToken) {
+    try {
+      linkSync(aside, lockPath);
+    } catch {
+      // path retaken meanwhile
+    }
+  }
+  try {
+    unlinkSync(aside);
+  } catch {
+    // ignore
+  }
+}
+
+function acquireRunLock(runId: string): () => void {
+  const lockPath = runLockPath(runId);
+  const token = `${process.pid}:${randomUUID()}`;
+  const staleMs = lockStaleMs();
+  const deadline = Date.now() + staleMs * 3;
+  for (;;) {
+    try {
+      const fd = openSync(lockPath, "wx");
+      try {
+        writeSync(fd, token);
+      } finally {
+        closeSync(fd);
+      }
+      return () => {
+        // Only remove the lock if it is still ours (it may have been broken as stale).
+        if (readLockToken(lockPath) === token) {
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            // ignore
+          }
+        }
+      };
+    } catch (e: any) {
+      if (e?.code === "ENOENT") {
+        throw new MinervaError("NOT_FOUND", `No run found with id ${runId}`);
+      }
+      if (e?.code !== "EEXIST") throw e;
+    }
+    try {
+      const holder = readLockToken(lockPath);
+      if (holder !== null && Date.now() - statSync(lockPath).mtimeMs > staleMs) {
+        breakStaleLock(lockPath, holder);
+        continue;
+      }
+    } catch {
+      continue; // lock vanished between checks -- retry immediately
+    }
+    if (Date.now() > deadline) {
+      throw new MinervaError("NOT_READY", `Run ${runId} record is locked by another process; try again`);
+    }
+    sleepSync(LOCK_RETRY_MS);
+  }
+}
+
+const TERMINAL_STATUSES: readonly RunStatus[] = ["complete", "aborted"];
+
+export function isTerminalStatus(status: RunStatus): boolean {
+  return TERMINAL_STATUSES.includes(status);
+}
+
+// Locked read-modify-write. `mutate` sees the freshest on-disk record and returns the patch to
+// apply, or null to leave the record untouched. Terminal statuses are sticky: once a run is
+// complete or aborted, no patch moves it out of that status (other fields still apply).
+// `changed` reports whether a write happened.
+export function mutateRunRecord(
+  runId: string,
+  mutate: (current: RunRecord) => Partial<RunRecord> | null,
+): { record: RunRecord; changed: boolean } {
+  if (!existsSync(runRecordPath(runId))) {
+    throw new MinervaError("NOT_FOUND", `No run found with id ${runId}`);
+  }
+  const release = acquireRunLock(runId);
+  try {
+    const current = readRunRecord(runId);
+    const patch = mutate(current);
+    if (patch === null) return { record: current, changed: false };
+    const record = { ...current, ...patch };
+    if (isTerminalStatus(current.status)) record.status = current.status;
+    writeRunRecord(record);
+    return { record, changed: true };
+  } finally {
+    release();
+  }
+}
+
+// Patch helper. Every mutation goes through mutateRunRecord so state always round-trips
 // through disk (no in-memory state survives between CLI invocations, per the State Store's
 // statelessness principle in docs/architecture.md).
 export function updateRunRecord(runId: string, patch: Partial<RunRecord>): RunRecord {
-  const record = { ...readRunRecord(runId), ...patch };
-  writeRunRecord(record);
-  return record;
+  return mutateRunRecord(runId, () => patch).record;
 }
 
 function fallbackMetrics(record: RunRecord): RunMetrics {
@@ -203,47 +380,43 @@ function normalizeMetrics(metrics: RunMetrics): RunMetrics {
   return { ...metrics, auto_resolutions: metrics.auto_resolutions ?? 0 };
 }
 
-export function updateRunMetricsDriver(runId: string, driverName: string): RunRecord {
-  const record = readRunRecord(runId);
-  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
-  return updateRunRecord(runId, { metrics: { ...metrics, driver: driverName } });
+function currentMetrics(record: RunRecord): RunMetrics {
+  return normalizeMetrics(record.metrics ?? fallbackMetrics(record));
 }
 
-export function recordDriverTurn(runId: string): RunRecord {
-  const record = readRunRecord(runId);
-  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
-  return updateRunRecord(runId, { metrics: { ...metrics, turns: metrics.turns + 1 } });
+// Metrics counters are incremented inside the lock so concurrent calls never lose a count.
+function patchMetrics(runId: string, fn: (metrics: RunMetrics) => RunMetrics | null): RunRecord {
+  return mutateRunRecord(runId, (record) => {
+    const next = fn(currentMetrics(record));
+    return next === null ? null : { metrics: next };
+  }).record;
+}
+
+export function updateRunMetricsDriver(runId: string, driverName: string): RunRecord {
+  return patchMetrics(runId, (metrics) => ({ ...metrics, driver: driverName }));
+}
+
+// routeDecision is the core-api decision behind this turn (DriverResult.route_decision), if any.
+export function recordDriverTurn(runId: string, routeDecision?: RouteDecision): RunRecord {
+  return patchMetrics(runId, (metrics) => ({ ...metrics, ...routeDecision, turns: metrics.turns + 1 }));
 }
 
 export function recordHumanEscalation(runId: string): RunRecord {
-  const record = readRunRecord(runId);
-  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
-  return updateRunRecord(runId, { metrics: { ...metrics, escalations: metrics.escalations + 1 } });
+  return patchMetrics(runId, (metrics) => ({ ...metrics, escalations: metrics.escalations + 1 }));
 }
 
 export function recordAutoResolution(runId: string): RunRecord {
-  const record = readRunRecord(runId);
-  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
-  return updateRunRecord(runId, {
-    metrics: { ...metrics, auto_resolutions: metrics.auto_resolutions + 1 },
-  });
+  return patchMetrics(runId, (metrics) => ({ ...metrics, auto_resolutions: metrics.auto_resolutions + 1 }));
 }
 
 export function finalizeRunMetrics(runId: string): RunRecord {
-  const record = readRunRecord(runId);
-  const metrics = normalizeMetrics(record.metrics ?? fallbackMetrics(record));
-  if (metrics.finalized_at !== undefined && metrics.elapsed_ms !== undefined) return record;
-
-  const finalizedAt = new Date().toISOString();
-  const startedMs = Date.parse(metrics.started_at);
-  const finalizedMs = Date.parse(finalizedAt);
-  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, finalizedMs - startedMs) : 0;
-  return updateRunRecord(runId, {
-    metrics: {
-      ...metrics,
-      elapsed_ms: elapsedMs,
-      finalized_at: finalizedAt,
-    },
+  return patchMetrics(runId, (metrics) => {
+    if (metrics.finalized_at !== undefined && metrics.elapsed_ms !== undefined) return null;
+    const finalizedAt = new Date().toISOString();
+    const startedMs = Date.parse(metrics.started_at);
+    const finalizedMs = Date.parse(finalizedAt);
+    const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, finalizedMs - startedMs) : 0;
+    return { ...metrics, elapsed_ms: elapsedMs, finalized_at: finalizedAt };
   });
 }
 

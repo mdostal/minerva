@@ -35,6 +35,11 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Core-api URL under the Pantheon runtime** (PANT-900): Minerva now also reads
+  `PANTHEON_API_URL`, the variable the Pantheon runtime actually exports, so `minerva-plan` runs
+  under Pantheon find core-api. One resolver (`src/pantheon-core-api.ts`) serves route select and
+  backlog calls, with precedence `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` >
+  `PANTHEON_API_URL`. The `--ticket` help text no longer claims the ticket comes from the multica CLI.
 - **Stale worktree base**: `startRun` now fetches and fast-forwards `origin/dev` in the target repo
   before cutting the run's worktree (non-fatal if offline or diverged).
 - **Docs drift** (PANT-907): the ABI reference, quickstart, architecture page, README and VISION

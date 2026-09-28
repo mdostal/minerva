@@ -33,6 +33,11 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Core-api URL under the Pantheon runtime** (PANT-900): Minerva now also reads
+  `PANTHEON_API_URL`, the variable the Pantheon runtime actually exports, so `minerva-plan` runs
+  under Pantheon find core-api. One resolver (`src/pantheon-core-api.ts`) serves route select and
+  backlog calls, with precedence `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` >
+  `PANTHEON_API_URL`. The `--ticket` help text no longer claims the ticket comes from the multica CLI.
 - **Target repos clone over https by default** (PANT-902): a bare `owner/repo` `target_repo` slug
   is now cloned from `https://github.com/<slug>.git` instead of `git@github.com:<slug>.git`, which
   failed with "Host key verification failed" in runner containers. Set

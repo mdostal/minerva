@@ -8,6 +8,8 @@ import {
   allocateRun,
   readRunRecord,
   updateRunRecord,
+  mutateRunRecord,
+  isTerminalStatus,
   normalizeQuestionKind,
   recordDriverTurn,
   recordHumanEscalation,
@@ -194,31 +196,35 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
 // whatever the schema-forced response said once completion is detected.
 export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
-    return; // run is complete -- no pending question to append, ever
+    return; // run is terminal (complete or aborted) -- no pending question to append, ever
   }
-  const record = readRunRecord(runId);
   const classified = extractClassifiedQuestion(rawResult);
   const shape = extractQuestionShape(rawResult);
-  const question: Question = {
-    id: `q-${record.questions.length + 1}`,
-    text: classified.text,
-    suggested_channel: classified.suggested_channel,
-    confidence: classified.confidence,
-    reason: classified.reason,
-    // Enforced channel defaults to the classifier's suggestion (v1: no Vesta/Delphi override
-    // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
-    channel: classified.suggested_channel,
-    status: "pending",
-    // Structured envelope fields (kind/options/qid) carried through when the driver supplies
-    // them (ForkedHiveDriver's envelope-sourced questions do; SpawnDriver/SubagentDriver's prose
-    // questions don't). Additive -- undefined for prose questions, which then resolve via the
-    // free-text default path. These are what let the auto-answer loop pick a real option for a
-    // single/multi-select gate instead of only ever answering free-text.
-    ...shape,
-  };
-  updateRunRecord(runId, {
-    status: "waiting_on_human",
-    questions: [...record.questions, question],
+  // Built from the freshest record under the run lock (PANT-904): an abortRun that landed while
+  // this turn was in flight wins -- the run stays aborted and no question is parked on it.
+  mutateRunRecord(runId, (record) => {
+    if (isTerminalStatus(record.status)) return null;
+    const question: Question = {
+      id: `q-${record.questions.length + 1}`,
+      text: classified.text,
+      suggested_channel: classified.suggested_channel,
+      confidence: classified.confidence,
+      reason: classified.reason,
+      // Enforced channel defaults to the classifier's suggestion (v1: no Vesta/Delphi override
+      // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
+      channel: classified.suggested_channel,
+      status: "pending",
+      // Structured envelope fields (kind/options/qid) carried through when the driver supplies
+      // them (ForkedHiveDriver's envelope-sourced questions do; SpawnDriver/SubagentDriver's prose
+      // questions don't). Additive -- undefined for prose questions, which then resolve via the
+      // free-text default path. These are what let the auto-answer loop pick a real option for a
+      // single/multi-select gate instead of only ever answering free-text.
+      ...shape,
+    };
+    return {
+      status: "waiting_on_human",
+      questions: [...record.questions, question],
+    };
   });
 }
 
@@ -292,12 +298,12 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result } = await runTurnResumable(driverForRecord(record), {
+    const { session_id, raw_result, route_decision } = await runTurnResumable(driverForRecord(record), {
       cwd: record.workspace_path,
       sessionId: record.session_id,
       prompt: answerPrompt,
     });
-    recordDriverTurn(runId);
+    recordDriverTurn(runId, route_decision);
     recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
     await recordTurn(runId, raw_result);
@@ -382,8 +388,9 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // been reached) -- that is a stall, explicitly protected by AD-5 and out of scope here.
   let sessionId: string;
   let rawResult: string;
+  let routeDecision: DriverResult["route_decision"];
   try {
-    ({ session_id: sessionId, raw_result: rawResult } = await runTurnResumable(driver, {
+    ({ session_id: sessionId, raw_result: rawResult, route_decision: routeDecision } = await runTurnResumable(driver, {
       cwd: record.workspace_path,
       sessionId: null,
       prompt: drivePrompt,
@@ -392,7 +399,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     abortRun({ run_id: runId });
     throw err;
   }
-  recordDriverTurn(runId);
+  recordDriverTurn(runId, routeDecision);
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
@@ -486,12 +493,12 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult } = await runTurnResumable(driverForRecord(record), {
+  const { session_id: newSessionId, raw_result: rawResult, route_decision: routeDecision } = await runTurnResumable(driverForRecord(record), {
     cwd: record.workspace_path,
     sessionId: record.session_id,
     prompt: answerPrompt,
   });
-  recordDriverTurn(runId);
+  recordDriverTurn(runId, routeDecision);
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });

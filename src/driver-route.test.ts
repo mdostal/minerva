@@ -215,3 +215,92 @@ test("HeimdallRouteError does not extend TurnTimeoutError, so kickoff-engine's r
   assert.ok(err instanceof Error);
   assert.ok(!(err instanceof TurnTimeoutError), "HeimdallRouteError must not extend TurnTimeoutError");
 });
+
+// PANT-901: the exact payload core-api's live POST /api/route/select returned on 2026-09-28 --
+// a lane id and decision metadata, no cli and no model.
+const LIVE_ROUTE_SELECT_PAYLOAD = {
+  decision_id: "4182cecd-8119-494e-83a6-c846eafe890c",
+  chosen_lane: "claude@ffevents",
+  ranked_candidates: [
+    { laneId: "claude@ffevents", score: 100 },
+    { laneId: "claude@mathew.dostal", score: 100 },
+    { laneId: "gemini", score: 80 },
+    { laneId: "openrouter", score: 0 },
+  ],
+  rationale: "Chose claude@ffevents (score 100). Reasons: task_type_weight(claude)=100.",
+  experiment_arm: null,
+  policy_version: "1.0",
+};
+
+function withDriveModel(model: string | undefined, fn: () => void | Promise<void>): Promise<void> {
+  const prev = process.env.MINERVA_DRIVE_MODEL;
+  if (model === undefined) delete process.env.MINERVA_DRIVE_MODEL;
+  else process.env.MINERVA_DRIVE_MODEL = model;
+  return Promise.resolve().then(fn).finally(() => {
+    if (prev === undefined) delete process.env.MINERVA_DRIVE_MODEL;
+    else process.env.MINERVA_DRIVE_MODEL = prev;
+  });
+}
+
+test("parseAvailableRoutePayload maps the live chosen_lane shape to the lane's CLI and the default drive model, keeping the decision", async () => {
+  await withDriveModel(undefined, () => {
+    assert.deepEqual(parseAvailableRoutePayload(LIVE_ROUTE_SELECT_PAYLOAD), {
+      cli: "claude",
+      model: "claude-haiku-4-5-20251001",
+      decision: {
+        decision_id: "4182cecd-8119-494e-83a6-c846eafe890c",
+        chosen_lane: "claude@ffevents",
+        experiment_arm: null,
+      },
+    });
+  });
+});
+
+test("parseAvailableRoutePayload uses MINERVA_DRIVE_MODEL for a chosen_lane route with no model, and the response's model when present", async () => {
+  await withDriveModel("claude-sonnet-4-5", () => {
+    assert.equal(parseAvailableRoutePayload(LIVE_ROUTE_SELECT_PAYLOAD).model, "claude-sonnet-4-5");
+    assert.equal(parseAvailableRoutePayload({ ...LIVE_ROUTE_SELECT_PAYLOAD, model: "claude-opus-4-1" }).model, "claude-opus-4-1");
+  });
+});
+
+test("parseAvailableRoutePayload maps a bare gemini lane to opencode and carries a string experiment_arm", async () => {
+  await withDriveModel(undefined, () => {
+    const route = parseAvailableRoutePayload({ ...LIVE_ROUTE_SELECT_PAYLOAD, chosen_lane: "gemini", experiment_arm: "b" });
+    assert.equal(route.cli, "opencode");
+    assert.equal(route.model, "claude-haiku-4-5-20251001");
+    assert.deepEqual(route.decision, { decision_id: LIVE_ROUTE_SELECT_PAYLOAD.decision_id, chosen_lane: "gemini", experiment_arm: "b" });
+  });
+});
+
+test("parseAvailableRoutePayload rejects a chosen_lane that maps to no known CLI", () => {
+  assert.throws(() => parseAvailableRoutePayload({ ...LIVE_ROUTE_SELECT_PAYLOAD, chosen_lane: "openrouter" }), /maps to no known CLI/);
+});
+
+test("resolveRuntimeRoute resolves the live chosen_lane payload end to end", async () => {
+  await withPantheonUrl(() => withFallbackEnv(undefined, undefined, () => withDriveModel(undefined, async () => {
+    const route = await resolveRuntimeRoute(async () => response(JSON.stringify(LIVE_ROUTE_SELECT_PAYLOAD)));
+    assert.equal(route.cli, "claude");
+    assert.equal(route.model, "claude-haiku-4-5-20251001");
+    assert.equal(route.decision?.decision_id, LIVE_ROUTE_SELECT_PAYLOAD.decision_id);
+  })));
+});
+
+test("resolveRuntimeRoute throws HeimdallRouteError for an unknown lane when no fallback is configured", async () => {
+  await withPantheonUrl(() => withFallbackEnv(undefined, undefined, async () => {
+    await assert.rejects(
+      () => resolveRuntimeRoute(async () => response(JSON.stringify({ ...LIVE_ROUTE_SELECT_PAYLOAD, chosen_lane: "openrouter" }))),
+      (err: unknown) => {
+        assert.ok(err instanceof HeimdallRouteError, `expected a HeimdallRouteError, got ${err}`);
+        assert.match((err as Error).message, /openrouter/);
+        return true;
+      },
+    );
+  }));
+});
+
+test("resolveRuntimeRoute falls through to the operator fallback for an unknown lane", async () => {
+  await withPantheonUrl(() => withFallbackEnv("codex", "gpt-5-codex", async () => {
+    const route = await resolveRuntimeRoute(async () => response(JSON.stringify({ ...LIVE_ROUTE_SELECT_PAYLOAD, chosen_lane: "openrouter" })));
+    assert.deepEqual(route, { cli: "codex", model: "gpt-5-codex" });
+  }));
+});

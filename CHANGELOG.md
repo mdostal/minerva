@@ -18,6 +18,12 @@ All notable changes to Minerva are documented in this file.
 
 ### Changed
 
+- **A parked run records its whole open question set** (PANT-923): `ForkedHiveDriver` surfaces
+  every unanswered question of the pending envelope at once, and the run parks all of them with a
+  shared `set_id` and the envelope's `required` flags. Answers are written onto the answered
+  question's own `qid`. Optional questions left when the envelope closes become `superseded`.
+  Prose drivers still park one question per turn (`set_id` = its own id). Both fields are
+  optional, so older run records still load.
 - **Hermetic test suite; typecheck enforced in CI** (PANT-905): `npm test` always uses the stub
   `claude` and never probes or calls the real CLI; set `MINERVA_TEST_REAL_CLAUDE=1` for live
   integration. If the stub can't be installed the suite fails loudly instead of falling through

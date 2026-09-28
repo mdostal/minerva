@@ -196,36 +196,119 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
 // whatever the schema-forced response said once completion is detected.
 export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
-    return; // run is terminal (complete or aborted) -- no pending question to append, ever
+    // Run is terminal (complete or aborted) -- no pending question to append, ever. Optional
+    // leftovers of an envelope set can no longer be answered either.
+    mutateRunRecord(runId, (record) => {
+      const questions = supersedeClosedSets(record.questions, undefined);
+      return questions === record.questions ? null : { questions };
+    });
+    return;
   }
-  const classified = extractClassifiedQuestion(rawResult);
-  const shape = extractQuestionShape(rawResult);
+  const set = extractQuestionSet(rawResult);
   // Built from the freshest record under the run lock (PANT-904): an abortRun that landed while
   // this turn was in flight wins -- the run stays aborted and no question is parked on it.
   mutateRunRecord(runId, (record) => {
     if (isTerminalStatus(record.status)) return null;
+    if (set) {
+      // PANT-923: the driver surfaced a whole open question set (ForkedHiveDriver's pending
+      // envelope). Park every question of it at once. After a sibling is answered the driver
+      // re-surfaces the rest of the same set, so a qid already pending in this set is kept as is
+      // (its channel may have been escalated since) rather than parked twice.
+      const kept = supersedeClosedSets(record.questions, set.set_id);
+      const alreadyPending = new Set(
+        kept.filter((q) => q.status === "pending" && q.set_id === set.set_id && q.qid).map((q) => q.qid),
+      );
+      const added: Question[] = [];
+      for (const entry of set.entries) {
+        if (entry.shape.qid !== undefined && alreadyPending.has(entry.shape.qid)) continue;
+        added.push({
+          ...buildQuestion(`q-${kept.length + added.length + 1}`, entry.classified, entry.shape),
+          set_id: set.set_id,
+          required: entry.required,
+        });
+      }
+      return { status: "waiting_on_human", questions: [...kept, ...added] };
+    }
+    const id = `q-${record.questions.length + 1}`;
+    // Prose drivers park one question per turn (the one-question guard in
+    // question-extraction.ts): a set of 1 whose set_id is its own id.
     const question: Question = {
-      id: `q-${record.questions.length + 1}`,
-      text: classified.text,
-      suggested_channel: classified.suggested_channel,
-      confidence: classified.confidence,
-      reason: classified.reason,
-      // Enforced channel defaults to the classifier's suggestion (v1: no Vesta/Delphi override
-      // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
-      channel: classified.suggested_channel,
-      status: "pending",
-      // Structured envelope fields (kind/options/qid) carried through when the driver supplies
-      // them (ForkedHiveDriver's envelope-sourced questions do; SpawnDriver/SubagentDriver's prose
-      // questions don't). Additive -- undefined for prose questions, which then resolve via the
-      // free-text default path. These are what let the auto-answer loop pick a real option for a
-      // single/multi-select gate instead of only ever answering free-text.
-      ...shape,
+      ...buildQuestion(id, extractClassifiedQuestion(rawResult), extractQuestionShape(rawResult)),
+      set_id: id,
     };
     return {
       status: "waiting_on_human",
-      questions: [...record.questions, question],
+      questions: [...supersedeClosedSets(record.questions, id), question],
     };
   });
+}
+
+function buildQuestion(
+  id: string,
+  classified: ReturnType<typeof extractClassifiedQuestion>,
+  shape: Partial<Pick<Question, "kind" | "options" | "qid">>,
+): Question {
+  return {
+    id,
+    text: classified.text,
+    suggested_channel: classified.suggested_channel,
+    confidence: classified.confidence,
+    reason: classified.reason,
+    // Enforced channel defaults to the classifier's suggestion (v1: no Vesta/Delphi override
+    // exists yet -- see AD-2). WRONG_CHANNEL guards this field, never suggested_channel.
+    channel: classified.suggested_channel,
+    status: "pending",
+    // Structured envelope fields (kind/options/qid) carried through when the driver supplies
+    // them (ForkedHiveDriver's envelope-sourced questions do; SpawnDriver/SubagentDriver's prose
+    // questions don't). Additive -- undefined for prose questions, which then resolve via the
+    // free-text default path. These are what let the auto-answer loop pick a real option for a
+    // single/multi-select gate instead of only ever answering free-text.
+    ...shape,
+  };
+}
+
+// An envelope set closes once every required question is answered, and the driver then moves
+// on. Its optional questions still pending at that point can never be answered, so they are
+// marked superseded when a turn surfaces a different set (or the run ends). Only envelope-set
+// questions (those carrying `required`) are touched: a prose question is always answered before
+// the next turn runs. Returns the input array unchanged when nothing was superseded.
+function supersedeClosedSets(questions: Question[], currentSetId: string | undefined): Question[] {
+  const stale = (q: Question) => q.status === "pending" && q.required !== undefined && q.set_id !== currentSetId;
+  if (!questions.some(stale)) return questions;
+  return questions.map((q) => (stale(q) ? { ...q, status: "superseded" as const } : q));
+}
+
+interface QuestionSetEntry {
+  classified: ReturnType<typeof extractClassifiedQuestion>;
+  shape: Partial<Pick<Question, "kind" | "options" | "qid">>;
+  required: boolean;
+}
+
+// Parse the open question set a driver may return in raw_result (ForkedHiveDriver:
+// `{set_id, questions: [{text, kind, options, qid, required, suggested_channel, confidence,
+// reason}]}`). Null when absent or malformed, so the caller falls back to the single-question
+// path exactly as before. Each entry goes through the same parsers as a single question.
+function extractQuestionSet(rawResult: string): { set_id: string; entries: QuestionSetEntry[] } | null {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(rawResult);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || typeof parsed.set_id !== "string" || !Array.isArray(parsed.questions)) {
+    return null;
+  }
+  const entries: QuestionSetEntry[] = [];
+  for (const q of parsed.questions) {
+    if (!q || typeof q !== "object" || typeof q.text !== "string" || q.text.trim().length === 0) continue;
+    const entryJson = JSON.stringify({ ...q, question: q.text });
+    entries.push({
+      classified: extractClassifiedQuestion(entryJson),
+      shape: extractQuestionShape(entryJson),
+      required: q.required === true,
+    });
+  }
+  return entries.length > 0 ? { set_id: parsed.set_id, entries } : null;
 }
 
 // Best-effort parse of the structured envelope fields a driver may embed alongside the question
@@ -306,6 +389,7 @@ async function autoAnswerLoop(runId: string): Promise<void> {
         cwd: record.workspace_path,
         sessionId: record.session_id,
         prompt: answerPrompt,
+        qid: pending.qid,
       }));
     } catch (err) {
       // Same stranding risk as submitAnswers (PANT-903): leave the gate answerable.
@@ -532,6 +616,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
       cwd: record.workspace_path,
       sessionId: record.session_id,
       prompt: answerPrompt,
+      qid: question.qid,
     }));
   } catch (err) {
     // PANT-903: the resumed turn never happened, so the answer was never delivered. Put the

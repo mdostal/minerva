@@ -10,6 +10,7 @@ import { getOutput, type CompletedEpic } from "../src/output-emitter.ts";
 import { fileAllStoriesToMultica } from "../src/plan-runner.ts";
 import { runStdioServer } from "../src/mcp-server.ts";
 import { agentInit, agentStatus } from "../src/agent-setup.ts";
+import { getMetrics } from "../src/metrics-summary.ts";
 import { readFileSync } from "node:fs";
 
 function readStdin(): Promise<string> {
@@ -39,6 +40,12 @@ async function main() {
     if (argv[0] === "agent") {
       await mainAgent(argv.slice(1));
       return;
+    }
+    // Same backward-compatible extension point -- `minerva metrics` is the human-friendly form of
+    // the getMetrics ABI method (identical result, pretty-printed).
+    if (argv[0] === "metrics") {
+      process.stdout.write(JSON.stringify({ result: getMetrics({}) }, null, 2) + "\n");
+      process.exit(0);
     }
     await mainArgs(argv);
     return;
@@ -223,6 +230,7 @@ const ARG_HELP = `minerva — JSON-over-stdio
 
   minerva --resume <run_id> --question <question_id> --answer "<answer>" [--channel human|agent]
           [--file-to-multica --parent <issue_id>] [--project <project_id>] [--target-repo owner/repo]
+  minerva metrics             cross-run planning KPIs (getMetrics) by driver and route lane
   minerva mcp                 run as an MCP server (stdio transport) exposing the full ABI as tools
   minerva agent init          detect installed agent CLIs, register the MCP server, install usage skills
   minerva agent status        report what's currently registered/installed, without changing anything

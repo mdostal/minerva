@@ -118,9 +118,10 @@ Check the current status of a run.
 | Field | Type | Description |
 |-------|------|-------------|
 | `turns` | number | Driver turns taken so far |
-| `escalations` | number | `getQuestions` calls on the `human` channel that returned at least one question |
+| `escalations` | number | `human`-channel questions parked for a human, each counted once when parked (reading via `getQuestions` never counts) |
 | `auto_resolutions` | number | Questions answered in-process from plan defaults |
 | `driver` | string | Driver that ran the turns (e.g. `spawn`, `subagent`, or an agnostic-plan runtime) |
+| `lane` | string? | Route lane of the run's first driver turn that reported one: core-api's `chosen_lane` (e.g. `claude@ffevents`) when the route came with a decision, otherwise `"<cli>:<model>"` |
 | `started_at` | string | ISO 8601 timestamp |
 | `elapsed_ms` | number? | Set once the run finishes or is aborted |
 | `finalized_at` | string? | ISO 8601 timestamp, set with `elapsed_ms` |
@@ -208,6 +209,7 @@ Get pending questions for a run, filtered by channel.
 | `qid` | string? | Envelope question id — used for `answers` matching in plan defaults |
 | `set_id` | string? | Open question set this question belongs to. Forked-driver envelope questions share the envelope id; a prose driver's question is a set of 1 (`set_id` = its own `id`). Absent on records written before this field |
 | `required` | boolean? | Envelope questions only: whether the envelope needs an answer to this question before it closes |
+| `escalated_at` | string? | ISO 8601 — when this question was first parked on the `human` queue (see [`getMetrics`](#getmetrics)) |
 
 !!! note "Open question sets"
     When a run parks, it records every question Minerva can know without driving another turn.
@@ -221,6 +223,12 @@ Get pending questions for a run, filtered by channel.
     `suggested_channel`. The classifier emits `suggested_channel` + `confidence` + `reason`;
     an external policy layer owns the enforced value. In v1 (no policy layer wired), the
     enforced channel defaults to `suggested_channel`.
+
+!!! note "Reading never counts as an escalation"
+    `getQuestions` is read-only. A run's `metrics.escalations` counts each `human`-channel
+    question once, when it is parked on the human queue (classified `human` at creation, or
+    escalated from the `agent` queue by the auto-answer loop). Polling the same parked question
+    any number of times leaves the counter unchanged.
 
 **Example:**
 ```bash
@@ -371,6 +379,76 @@ echo '{"method":"abortRun","params":{"run_id":"<run_id>"}}' \
 ```json
 {"result":{"result":{}}}
 ```
+
+---
+
+## `getMetrics`
+
+Summarize planning KPIs across every run in `MINERVA_HOME`, grouped overall, by driver, and by
+route lane. Read-only. It reads only the local run records (standalone-first), never the
+network.
+
+**Params:** none (pass `{}`)
+
+**Returns:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `generated_at` | string | ISO 8601 timestamp of this summary |
+| `skipped_records` | number | Run records that could not be parsed and were left out |
+| `overall` | MetricsGroup | Every run |
+| `by_driver` | `{[driver]: MetricsGroup}` | Keyed by `metrics.driver` (`spawn`, `subagent`, `forked`, or an agnostic runtime such as `opencode`) |
+| `by_lane` | `{[lane]: MetricsGroup}` | Keyed by `metrics.lane`: the lane the run's first driver turn ran on (core-api's `chosen_lane`, or `"<cli>:<model>"` when there was no routing decision) |
+
+Runs recorded before a field existed are grouped under `"unknown"`. A legacy run with no captured
+lane falls back to `metrics.chosen_lane`, then to its frozen `plan_runtime:plan_model`, when present.
+
+**`MetricsGroup` shape:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `runs` | number | Runs in the group |
+| `by_status` | `{in_progress, waiting_on_human, complete, aborted}` | Run count by current status |
+| `completion_rate` | number \| null | `complete / (complete + aborted)`. In-flight runs are excluded. `null` until a run in the group finishes |
+| `turns` | Distribution | Driver turns per run |
+| `escalations` | Distribution | Human-queue escalations per run (counted once per question) |
+| `auto_resolutions` | Distribution | Questions answered from pre-baked defaults per run |
+| `time_to_spec_ms` | Distribution | Start-to-finalization wall clock, over **complete** runs only |
+
+**`Distribution` shape:** `{median, p90}`, nearest-rank percentiles, so each is an observed
+value. Both are `null` when the group has no samples.
+
+**Example:**
+```bash
+echo '{"method":"getMetrics","params":{}}' | npx tsx bin/minerva.ts
+# or, pretty-printed:
+npx tsx bin/minerva.ts metrics
+```
+```json
+{
+  "result": {
+    "generated_at": "2026-09-28T12:00:00.000Z",
+    "skipped_records": 0,
+    "overall": {
+      "runs": 3,
+      "by_status": {"in_progress": 0, "waiting_on_human": 1, "complete": 2, "aborted": 0},
+      "completion_rate": 1,
+      "turns": {"median": 3, "p90": 5},
+      "escalations": {"median": 1, "p90": 1},
+      "auto_resolutions": {"median": 2, "p90": 4},
+      "time_to_spec_ms": {"median": 184000, "p90": 412000}
+    },
+    "by_driver": {"spawn": {"runs": 3, "...": "same MetricsGroup shape"}},
+    "by_lane": {"claude@ffevents": {"runs": 3, "...": "same MetricsGroup shape"}}
+  }
+}
+```
+
+!!! note "Lifecycle telemetry"
+    Separately from these per-run aggregates, every driver (`spawn`, `subagent`, `forked`)
+    appends `driver_started` / `driver_succeeded` / `driver_failed` JSONL events to
+    `<MINERVA_HOME>/events/`. Each event carries `driver`; `driver_succeeded` also carries
+    `lane` when the turn resolved a route.
 
 ---
 

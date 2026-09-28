@@ -12,7 +12,7 @@ import {
   isTerminalStatus,
   normalizeQuestionKind,
   recordDriverTurn,
-  recordHumanEscalation,
+  recordHumanEscalations,
   recordAutoResolution,
   updateRunMetricsDriver,
   type Question,
@@ -22,7 +22,7 @@ import {
 import { abortRun } from "./cleanup-ledger.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, laneOf, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
@@ -384,8 +384,9 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     let session_id: string;
     let raw_result: string;
     let route_decision: DriverResult["route_decision"];
+    let route: DriverResult["route"];
     try {
-      ({ session_id, raw_result, route_decision } = await runTurnResumable(driverForRecord(record), {
+      ({ session_id, raw_result, route_decision, route } = await runTurnResumable(driverForRecord(record), {
         cwd: record.workspace_path,
         sessionId: record.session_id,
         prompt: answerPrompt,
@@ -396,7 +397,7 @@ async function autoAnswerLoop(runId: string): Promise<void> {
       restorePendingQuestion(runId, pending.id);
       throw err;
     }
-    recordDriverTurn(runId, route_decision);
+    recordDriverTurn(runId, route_decision, laneOf(route));
     recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
     await recordTurn(runId, raw_result);
@@ -482,8 +483,9 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   let sessionId: string;
   let rawResult: string;
   let routeDecision: DriverResult["route_decision"];
+  let route: DriverResult["route"];
   try {
-    ({ session_id: sessionId, raw_result: rawResult, route_decision: routeDecision } = await runTurnResumable(driver, {
+    ({ session_id: sessionId, raw_result: rawResult, route_decision: routeDecision, route } = await runTurnResumable(driver, {
       cwd: record.workspace_path,
       sessionId: null,
       prompt: drivePrompt,
@@ -492,7 +494,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     abortRun({ run_id: runId });
     throw err;
   }
-  recordDriverTurn(runId, routeDecision);
+  recordDriverTurn(runId, routeDecision, laneOf(route));
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
@@ -501,6 +503,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // Auto-answer any routine gate questions from the pre-baked defaults so a fresh headless run
   // drives itself forward instead of hanging on the first gate. No-op when mode is "off".
   await autoAnswerLoop(runId);
+  recordHumanEscalations(runId);
 
   return { run_id: runId };
 }
@@ -515,10 +518,9 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
     throw new MinervaError("VALIDATION_FAILED", 'getQuestions requires channel "agent" or "human"');
   }
   const record = readRunRecord(runId);
+  // Read-only: escalations are counted once when a question is parked on the human queue
+  // (recordHumanEscalations, after each drive), never per read -- polling must not inflate them.
   const questions = record.questions.filter((q) => q.status === "pending" && q.channel === channel);
-  if (channel === "human" && questions.length > 0) {
-    recordHumanEscalation(runId);
-  }
   return { questions };
 }
 
@@ -611,8 +613,9 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   let newSessionId: string;
   let rawResult: string;
   let routeDecision: DriverResult["route_decision"];
+  let route: DriverResult["route"];
   try {
-    ({ session_id: newSessionId, raw_result: rawResult, route_decision: routeDecision } = await runTurnResumable(driverForRecord(record), {
+    ({ session_id: newSessionId, raw_result: rawResult, route_decision: routeDecision, route } = await runTurnResumable(driverForRecord(record), {
       cwd: record.workspace_path,
       sessionId: record.session_id,
       prompt: answerPrompt,
@@ -626,7 +629,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
     restorePendingQuestion(runId, questionId);
     throw err;
   }
-  recordDriverTurn(runId, routeDecision);
+  recordDriverTurn(runId, routeDecision, laneOf(route));
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });
@@ -636,6 +639,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // routine gates from the pre-baked defaults, so answering one strategic question doesn't leave
   // the run stalled on the next mechanical one. No-op when mode is "off".
   await autoAnswerLoop(runId);
+  recordHumanEscalations(runId);
 
   return { result: {} };
 }

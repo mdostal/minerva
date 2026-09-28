@@ -199,7 +199,10 @@ test("a prose-driver park is a set of 1 whose set_id is its own id, and nothing 
   const d = new ProseDriver();
   install(d);
   const { run_id } = (await startRun({ idea: "a tiny CLI todo app", defaults: { mode: "off" } })) as { run_id: string };
-  const [q] = readRunRecord(run_id).questions;
+  const [parked] = readRunRecord(run_id).questions;
+  // escalated_at (PANT-906) is the park-time escalation stamp; its value is a timestamp.
+  const { escalated_at, ...q } = parked!;
+  assert.ok(Number.isFinite(Date.parse(escalated_at!)));
   assert.deepEqual(q, {
     id: "q-1",
     text: "Which database (turn 1)?",

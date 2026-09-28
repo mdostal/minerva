@@ -39,6 +39,10 @@ export interface RunMetrics {
   escalations: number;
   auto_resolutions: number;
   driver: string;
+  // The Heimdall route lane ("<cli>:<model>") the run's first driver turn ran on, when the driver
+  // reports one. Absent on records written before lane capture existed, and until the first
+  // turn returns. getMetrics groups runs by this.
+  lane?: string;
   started_at: string;
   elapsed_ms?: number;
   finalized_at?: string;
@@ -91,6 +95,10 @@ export interface Question {
   // answer-write-back step can address the correct question within a multi-question envelope
   // without re-deriving the mapping.
   qid?: string;
+  // Set once, the first time this question is parked on the human queue, and counted as ONE
+  // escalation in RunMetrics.escalations at that moment. Reading the question (getQuestions)
+  // never counts it again. See recordHumanEscalations.
+  escalated_at?: string;
 }
 
 export interface RunRecord {
@@ -408,12 +416,35 @@ export function updateRunMetricsDriver(runId: string, driverName: string): RunRe
 }
 
 // routeDecision is the core-api decision behind this turn (DriverResult.route_decision), if any.
-export function recordDriverTurn(runId: string, routeDecision?: RouteDecision): RunRecord {
-  return patchMetrics(runId, (metrics) => ({ ...metrics, ...routeDecision, turns: metrics.turns + 1 }));
+// `lane` is the route lane the turn ran on (driver.ts laneOf), when the driver reported one. Only
+// the first reported lane is kept, so a run is grouped under the lane it started on.
+export function recordDriverTurn(runId: string, routeDecision?: RouteDecision, lane?: string): RunRecord {
+  return patchMetrics(runId, (metrics) => ({
+    ...metrics,
+    ...routeDecision,
+    turns: metrics.turns + 1,
+    ...(lane && metrics.lane === undefined ? { lane } : {}),
+  }));
 }
 
-export function recordHumanEscalation(runId: string): RunRecord {
-  return patchMetrics(runId, (metrics) => ({ ...metrics, escalations: metrics.escalations + 1 }));
+// Counts each pending human-channel question exactly once, when it is parked on the human queue
+// (either classified human at creation or escalated from the agent queue by the auto-answer
+// loop). Idempotent and done under the run lock: a question already stamped with escalated_at is
+// never counted again, so polling getQuestions or re-running this sweep leaves the counter
+// unchanged, and concurrent sweeps can't double-count or lose a count.
+export function recordHumanEscalations(runId: string): RunRecord {
+  return mutateRunRecord(runId, (record) => {
+    const now = new Date().toISOString();
+    let newlyEscalated = 0;
+    const questions = record.questions.map((q) => {
+      if (q.channel !== "human" || q.status !== "pending" || q.escalated_at !== undefined) return q;
+      newlyEscalated++;
+      return { ...q, escalated_at: now };
+    });
+    if (newlyEscalated === 0) return null;
+    const metrics = currentMetrics(record);
+    return { questions, metrics: { ...metrics, escalations: metrics.escalations + newlyEscalated } };
+  }).record;
 }
 
 export function recordAutoResolution(runId: string): RunRecord {
@@ -546,6 +577,25 @@ export function getRunStatus(params: Record<string, unknown>): Record<string, un
   }
   const record = readRunRecord(runId);
   return { status: record.status, metrics: record.metrics ?? null };
+}
+
+// Every readable run record under MINERVA_HOME. A record that fails to parse is counted in
+// `skipped` rather than aborting the whole read, so one corrupt run can't hide every other run's
+// numbers from getMetrics.
+export function readAllRunRecords(): { records: RunRecord[]; skipped: number } {
+  const root = runsRoot();
+  if (!existsSync(root)) return { records: [], skipped: 0 };
+  const records: RunRecord[] = [];
+  let skipped = 0;
+  for (const id of readdirSync(root)) {
+    if (!existsSync(runRecordPath(id))) continue;
+    try {
+      records.push(readRunRecord(id));
+    } catch {
+      skipped++;
+    }
+  }
+  return { records, skipped };
 }
 
 export function listRuns(_params: Record<string, unknown>): Record<string, unknown> {

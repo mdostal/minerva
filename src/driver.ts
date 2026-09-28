@@ -334,10 +334,40 @@ export interface DriverResult {
   raw_result: string;
   // The core-api routing decision that picked this turn's runtime, when there was one.
   route_decision?: RouteDecision;
+  // The route this turn's real work ran on, when the driver resolved one. Optional so scripted
+  // test drivers and turns that made no live dispatch (e.g. ForkedHiveDriver surfacing a sibling
+  // question from an already-written envelope) can omit it. Recorded into RunMetrics.lane.
+  route?: RuntimeRoute;
 }
 
+// Attach the route a turn ran on, plus its core-api decision when there was one.
 function withRouteDecision(result: DriverResult, route: RuntimeRoute): DriverResult {
-  return route.decision ? { ...result, route_decision: route.decision } : result;
+  return { ...result, route, ...(route.decision ? { route_decision: route.decision } : {}) };
+}
+
+// Route-lane label used to group runs in getMetrics: core-api's chosen_lane (the Heimdall lane,
+// e.g. "claude@ffevents") when the route came with a decision, otherwise "<cli>:<model>". A colon,
+// not a slash, because opencode-style model ids already contain slashes ("anthropic/claude-...").
+export function laneOf(route: RuntimeRoute | undefined): string | undefined {
+  if (!route) return undefined;
+  return route.decision?.chosen_lane ?? `${route.cli}:${route.model}`;
+}
+
+// driver-lifecycle-telemetry: every Driver wraps its whole runTurn() in the same
+// driver_started/driver_succeeded/driver_failed events (payload carries which driver), so the
+// flat event log covers spawn, subagent and forked runs alike. Never swallows or alters the
+// turn's own control flow: on failure the original error is rethrown unchanged (same object,
+// same type, same message).
+async function withLifecycleTelemetry(driver: string, turn: () => Promise<DriverResult>): Promise<DriverResult> {
+  emitTelemetryEvent("driver_started", { driver });
+  try {
+    const result = await turn();
+    emitTelemetryEvent("driver_succeeded", { driver, ...(result.route ? { lane: laneOf(result.route) } : {}) });
+    return result;
+  } catch (err) {
+    emitTelemetryEvent("driver_failed", { driver, message: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
 }
 
 // One constrained turn -> structured result. session_id is always returned fresh, every turn
@@ -743,7 +773,11 @@ export function getAdapter(cli: string): RuntimeAdapter {
 }
 
 export class SpawnDriver implements Driver {
-  async runTurn(input: DriverInput): Promise<DriverResult> {
+  runTurn(input: DriverInput): Promise<DriverResult> {
+    return withLifecycleTelemetry("spawn", () => this.turn(input));
+  }
+
+  private async turn(input: DriverInput): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(route.model, input.sessionId, input.prompt, classificationSchemaArgs());
@@ -818,7 +852,11 @@ function reapBackground(route: RuntimeRoute, adapter: RuntimeAdapter, shortId: s
 }
 
 export class SubagentDriver implements Driver {
-  async runTurn(input: DriverInput): Promise<DriverResult> {
+  runTurn(input: DriverInput): Promise<DriverResult> {
+    return withLifecycleTelemetry("subagent", () => this.turn(input));
+  }
+
+  private async turn(input: DriverInput): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
     const shortId = dispatchBackground(route, adapter, input.cwd, input.sessionId, input.prompt);
@@ -1005,23 +1043,12 @@ export function writeAnswerOntoEnvelope(envelopePath: string, qid: string, answe
 }
 
 export class ForkedHiveDriver implements Driver {
-  // driver-lifecycle-telemetry: driver_started/driver_succeeded/driver_failed events wrap the
-  // whole turn (whichever branch below ends up calling spawnRuntime()), not just a single
-  // spawnRuntime() call site -- this method has three (dispatchFresh, answerAndContinue's own
-  // dispatchFresh re-entry, and classify), and the telemetry contract is about the outcome of
-  // runTurn() as a whole. Telemetry must never swallow or alter runTurn's existing control
-  // flow/error behavior: on failure the original error is rethrown completely unchanged (same
-  // object, same type, same message).
-  async runTurn(input: DriverInput): Promise<DriverResult> {
-    emitTelemetryEvent("driver_started");
-    try {
-      const result = await this.dispatch(input);
-      emitTelemetryEvent("driver_succeeded");
-      return result;
-    } catch (err) {
-      emitTelemetryEvent("driver_failed", { message: err instanceof Error ? err.message : String(err) });
-      throw err;
-    }
+  // driver-lifecycle-telemetry: the events wrap the whole turn (whichever branch below ends up
+  // calling spawnRuntime()), not a single spawnRuntime() call site -- this driver has three
+  // (dispatchFresh, answerAndContinue's own dispatchFresh re-entry, and classify), and the
+  // telemetry contract is about the outcome of runTurn() as a whole.
+  runTurn(input: DriverInput): Promise<DriverResult> {
+    return withLifecycleTelemetry("forked", () => this.dispatch(input));
   }
 
   private async dispatch(input: DriverInput): Promise<DriverResult> {

@@ -292,11 +292,19 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result } = await runTurnResumable(driverForRecord(record), {
-      cwd: record.workspace_path,
-      sessionId: record.session_id,
-      prompt: answerPrompt,
-    });
+    let session_id: string;
+    let raw_result: string;
+    try {
+      ({ session_id, raw_result } = await runTurnResumable(driverForRecord(record), {
+        cwd: record.workspace_path,
+        sessionId: record.session_id,
+        prompt: answerPrompt,
+      }));
+    } catch (err) {
+      // Same stranding risk as submitAnswers (PANT-903): leave the gate answerable.
+      restorePendingQuestion(runId, pending.id);
+      throw err;
+    }
     recordDriverTurn(runId);
     recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
@@ -443,6 +451,15 @@ export function isAnswerArray(value: unknown): value is Answer[] {
   );
 }
 
+// Undo a mark-answered after its resumed turn failed: the question goes back to pending and the
+// run back to waiting_on_human (what recordTurn set when it surfaced the question), so a later
+// answer can advance it again.
+function restorePendingQuestion(runId: string, questionId: string): void {
+  const current = readRunRecord(runId);
+  const questions = current.questions.map((q) => (q.id === questionId ? { ...q, status: "pending" as const } : q));
+  updateRunRecord(runId, { questions, status: "waiting_on_human" });
+}
+
 export async function submitAnswers(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const runId = params.run_id;
   const channel = params.channel as Channel | undefined;
@@ -457,10 +474,18 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   if (!isAnswerArray(answers) || answers.length === 0) {
     throw new MinervaError("VALIDATION_FAILED", "submitAnswers requires a non-empty answers array of {question_id, answer}");
   }
+  // PANT-903: the engine drives exactly one question per turn, so only one answer can ever be
+  // applied per call. Reject extras loudly instead of silently dropping them (batch staging of
+  // partial answers is PANT-697).
+  if (answers.length > 1) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `submitAnswers got ${answers.length} answers; submit one answer per call (batch staging is PANT-697)`,
+    );
+  }
 
   const record = readRunRecord(runId);
-  const firstAnswer = answers[0] as Answer;
-  const { question_id: questionId, answer } = firstAnswer;
+  const { question_id: questionId, answer } = answers[0] as Answer;
   const question = record.questions.find((q) => q.id === questionId && q.status === "pending");
 
   if (!question) {
@@ -473,7 +498,12 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
     );
   }
   if (!record.session_id) {
-    throw new MinervaError("VALIDATION_FAILED", `Run ${runId} has no active drive session to resume`);
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Run ${runId} has no active drive session to resume: its record has no session_id (the driver ` +
+        `returned an empty one on its last turn, e.g. plan-agnostic output without session_id). ` +
+        `The run cannot be advanced; abortRun it and start a new run.`,
+    );
   }
 
   // Mark answered BEFORE resuming -- this is the run's only advancement path (see
@@ -486,11 +516,22 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult } = await runTurnResumable(driverForRecord(record), {
-    cwd: record.workspace_path,
-    sessionId: record.session_id,
-    prompt: answerPrompt,
-  });
+  let newSessionId: string;
+  let rawResult: string;
+  try {
+    ({ session_id: newSessionId, raw_result: rawResult } = await runTurnResumable(driverForRecord(record), {
+      cwd: record.workspace_path,
+      sessionId: record.session_id,
+      prompt: answerPrompt,
+    }));
+  } catch (err) {
+    // PANT-903: the resumed turn never happened, so the answer was never delivered. Put the
+    // question back to pending and the run back to waiting_on_human, so the same question can be
+    // answered again. Without this the run is stranded in_progress with no pending question and
+    // nothing can ever advance it. The caller still gets the error.
+    restorePendingQuestion(runId, questionId);
+    throw err;
+  }
   recordDriverTurn(runId);
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).

@@ -244,7 +244,12 @@ Minerva auto-answers routine gate questions in-process from the run's plan defau
 completes, or `max_auto_answers` (default `40`) answers have been given. With plan-defaults
 mode `off`, nothing is auto-answered.
 
-Only the **first** entry of `answers` is applied per call.
+Each call answers exactly **one** question: `answers` must contain exactly one entry. A request
+with more than one entry is rejected with `VALIDATION_FAILED` and the run is left unchanged.
+
+If the resumed turn fails (timeout after retries, auth, routing), the error is returned and the
+question goes back to `pending` with the run back in `waiting_on_human`. The same question can be
+answered again with another `submitAnswers` call.
 
 **Params:**
 
@@ -252,7 +257,7 @@ Only the **first** entry of `answers` is applied per call.
 |-------|------|-------------|
 | `run_id` | string (UUID) | The run to advance |
 | `channel` | `"agent"` \| `"human"` | Must match the enforced `channel` of every answered question |
-| `answers` | Answer[] | Non-empty list of answers; only the first is applied |
+| `answers` | Answer[] | Exactly one answer |
 
 **`Answer` shape:**
 
@@ -270,7 +275,7 @@ response is `{"result":{"result":{}}}`.
 |------|---------|
 | `WRONG_CHANNEL` | `channel` in the request doesn't match the question's enforced `channel` |
 | `NOT_FOUND` | `run_id` doesn't exist, or `question_id` is not a pending question on it |
-| `VALIDATION_FAILED` | Malformed payload (e.g. `answers` empty, or an entry missing `question_id`) |
+| `VALIDATION_FAILED` | Malformed payload (e.g. `answers` empty or with more than one entry, or an entry missing `question_id`), or the run has no drive session to resume |
 
 **Example:**
 ```bash

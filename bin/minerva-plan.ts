@@ -6,13 +6,16 @@
 //   minerva-plan --ticket <multica-issue-id> [--target-repo <path>] [--file-to-multica] [--commit] [--push]
 //   minerva-plan --idea-brief <path>          [--mode auto|agent|off] [--json]
 //   minerva-plan --idea "<text>"              [--target-repo <path>]  [--json]
+//   minerva-plan --promote <issue_id>[,<issue_id>...] [--json]
 //
 // It resolves the idea (from a Multica ticket, an idea-brief file, or a literal string), drives
 // plugin-hive kickoff+plan headlessly with Minerva's pre-baked defaults (mode: auto by default, so
 // it completes unattended), writes the .pHive epic+stories into the run workspace, and — with
 // --file-to-multica — files each decomposed story back to Multica as a sub-issue of the origin
 // ticket (linked; left unassigned per standing policy). Only those PLANNED stories then become
-// dev-agent work items. Prints a human summary (or --json for a machine-readable result).
+// dev-agent work items. Add --park when the stories must wait behind a gate (e.g. an operator
+// decision): they are filed in `backlog`, still unassigned, and --promote moves them to `todo`
+// once the gate opens. Prints a human summary (or --json for a machine-readable result).
 //
 // Exit code: 0 when the plan completed (and, if requested, stories were filed); 2 when the plan
 // parked on a genuine human gate that had no pre-baked default (so a router can escalate to
@@ -20,7 +23,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { runHeadlessPlan, resolveIdeaFromTicket, fileAllStoriesToMultica } from "../src/plan-runner.ts";
+import { runHeadlessPlan, resolveIdeaFromTicket, fileAllStoriesToMultica, promoteParkedStories } from "../src/plan-runner.ts";
 import { resolveLocalCheckout, deriveRepoSlugFromWorkspace } from "../src/target-repo-signal.ts";
 import type { PlanDefaultsMode } from "../src/plan-defaults.ts";
 
@@ -32,13 +35,15 @@ interface Args {
   mode: PlanDefaultsMode;
   project?: string;
   fileToMultica: boolean;
+  park: boolean;
+  promote?: string[];
   commit: boolean;
   push: boolean;
   json: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { mode: "auto", fileToMultica: false, commit: false, push: false, json: false };
+  const a: Args = { mode: "auto", fileToMultica: false, park: false, commit: false, push: false, json: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const next = (): string => {
@@ -54,6 +59,8 @@ function parseArgs(argv: string[]): Args {
       case "--mode": a.mode = next() as PlanDefaultsMode; break;
       case "--project": a.project = next(); break;
       case "--file-to-multica": a.fileToMultica = true; break;
+      case "--park": a.park = true; break;
+      case "--promote": a.promote = next().split(",").map((s) => s.trim()).filter((s) => s.length > 0); break;
       case "--commit": a.commit = true; break;
       case "--push": a.push = true; break;
       case "--json": a.json = true; break;
@@ -76,6 +83,8 @@ const HELP = `minerva-plan — headless "plan this ticket/idea" entry (Auriga-in
   --mode <auto|agent|off>  pre-baked-defaults mode (default: auto = fully unattended)
   --project <id>         Multica project id for filed story sub-issues
   --file-to-multica      file decomposed stories back to Multica as sub-issues of the ticket
+  --park                 with --file-to-multica: file the stories in backlog (gated), not todo
+  --promote <ids>        open the gate: move parked stories (comma-separated ids) to todo, unassigned
   --commit               commit the .pHive epic+stories in the run workspace
   --push                 push the run workspace branch to origin (durable; needs a remote)
   --json                 emit a machine-readable JSON result
@@ -107,6 +116,16 @@ function pushWorkspace(workspacePath: string, runId: string): { pushed: boolean;
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.promote) {
+    if (args.promote.length === 0) throw new Error("--promote needs at least one issue id");
+    const r = await promoteParkedStories(args.promote);
+    const report = { promoted: r.promoted, promote_errors: r.errors };
+    if (args.json) process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    else process.stdout.write(`Promoted ${r.promoted.length}/${args.promote.length} parked stories to todo\n`);
+    if (r.errors.length > 0) process.exit(1);
+    return;
+  }
 
   // Resolve the idea from exactly one source.
   const sources = [args.ticket, args.ideaBrief, args.idea].filter((v) => v !== undefined);
@@ -185,6 +204,7 @@ async function main(): Promise<void> {
   if (args.fileToMultica) {
     if (!args.ticket) throw new Error("--file-to-multica requires --ticket (the parent to link sub-issues under)");
     const filed = await fileAllStoriesToMultica(args.ticket, result.epics, {
+      park: args.park,
       ...(args.project ? { project: args.project } : {}),
       ...(targetRepoSlug ? { targetRepo: targetRepoSlug } : {}),
       // The run workspace's own origin remote is the guaranteed fallback build target, so every

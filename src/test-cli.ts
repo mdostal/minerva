@@ -64,13 +64,11 @@ export function createSeedRepo(prefix = "minerva-seed-repo-"): string {
   return repo;
 }
 
-// Probe whether `claude -p` can successfully make API calls. Runs a real (cheap) subprocess
-// call synchronously; returns false immediately on any error or non-zero exit. Integration
-// tests that depend on a live claude -p call guard themselves with this flag so they skip
-// gracefully rather than fail in environments without valid Claude auth credentials.
-//
-// When real auth is unavailable, tries to set up a stub `claude` binary (bin/stub-claude.ts)
-// that simulates just enough CLI surface for the test suite to run without live auth.
+// Hermetic by default: every test run puts a stub `claude` binary (bin/stub-claude.ts) first on
+// PATH, simulating just enough CLI surface for the suite, so `npm test` never makes real, paid,
+// nondeterministic model calls -- even on a machine with a logged-in `claude`. Set
+// MINERVA_TEST_REAL_CLAUDE=1 to opt into live integration against the real CLI instead; that mode
+// probes `claude -p` once and falls back to the stub when real auth is unavailable.
 function setupStubClaude(): boolean {
   const stubPath = join(__dirname, "..", "bin", "stub-claude.ts");
   const tsxDir = join(__dirname, "..", "node_modules", "tsx");
@@ -96,10 +94,9 @@ function setupStubClaude(): boolean {
   }
 }
 
-function detectClaudeAuthAvailable(): { available: boolean; stubActive: boolean } {
-  if (process.env.MINERVA_SKIP_CLAUDE_INTEGRATION === "1") {
-    return { available: false, stubActive: false };
-  }
+export const REAL_CLAUDE_REQUESTED: boolean = process.env.MINERVA_TEST_REAL_CLAUDE === "1";
+
+function probeRealClaude(): boolean {
   const result = spawnSync(
     "claude",
     ["-p", "--model", DEFAULT_TEST_MODEL, "--output-format", "json",
@@ -107,23 +104,35 @@ function detectClaudeAuthAvailable(): { available: boolean; stubActive: boolean 
      "00000000-0000-0000-0000-000000000001", "ping"],
     { encoding: "utf8", timeout: 10_000 },
   );
-  if (!result.error && result.status === 0) {
-    try {
-      if (!(JSON.parse(result.stdout) as { is_error?: boolean }).is_error) {
-        return { available: true, stubActive: false };
-      }
-    } catch {
-      // fall through to stub setup
-    }
+  if (result.error || result.status !== 0) return false;
+  try {
+    return !(JSON.parse(result.stdout) as { is_error?: boolean }).is_error;
+  } catch {
+    return false;
   }
-  // Real auth unavailable — try stub.
-  const stubActive = setupStubClaude();
-  return { available: stubActive, stubActive };
+}
+
+function detectClaudeAuthAvailable(): { available: boolean; stubActive: boolean } {
+  if (process.env.MINERVA_SKIP_CLAUDE_INTEGRATION === "1") {
+    return { available: false, stubActive: false };
+  }
+  if (REAL_CLAUDE_REQUESTED && probeRealClaude()) {
+    return { available: true, stubActive: false };
+  }
+  // Never fall through to whatever `claude` is on PATH: a missing stub would silently turn this
+  // run into real, paid model calls, so fail loudly instead.
+  if (!setupStubClaude()) {
+    throw new Error(
+      "test-cli: could not install the stub claude (bin/stub-claude.ts + node_modules/tsx) -- run `npm install`, or set MINERVA_TEST_REAL_CLAUDE=1 to use the real CLI",
+    );
+  }
+  return { available: true, stubActive: true };
 }
 
 const _detection = detectClaudeAuthAvailable();
 export const CLAUDE_AUTH_AVAILABLE: boolean = _detection.available;
 export const STUB_CLAUDE_ACTIVE: boolean = _detection.stubActive;
+export const REAL_CLAUDE_ACTIVE: boolean = _detection.available && !_detection.stubActive;
 
 export async function mockHeimdallServer(routes: { kickoff?: any; planning?: any }) {
   const server = createServer((req, res) => {

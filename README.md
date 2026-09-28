@@ -150,7 +150,12 @@ Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 npm test          # tsx --test, TDD suite across src/ + bin/
 npm run typecheck # tsc --noEmit
 npm run ci        # test + typecheck — the authoritative gate, run locally before every merge
+npm run test:hermetic  # npm test behind a tripwire `claude` that fails if the real CLI is called
 ```
+
+Tests use a stub `claude` (`bin/stub-claude.ts`) by default and never make real model calls. Set
+`MINERVA_TEST_REAL_CLAUDE=1` for live integration against the real CLI (the plugin-hive-fork tests
+additionally need `MINERVA_HIVE_PLUGIN_DIR`). CI enforces the typecheck through `npm run build`.
 
 ## Status
 

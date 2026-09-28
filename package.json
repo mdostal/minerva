@@ -29,7 +29,9 @@
   },
   "scripts": {
     "test": "tsx --test --test-force-exit --test-concurrency=1 \"src/**/*.test.ts\" \"bin/**/*.test.ts\" \"tests/**/*.test.ts\"",
+    "test:hermetic": "bash scripts/test-hermetic.sh",
     "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck",
     "ci": "npm test && npm run typecheck"
   },
   "devDependencies": {

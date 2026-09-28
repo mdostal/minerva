@@ -4,6 +4,10 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hermetic test suite; typecheck enforced in CI** (PANT-905). `npm test` always runs against the stub `claude` (`bin/stub-claude.ts`) and never probes or calls the real CLI; set `MINERVA_TEST_REAL_CLAUDE=1` for live integration. If the stub can't be installed the suite fails loudly rather than falling through to a real `claude` on PATH. New `npm run test:hermetic` runs the suite behind a tripwire `claude`. The plugin-hive-fork tests no longer fall back to a hardcoded developer path; they skip with a reason unless `MINERVA_HIVE_PLUGIN_DIR` and `MINERVA_TEST_REAL_CLAUDE=1` are set. New `build` script (alias for `typecheck`) makes the shared CI workflow's `npm run build --if-present` step enforce `tsc --noEmit`.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

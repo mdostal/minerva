@@ -27,6 +27,11 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Target repos clone over https by default** (PANT-902): a bare `owner/repo` `target_repo` slug
+  is now cloned from `https://github.com/<slug>.git` instead of `git@github.com:<slug>.git`, which
+  failed with "Host key verification failed" in runner containers. Set
+  `MINERVA_GIT_CLONE_PROTOCOL=ssh` to keep ssh. Explicit URLs are used as given, and a clone failure
+  now names the URL and the variable.
 - **Stale worktree base**: `startRun` now fetches and fast-forwards `origin/dev` in the target repo
   before cutting the run's worktree (non-fatal if offline or diverged).
 - **Docs drift** (PANT-907): the ABI reference, quickstart, architecture page, README and VISION

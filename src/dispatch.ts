@@ -32,6 +32,12 @@ const handlers: Record<string, Handler> = {
   abortRun,
 };
 
+// The registered method names, for docs-contract.test.ts (every one must be documented in
+// mkdocs_docs/abi-reference.md, and nothing else may be).
+export function registeredMethods(): string[] {
+  return Object.keys(handlers);
+}
+
 // validate-run-id-uuid-shape story: the methods whose params carry a run_id that eventually
 // reaches run-manager.ts's runDir()/runRecordPath() path-join. Every one of these is guarded
 // here, at the ABI boundary, BEFORE the handler (and therefore run-manager.ts) is ever reached --

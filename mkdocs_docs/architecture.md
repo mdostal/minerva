@@ -74,7 +74,7 @@ Owns run lifecycle:
 | Case | Workspace |
 |------|-----------|
 | `target_repo` provided | Git **worktree** cut from that repo's `dev` branch |
-| `target_repo` absent (greenfield) | Fresh `git init` scratch repo with an initial commit |
+| `target_repo` absent (greenfield) | Git **worktree** cut from a resolved repo: a `MINERVA_REPO_MAP` god repo, `MINERVA_INCUBATOR_REPO`, or the seed repo (`MINERVA_SEED_REPO`, default `~/repos/consus-seeds`) |
 
 Either way, plugin-hive's `.pHive/` always lives inside a valid git repo.
 
@@ -85,7 +85,9 @@ question-extraction and classification loop, applies pre-baked defaults, and cal
 to advance the run when a question resolves.
 
 Key invariant: **nothing advances a run except an explicit `submitAnswers` call.** `in_progress`
-between calls means paused, not working.
+between calls means paused, not working. Inside a `startRun` or `submitAnswers` call, routine gate
+questions are auto-answered in-process from the run's plan defaults (up to `max_auto_answers`,
+default `40`); nothing runs between calls.
 
 ### Escalation Classifier
 
@@ -194,6 +196,10 @@ not inside a plugin.
 selected by whether `target_repo` is present: worktree for existing repos, fresh `git init` for
 greenfield. Either way, plugin-hive's assumption that `.pHive/` lives inside a valid git repo
 holds.
+
+*Update:* the code no longer uses `git init`. Greenfield runs also get a worktree, cut from a
+resolved repo (see [Workspace kinds](#workspace-kinds)), so a finished plan can be committed and
+pushed somewhere a build agent can reach it.
 
 ### AD-4 — Record + emit on completion, never auto-delete
 

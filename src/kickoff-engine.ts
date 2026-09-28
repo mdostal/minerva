@@ -433,7 +433,8 @@ function isValidAnswerValue(value: unknown): value is string | string[] {
   return typeof value === "string" || (Array.isArray(value) && value.every((v) => typeof v === "string"));
 }
 
-function isAnswerArray(value: unknown): value is Answer[] {
+// Exported for docs-contract.test.ts, which checks the documented submitAnswers example against it.
+export function isAnswerArray(value: unknown): value is Answer[] {
   return (
     Array.isArray(value) &&
     value.every(

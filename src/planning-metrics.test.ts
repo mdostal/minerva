@@ -139,6 +139,25 @@ test("getRunStatus surfaces the persisted metrics via the ABI", async () => {
   assert.ok(res.metrics.started_at);
 });
 
+test("getRunStatus surfaces the core-api route decision behind the run's turns (PANT-901)", async () => {
+  __setDriverForTest({
+    async runTurn(input: DriverInput): Promise<DriverResult> {
+      const result = await new MetricsDriver("human-question").runTurn(input);
+      return {
+        ...result,
+        route_decision: { decision_id: "dec-123", chosen_lane: "claude@ffevents", experiment_arm: null },
+      };
+    },
+  });
+  const { run_id: runId } = (await startRun({ idea: "metrics route decision test" })) as { run_id: string };
+
+  const res = getRunStatus({ run_id: runId }) as { metrics: RunMetrics };
+  assert.equal(res.metrics.decision_id, "dec-123");
+  assert.equal(res.metrics.chosen_lane, "claude@ffevents");
+  assert.equal(res.metrics.experiment_arm, null);
+  assert.equal(res.metrics.turns, 1);
+});
+
 test("getOutput surfaces the finalized metrics via the ABI", async () => {
   __setDriverForTest(new MetricsDriver("complete"));
   const { run_id: runId } = (await startRun({ idea: "metrics ABI test complete" })) as { run_id: string };

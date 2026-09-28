@@ -18,6 +18,12 @@ All notable changes to Minerva are documented in this file.
 
 ### Changed
 
+- **Route selection accepts core-api's live `chosen_lane` shape** (PANT-901): `/api/route/select`
+  returns `{decision_id, chosen_lane, ...}` with no `cli`/`model`. The CLI now comes from the lane
+  id's runtime prefix (`claude@ffevents` → `claude`, `gemini` → `opencode`) and the model from the
+  response or `MINERVA_DRIVE_MODEL`. An unmapped lane still goes to the
+  `MINERVA_FALLBACK_CLI`/`MINERVA_FALLBACK_MODEL` fallback or fails with `HeimdallRouteError`. The
+  latest `decision_id`, `chosen_lane` and `experiment_arm` are recorded in `getRunStatus` metrics.
 - **Sibling-god calls go through Pantheon core-api** (PANT-255): `plan-runner.ts` no longer shells
   out to the Multica CLI; it uses core-api's `/api/backlog/issues` endpoints via
   `PANTHEON_CORE_API_URL`. `driver.ts` and `agnostic-plan-driver.ts` no longer call Heimdall over
@@ -27,6 +33,21 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Core-api URL under the Pantheon runtime** (PANT-900): Minerva now also reads
+  `PANTHEON_API_URL`, the variable the Pantheon runtime actually exports, so `minerva-plan` runs
+  under Pantheon find core-api. One resolver (`src/pantheon-core-api.ts`) serves route select and
+  backlog calls, with precedence `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` >
+  `PANTHEON_API_URL`. The `--ticket` help text no longer claims the ticket comes from the multica CLI.
+- **Target repos clone over https by default** (PANT-902): a bare `owner/repo` `target_repo` slug
+  is now cloned from `https://github.com/<slug>.git` instead of `git@github.com:<slug>.git`, which
+  failed with "Host key verification failed" in runner containers. Set
+  `MINERVA_GIT_CLONE_PROTOCOL=ssh` to keep ssh. Explicit URLs are used as given, and a clone failure
+  now names the URL and the variable.
+- **Run-record races** (PANT-904): `run.yaml` is written atomically (temp file in the same
+  directory, fsync, rename), every read-modify-write holds a per-run lockfile (`run.lock`,
+  broken after `MINERVA_RUN_LOCK_STALE_MS`, default 10s), and `complete`/`aborted` are sticky. An
+  `abortRun` that lands while a turn is in flight now stays `aborted`, and concurrent ABI calls
+  no longer lose each other's fields or metrics counts.
 - **Stale worktree base**: `startRun` now fetches and fast-forwards `origin/dev` in the target repo
   before cutting the run's worktree (non-fatal if offline or diverged).
 - **Docs drift** (PANT-907): the ABI reference, quickstart, architecture page, README and VISION

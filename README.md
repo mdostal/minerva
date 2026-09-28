@@ -145,6 +145,9 @@ Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 | `MINERVA_DRIVE_MODEL` | Model used to drive a turn | `claude-haiku-4-5-20251001` |
 | `MINERVA_TURN_TIMEOUT_MS` | Per-turn ceiling | `600000` (10 min) |
 | `MINERVA_HOME` | Run-state root | `~/.minerva` |
+| `PANTHEON_API_URL` | Pantheon core-api base URL (route select + backlog); exported by the Pantheon runtime | unset |
+| `PANTHEON_CORE_API_URL` / `MINERVA_PANTHEON_CORE_API_URL` | Overrides for the core-api base URL. Precedence: `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` > `PANTHEON_API_URL` | unset |
+| `MINERVA_GIT_CLONE_PROTOCOL` | Clone protocol for a bare `owner/repo` `target_repo` slug: `https` or `ssh`. Explicit URLs are used as given. | `https` |
 
 ```bash
 npm test          # tsx --test, TDD suite across src/ + bin/

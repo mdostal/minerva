@@ -124,6 +124,9 @@ Check the current status of a run.
 | `started_at` | string | ISO 8601 timestamp |
 | `elapsed_ms` | number? | Set once the run finishes or is aborted |
 | `finalized_at` | string? | ISO 8601 timestamp, set with `elapsed_ms` |
+| `decision_id` | string? | core-api `/api/route/select` decision behind the latest routed turn |
+| `chosen_lane` | string \| null? | Lane that decision picked (e.g. `claude@ffevents`) |
+| `experiment_arm` | string \| null? | Routing experiment arm, when core-api reports one |
 
 **Status meanings:**
 

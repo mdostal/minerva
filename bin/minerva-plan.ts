@@ -69,7 +69,7 @@ function parseArgs(argv: string[]): Args {
 
 const HELP = `minerva-plan — headless "plan this ticket/idea" entry (Auriga-invokable)
 
-  --ticket <id>          plan a Multica issue (fetched via the multica CLI)
+  --ticket <id>          plan a Multica issue (fetched via Pantheon core-api; needs PANTHEON_API_URL)
   --idea-brief <path>    plan an idea-brief file
   --idea "<text>"        plan a literal idea string
   --target-repo <path>   plan against an existing repo (worktree off dev); omit = greenfield

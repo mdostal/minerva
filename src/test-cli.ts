@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { join, dirname } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { resolvePantheonCoreApiUrl } from "./pantheon-core-api.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN = join(__dirname, "..", "bin", "minerva.ts");
@@ -18,11 +19,13 @@ export function testHeimdallRouteUrl(model = DEFAULT_TEST_MODEL, cli = "claude")
 }
 
 function withDefaultTestRoute(env: Record<string, string>): Record<string, string> {
+  // The PANTHEON_API_URL a Pantheon runtime exports must not opt the suite out of the stub route
+  // (that would send route selection to a live core-api); only an explicit test override does.
+  const { PANTHEON_API_URL: _runtimeCoreApiUrl, ...ambient } = process.env;
   if (
     env.MINERVA_PANTHEON_ROUTE_SELECT_URL ||
-    env.MINERVA_PANTHEON_CORE_API_URL ||
-    process.env.MINERVA_PANTHEON_ROUTE_SELECT_URL ||
-    process.env.MINERVA_PANTHEON_CORE_API_URL
+    ambient.MINERVA_PANTHEON_ROUTE_SELECT_URL ||
+    resolvePantheonCoreApiUrl({ ...ambient, ...env })
   ) {
     return env;
   }

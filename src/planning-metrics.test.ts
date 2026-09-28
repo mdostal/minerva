@@ -6,8 +6,8 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { abortRun } from "./cleanup-ledger.ts";
-import type { Driver, DriverInput, DriverResult } from "./driver.ts";
-import { getQuestions, startRun, __setDriverForTest } from "./kickoff-engine.ts";
+import type { Driver, DriverInput, DriverResult, RuntimeRoute } from "./driver.ts";
+import { getQuestions, startRun, submitAnswers, __setDriverForTest } from "./kickoff-engine.ts";
 import { readRunRecord, getRunStatus, type RunMetrics } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
 import { createSeedRepo } from "./test-cli.ts";
@@ -24,7 +24,10 @@ const savedEnv = {
 class MetricsDriver implements Driver {
   turns = 0;
 
-  constructor(private readonly mode: "human-question" | "complete") {}
+  constructor(
+    private readonly mode: "human-question" | "agent-question" | "complete",
+    private readonly route?: RuntimeRoute,
+  ) {}
 
   async runTurn(input: DriverInput): Promise<DriverResult> {
     this.turns++;
@@ -39,11 +42,13 @@ class MetricsDriver implements Driver {
       };
     }
 
+    const channel = this.mode === "agent-question" ? "agent" : "human";
     return {
       session_id: "sess",
+      ...(this.route ? { route: this.route } : {}),
       raw_result: JSON.stringify({
-        question: "What human decision should drive this plan?",
-        suggested_channel: "human",
+        question: `What ${channel} decision should drive this plan (turn ${this.turns})?`,
+        suggested_channel: channel,
         confidence: 0.1,
         reason: "strategic human escalation",
         kind: "free-text",
@@ -82,7 +87,8 @@ test("startRun initializes persisted metrics and records the first completed dri
 
   const record = readRunRecord(runId);
   assert.equal(record.metrics?.turns, 1);
-  assert.equal(record.metrics?.escalations, 0);
+  // The first turn parked a human-channel question, which counts as one escalation at creation.
+  assert.equal(record.metrics?.escalations, 1);
   assert.equal(record.metrics?.auto_resolutions, 0);
   assert.equal(record.metrics?.driver, "spawn");
   assert.equal(typeof record.metrics?.started_at, "string");
@@ -91,14 +97,63 @@ test("startRun initializes persisted metrics and records the first completed dri
   assert.equal(record.metrics?.finalized_at, undefined);
 });
 
-test("getQuestions increments human escalation metrics and persists the update", async () => {
+test("a parked human question counts as one escalation when created, and stamps escalated_at", async () => {
   const { run_id: runId } = (await startRun({ idea: "surface escalation" })) as { run_id: string };
-
-  const surfaced = getQuestions({ run_id: runId, channel: "human" }) as { questions: unknown[] };
-  assert.equal(surfaced.questions.length, 1);
 
   const record = readRunRecord(runId);
   assert.equal(record.metrics?.escalations, 1);
+  assert.equal(record.questions.length, 1);
+  assert.equal(record.questions[0]?.channel, "human");
+  assert.ok(Number.isFinite(Date.parse(record.questions[0]!.escalated_at!)));
+});
+
+test("calling getQuestions(human) five times on one parked question leaves escalations == 1", async () => {
+  const { run_id: runId } = (await startRun({ idea: "poll escalation" })) as { run_id: string };
+
+  for (let i = 0; i < 5; i++) {
+    const surfaced = getQuestions({ run_id: runId, channel: "human" }) as { questions: unknown[] };
+    assert.equal(surfaced.questions.length, 1);
+  }
+
+  const record = readRunRecord(runId);
+  assert.equal(record.metrics?.escalations, 1);
+});
+
+test("each new human question on a later turn is its own escalation", async () => {
+  const { run_id: runId } = (await startRun({ idea: "two escalations" })) as { run_id: string };
+  const [first] = (getQuestions({ run_id: runId, channel: "human" }) as { questions: Array<{ id: string }> }).questions;
+
+  await submitAnswers({ run_id: runId, channel: "human", answers: [{ question_id: first!.id, answer: "ship it" }] });
+  getQuestions({ run_id: runId, channel: "human" });
+  getQuestions({ run_id: runId, channel: "human" });
+
+  const record = readRunRecord(runId);
+  assert.equal(record.questions.length, 2);
+  assert.equal(record.metrics?.escalations, 2);
+});
+
+test("an agent question the auto-answer loop escalates to the human queue counts once", async () => {
+  __setDriverForTest(new MetricsDriver("agent-question"));
+  const { run_id: runId } = (await startRun({
+    idea: "agent escalation",
+    defaults: { mode: "agent", free_text_default: null },
+  })) as { run_id: string };
+
+  let record = readRunRecord(runId);
+  assert.equal(record.questions[0]?.suggested_channel, "agent");
+  assert.equal(record.questions[0]?.channel, "human");
+  assert.equal(record.metrics?.escalations, 1);
+
+  getQuestions({ run_id: runId, channel: "human" });
+  record = readRunRecord(runId);
+  assert.equal(record.metrics?.escalations, 1);
+});
+
+test("driver turns that report a route record the run's lane", async () => {
+  __setDriverForTest(new MetricsDriver("human-question", { cli: "opencode", model: "openai/gpt-5" }));
+  const { run_id: runId } = (await startRun({ idea: "lane capture" })) as { run_id: string };
+
+  assert.equal(readRunRecord(runId).metrics?.lane, "opencode:openai/gpt-5");
 });
 
 test("complete runs finalize elapsed metrics", async () => {
@@ -134,7 +189,7 @@ test("getRunStatus surfaces the persisted metrics via the ABI", async () => {
   assert.equal(res.status, "waiting_on_human");
   assert.ok(res.metrics);
   assert.equal(res.metrics.turns, 1);
-  assert.equal(res.metrics.escalations, 0);
+  assert.equal(res.metrics.escalations, 1);
   assert.equal(res.metrics.driver, "spawn");
   assert.ok(res.metrics.started_at);
 });

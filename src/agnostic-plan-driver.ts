@@ -209,6 +209,10 @@ export class AgnosticPlanDriver implements Driver {
     // The CLI prints one JSON line: {"session_id": "...", "result": "..."}.
     const line = stdout.trim().split("\n").filter(Boolean).pop() ?? "{}";
     const parsed = JSON.parse(line) as { session_id?: string | null; result?: string };
-    return { session_id: parsed.session_id ?? "", raw_result: parsed.result ?? "" };
+    return {
+      session_id: parsed.session_id ?? "",
+      raw_result: parsed.result ?? "",
+      route: { cli: this.runtime, model: this.model },
+    };
   }
 }

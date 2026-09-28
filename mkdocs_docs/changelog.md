@@ -4,6 +4,23 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`getMetrics` ABI method** (PANT-906): cross-run planning KPIs from local run records only
+  (no network), overall, by driver and by route lane: run count by status, completion rate, and
+  median/p90 turns, escalations, auto-resolutions and time-to-spec. Also exposed as an MCP tool
+  and as `minerva metrics`. Runs now record their route lane (`metrics.lane`, `"<cli>:<model>"`).
+- **Driver lifecycle telemetry for every driver**: `SpawnDriver` and `SubagentDriver` now emit
+  the same `driver_started`/`driver_succeeded`/`driver_failed` events as `ForkedHiveDriver`.
+  Events carry a `driver` field; `driver_succeeded` carries `lane`.
+
+### Fixed
+
+- **Escalations no longer inflate on polling** (PANT-906): `metrics.escalations` counted every
+  `getQuestions(channel: "human")` call that returned questions, so polling a parked run counted
+  the same escalation many times. Each human-channel question now counts once, when it is parked
+  on the human queue (stamped `escalated_at`); `getQuestions` is read-only.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

@@ -5,6 +5,7 @@ import { getRunStatus, listRuns, isUuidShaped } from "./run-manager.ts";
 import { startRun, getQuestions, submitAnswers } from "./kickoff-engine.ts";
 import { getOutput } from "./output-emitter.ts";
 import { abortRun } from "./cleanup-ledger.ts";
+import { getMetrics } from "./metrics-summary.ts";
 
 export interface Envelope {
   method: string;
@@ -30,6 +31,7 @@ const handlers: Record<string, Handler> = {
   submitAnswers,
   getOutput,
   abortRun,
+  getMetrics,
 };
 
 // validate-run-id-uuid-shape story: the methods whose params carry a run_id that eventually

@@ -136,6 +136,15 @@ const TOOLS: Tool[] = [
       required: ["run_id"],
     },
   },
+  {
+    name: "getMetrics",
+    description:
+      "Summarize planning KPIs across every local run: run count by status, completion rate " +
+      "(complete / finished runs), and median/p90 turns, escalations, auto-resolutions and " +
+      "time-to-spec -- overall, by driver, and by route lane. Read-only; reads local run records " +
+      "only, never the network.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 export function createServer(): Server {

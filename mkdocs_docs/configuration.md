@@ -12,6 +12,7 @@
 | `MINERVA_PLAN_DEFAULTS_MODE` | Quick mode switch: `off`, `agent`, or `auto` | `off` |
 | `MINERVA_HIVE_PLUGIN_DIR` | Path to a local `plugin-hive-fork` checkout — required for `MINERVA_DRIVER=forked` until plugin-hive#341 merges | unset |
 | `MINERVA_ALLOWED_TARGET_REPOS` | Comma-separated list of allowed `target_repo` values (slugs and/or absolute paths). Unset = no restriction. | unset |
+| `MINERVA_GIT_CLONE_PROTOCOL` | How a bare `owner/repo` `target_repo` slug is cloned: `https` (`https://github.com/<slug>.git`) or `ssh` (`git@github.com:<slug>.git`). Explicit URLs are always used as given. | `https` |
 | `MINERVA_FALLBACK_CLI` | Fallback CLI command if Heimdall routing fails | unset |
 | `MINERVA_FALLBACK_MODEL` | Fallback model if Heimdall routing fails (requires `MINERVA_FALLBACK_CLI`) | unset |
 

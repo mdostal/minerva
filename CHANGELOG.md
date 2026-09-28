@@ -33,6 +33,11 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Target repos clone over https by default** (PANT-902): a bare `owner/repo` `target_repo` slug
+  is now cloned from `https://github.com/<slug>.git` instead of `git@github.com:<slug>.git`, which
+  failed with "Host key verification failed" in runner containers. Set
+  `MINERVA_GIT_CLONE_PROTOCOL=ssh` to keep ssh. Explicit URLs are used as given, and a clone failure
+  now names the URL and the variable.
 - **Run-record races** (PANT-904): `run.yaml` is written atomically (temp file in the same
   directory, fsync, rename), every read-modify-write holds a per-run lockfile (`run.lock`,
   broken after `MINERVA_RUN_LOCK_STALE_MS`, default 10s), and `complete`/`aborted` are sticky. An

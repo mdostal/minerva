@@ -33,6 +33,11 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Run-record races** (PANT-904): `run.yaml` is written atomically (temp file in the same
+  directory, fsync, rename), every read-modify-write holds a per-run lockfile (`run.lock`,
+  broken after `MINERVA_RUN_LOCK_STALE_MS`, default 10s), and `complete`/`aborted` are sticky. An
+  `abortRun` that lands while a turn is in flight now stays `aborted`, and concurrent ABI calls
+  no longer lose each other's fields or metrics counts.
 - **Stale worktree base**: `startRun` now fetches and fast-forwards `origin/dev` in the target repo
   before cutting the run's worktree (non-fatal if offline or diverged).
 - **Docs drift** (PANT-907): the ABI reference, quickstart, architecture page, README and VISION

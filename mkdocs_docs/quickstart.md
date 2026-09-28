@@ -31,7 +31,7 @@ echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
 ```
 
 ```json
-{"result":{"abi_version":"1.0.0","methods":["capabilities","startRun",...]}}
+{"result":{"abi_version":"1.0.0"}}
 ```
 
 ### 2. Start a run
@@ -98,16 +98,17 @@ Answer pending questions to advance the run:
 echo '{"method":"submitAnswers","params":{
   "run_id":"<run_id>",
   "channel":"human",
-  "answers":[{"id":"q-001","answer":"Required for all users"}]
+  "answers":[{"question_id":"q-001","answer":"Required for all users"}]
 }}' | npx tsx bin/minerva.ts
 ```
 
 ```json
-{"result":{}}
+{"result":{"result":{}}}
 ```
 
-`submitAnswers` is the **only** method that advances a run. Repeat steps 3–4 until the run
-reaches `complete`.
+`submitAnswers` is the **only** method that advances a run past a surfaced question (routine
+gates are auto-answered in-process from plan defaults during the call). Repeat steps 3–4 until
+the run reaches `complete`.
 
 ### 5. Check run status
 

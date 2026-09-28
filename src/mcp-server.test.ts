@@ -61,12 +61,13 @@ after(async () => {
   if (previousSeedRepo) process.env.MINERVA_SEED_REPO = previousSeedRepo; else delete process.env.MINERVA_SEED_REPO;
 });
 
-test("listTools returns all 8 ABI methods as real MCP tools with names + descriptions + schemas", async () => {
+test("listTools returns all 9 ABI methods as real MCP tools with names + descriptions + schemas", async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
     "abortRun",
     "capabilities",
+    "getMetrics",
     "getOutput",
     "getQuestions",
     "getRunStatus",

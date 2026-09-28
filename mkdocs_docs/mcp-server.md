@@ -64,14 +64,18 @@ Once wired, the following tools are available to your agent:
 
 | Tool | ABI method |
 |------|-----------|
-| `minerva_capabilities` | `capabilities` |
-| `minerva_start_run` | `startRun` |
-| `minerva_get_run_status` | `getRunStatus` |
-| `minerva_list_runs` | `listRuns` |
-| `minerva_get_questions` | `getQuestions` |
-| `minerva_submit_answers` | `submitAnswers` |
-| `minerva_get_output` | `getOutput` |
-| `minerva_abort_run` | `abortRun` |
+| `capabilities` | `capabilities` |
+| `startRun` | `startRun` |
+| `getRunStatus` | `getRunStatus` |
+| `listRuns` | `listRuns` |
+| `getQuestions` | `getQuestions` |
+| `submitAnswers` | `submitAnswers` |
+| `getOutput` | `getOutput` |
+| `abortRun` | `abortRun` |
+| `getMetrics` | `getMetrics` |
+
+Tool names are the ABI method names verbatim (`src/mcp-server.ts`); your harness may prefix them
+with the server name, e.g. `mcp__minerva__startRun` in Claude Code.
 
 Tool descriptions carry the no-autonomous-progress contract and agent/human channel semantics
 so your calling agent understands the interaction pattern from the tool descriptions alone.

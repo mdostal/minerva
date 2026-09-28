@@ -21,10 +21,8 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
+import { resolvePantheonCoreApiUrl } from "./pantheon-core-api.ts";
 
-function getPantheonCoreApiUrl(): string | null {
-  return process.env.MINERVA_PANTHEON_CORE_API_URL ?? process.env.PANTHEON_CORE_API_URL ?? null;
-}
 const ROUTE_TIMEOUT_MS = Number(process.env.MINERVA_PLAN_ROUTE_TIMEOUT_MS ?? 2000);
 const TURN_TIMEOUT_MS = Number(process.env.MINERVA_TURN_TIMEOUT_MS ?? 600_000);
 
@@ -97,7 +95,7 @@ function opencodeAvailable(): boolean {
  * error, a non-200, or a malformed body yields null (→ claude fallback upstream).
  */
 export async function resolvePlanningRoute(): Promise<PlanningRoute | null> {
-  const baseUrl = getPantheonCoreApiUrl();
+  const baseUrl = resolvePantheonCoreApiUrl();
   if (!baseUrl) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ROUTE_TIMEOUT_MS);
@@ -209,6 +207,10 @@ export class AgnosticPlanDriver implements Driver {
     // The CLI prints one JSON line: {"session_id": "...", "result": "..."}.
     const line = stdout.trim().split("\n").filter(Boolean).pop() ?? "{}";
     const parsed = JSON.parse(line) as { session_id?: string | null; result?: string };
-    return { session_id: parsed.session_id ?? "", raw_result: parsed.result ?? "" };
+    return {
+      session_id: parsed.session_id ?? "",
+      raw_result: parsed.result ?? "",
+      route: { cli: this.runtime, model: this.model },
+    };
   }
 }

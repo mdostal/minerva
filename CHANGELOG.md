@@ -18,6 +18,12 @@ All notable changes to Minerva are documented in this file.
 
 ### Changed
 
+- **Route selection accepts core-api's live `chosen_lane` shape** (PANT-901): `/api/route/select`
+  returns `{decision_id, chosen_lane, ...}` with no `cli`/`model`. The CLI now comes from the lane
+  id's runtime prefix (`claude@ffevents` → `claude`, `gemini` → `opencode`) and the model from the
+  response or `MINERVA_DRIVE_MODEL`. An unmapped lane still goes to the
+  `MINERVA_FALLBACK_CLI`/`MINERVA_FALLBACK_MODEL` fallback or fails with `HeimdallRouteError`. The
+  latest `decision_id`, `chosen_lane` and `experiment_arm` are recorded in `getRunStatus` metrics.
 - **Sibling-god calls go through Pantheon core-api** (PANT-255): `plan-runner.ts` no longer shells
   out to the Multica CLI; it uses core-api's `/api/backlog/issues` endpoints via
   `PANTHEON_CORE_API_URL`. `driver.ts` and `agnostic-plan-driver.ts` no longer call Heimdall over

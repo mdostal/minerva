@@ -67,7 +67,18 @@ export interface Question {
   confidence: number;
   reason: string;
   channel: Channel;
-  status: "pending" | "answered";
+  // "superseded" (PANT-923): an optional question of an envelope question set that was still
+  // unanswered when the set closed (every required sibling answered, so the driver moved on).
+  // It can no longer be answered, so it leaves the pending view without claiming an answer.
+  status: "pending" | "answered" | "superseded";
+  // Open question set (PANT-923): every question Minerva can know without driving another turn
+  // shares one set_id. ForkedHiveDriver's envelope questions use the envelope id; a prose
+  // driver's single question is a set of 1 whose set_id is its own id. Optional so run records
+  // written before this field existed still parse.
+  set_id?: string;
+  // Whether the envelope marks this question required (its answer gates the set's closure).
+  // Only envelope-sourced questions carry it; prose questions leave it undefined.
+  required?: boolean;
   // Optional -- only present for Driver implementations whose upstream source carries this
   // shape (currently: ForkedHiveDriver's envelope-sourced questions, per the
   // headless-question-protocol's question-envelope-schema.md). SpawnDriver/SubagentDriver never

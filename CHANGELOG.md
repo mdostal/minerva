@@ -18,6 +18,12 @@ All notable changes to Minerva are documented in this file.
 
 ### Changed
 
+- **A parked run records its whole open question set** (PANT-923): `ForkedHiveDriver` surfaces
+  every unanswered question of the pending envelope at once, and the run parks all of them with a
+  shared `set_id` and the envelope's `required` flags. Answers are written onto the answered
+  question's own `qid`. Optional questions left when the envelope closes become `superseded`.
+  Prose drivers still park one question per turn (`set_id` = its own id). Both fields are
+  optional, so older run records still load.
 - **Route selection accepts core-api's live `chosen_lane` shape** (PANT-901): `/api/route/select`
   returns `{decision_id, chosen_lane, ...}` with no `cli`/`model`. The CLI now comes from the lane
   id's runtime prefix (`claude@ffevents` → `claude`, `gemini` → `opencode`) and the model from the

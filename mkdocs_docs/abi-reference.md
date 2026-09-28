@@ -202,10 +202,19 @@ Get pending questions for a run, filtered by channel.
 | `suggested_channel` | `"agent"` \| `"human"` | Escalation classifier's suggestion (not enforced) |
 | `confidence` | number | 0.0–1.0 — classifier's confidence in `suggested_channel` |
 | `reason` | string | Why the classifier suggested this channel |
-| `status` | `"pending"` \| `"answered"` | Whether this question has been answered |
+| `status` | `"pending"` \| `"answered"` \| `"superseded"` | `superseded`: an optional envelope question left unanswered when its set closed (never returned by `getQuestions`) |
 | `kind` | string? | Optional: `"single-select"`, `"multi-select"`, `"free-text"` |
 | `options` | string[] \| null? | Available options (present for `single-select`/`multi-select` kinds) |
 | `qid` | string? | Envelope question id — used for `answers` matching in plan defaults |
+| `set_id` | string? | Open question set this question belongs to. Forked-driver envelope questions share the envelope id; a prose driver's question is a set of 1 (`set_id` = its own `id`). Absent on records written before this field |
+| `required` | boolean? | Envelope questions only: whether the envelope needs an answer to this question before it closes |
+
+!!! note "Open question sets"
+    When a run parks, it records every question Minerva can know without driving another turn.
+    A forked-driver envelope with several questions parks all of them at once, sharing one
+    `set_id`. Answering one of them (via `submitAnswers`) does not drive a new turn until every
+    `required` question of the set is answered. Prose drivers (spawn/subagent/agnostic) still
+    park one question at a time, because each later gate depends on the earlier answer.
 
 !!! note "Channel semantics"
     `getQuestions` and `submitAnswers` gate on the **enforced** `channel`, never on

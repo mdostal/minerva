@@ -322,6 +322,11 @@ export interface DriverInput {
   cwd: string;
   sessionId: string | null;
   prompt: string;
+  // PANT-923: the envelope qid of the question this prompt answers, when the run record has one.
+  // A parked envelope set can hold several pending questions, so the answer must be written onto
+  // the one actually answered rather than the one the session pointer happens to name. Drivers
+  // without envelope questions ignore it.
+  qid?: string;
 }
 
 export interface DriverResult {
@@ -1030,10 +1035,13 @@ export class ForkedHiveDriver implements Driver {
       // "never guess, but degrade gracefully" discipline for an odd-but-not-catastrophic input.
       return this.dispatchFresh(input.cwd, input.prompt);
     }
-    return this.answerAndContinue(input.cwd, pointer, input.prompt);
+    // PANT-923: answer the question the caller actually answered. The pointer names only the
+    // first question of the surfaced set; any sibling of that envelope may be the one answered.
+    const target = input.qid ? { ...pointer, qid: input.qid } : pointer;
+    return this.answerAndContinue(input.cwd, target, input.prompt);
   }
 
-  private async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
+  protected async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(
@@ -1059,7 +1067,7 @@ export class ForkedHiveDriver implements Driver {
     return this.dispatchFresh(cwd, pointer.skillPrompt);
   }
 
-  private async surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult> {
+  protected async surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult> {
     const pending = listEnvelopes(cwd).find((e) => e.status === "pending");
     if (!pending) {
       // Zero-envelopes observability: this placeholder fires both when a run legitimately
@@ -1092,11 +1100,12 @@ export class ForkedHiveDriver implements Driver {
       };
     }
 
-    // Surface the next unanswered question in encounter order -- required or optional. Only
-    // required questions gate the closure invariant, but any unanswered question (including an
-    // optional one encountered before all required ones are done) is still surfaced rather than
-    // silently skipped, so no information the skill asked for is ever lost.
-    const next = pending.questions.find((q) => q.answer === null || q.answer === undefined);
+    // Surface every unanswered question in encounter order -- required or optional -- as one
+    // open question set (PANT-923). Only required questions gate the closure invariant, but any
+    // unanswered question is still surfaced rather than silently skipped, so no information the
+    // skill asked for is ever lost. All of them are knowable now with no new dispatch.
+    const unanswered = pending.questions.filter((q) => q.answer === null || q.answer === undefined);
+    const next = unanswered[0];
     if (!next) {
       // Defensive: every question already has an answer, yet the envelope is still `pending`.
       // Should not happen if writeAnswerOntoEnvelope's own closure check is correct, but this
@@ -1113,21 +1122,40 @@ export class ForkedHiveDriver implements Driver {
       };
     }
 
-    const classification = await this.classify(cwd, next.text);
+    const questions = [];
+    for (const q of unanswered) {
+      const classification = await this.classify(cwd, q.text);
+      questions.push({
+        text: q.text,
+        kind: q.kind,
+        options: q.options,
+        qid: q.qid,
+        required: q.required,
+        suggested_channel: classification.suggested_channel,
+        confidence: classification.confidence,
+        reason: classification.reason,
+      });
+    }
+    const first = questions[0]!;
+    // The pointer names the first question; the engine passes DriverInput.qid when a sibling is
+    // the one answered. The top-level question/qid fields mirror the first entry so a parser that
+    // predates `questions` still reads one well-formed question.
     const pointer: EnvelopePointer = { envelopePath: pending.path, qid: next.qid, skillPrompt };
     const rawResult = JSON.stringify({
-      question: next.text,
-      suggested_channel: classification.suggested_channel,
-      confidence: classification.confidence,
-      reason: classification.reason,
-      kind: next.kind,
-      options: next.options,
-      qid: next.qid,
+      question: first.text,
+      suggested_channel: first.suggested_channel,
+      confidence: first.confidence,
+      reason: first.reason,
+      kind: first.kind,
+      options: first.options,
+      qid: first.qid,
+      set_id: pending.id,
+      questions,
     });
     return { session_id: encodeEnvelopePointer(pointer), raw_result: rawResult };
   }
 
-  private async classify(cwd: string, questionText: string) {
+  protected async classify(cwd: string, questionText: string) {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(

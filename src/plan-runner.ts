@@ -23,8 +23,9 @@ import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pant
 export interface PlanRequest {
   idea: string;
   targetRepo?: string;
-  mode?: PlanDefaultsMode; // default "auto" -- fully unattended; the whole point of this entry
+  mode?: PlanDefaultsMode; // default "auto" (fully unattended) unless defaultsFile sets its own
   defaults?: Record<string, unknown>; // extra per-run plan-defaults overrides (merged over mode)
+  defaultsFile?: string; // plan-defaults YAML/JSON file of known operator answers (PANT-996)
   ticketId?: string; // origin Multica ticket, for linkage when filing stories back
 }
 
@@ -41,9 +42,15 @@ export interface PlanResult {
 // gate it parked on). Because startRun runs the pre-baked-defaults auto-answer loop synchronously
 // before it returns, by the time it resolves the run is already either complete or parked on a
 // question with no resolvable default -- there is no polling/waiting needed here. mode defaults to
-// "auto" so a routed ticket plans fully unattended.
+// "auto" so a routed ticket plans fully unattended -- except when a defaultsFile is given and no
+// explicit mode is, in which case the file's own mode stands (an inline mode would override it).
 export async function runHeadlessPlan(req: PlanRequest): Promise<PlanResult> {
-  const defaults = { mode: req.mode ?? "auto", ...(req.defaults ?? {}) };
+  const mode = req.mode ?? (req.defaultsFile ? undefined : "auto");
+  const defaults = {
+    ...(mode ? { mode } : {}),
+    ...(req.defaultsFile ? { file: req.defaultsFile } : {}),
+    ...(req.defaults ?? {}),
+  };
   const { run_id } = (await startRun({
     idea: req.idea,
     ...(req.targetRepo ? { target_repo: req.targetRepo } : {}),

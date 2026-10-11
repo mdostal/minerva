@@ -42,14 +42,18 @@ export type PlanDefaultsMode = "off" | "agent" | "auto";
 //   "recommended" — prefer an option whose text looks like the safe/recommended/affirmative
 //                    choice (recommend/default/yes/proceed/…); fall back to the first option.
 //   "first"       — always take the first listed option.
-export type SelectStrategy = "recommended" | "first";
+//   "park"        — never pick an option on the operator's behalf; a select question with no
+//                    explicit `answers` match parks (the "answer only what I pre-decided" posture
+//                    an operator-defaults file uses).
+export type SelectStrategy = "recommended" | "first" | "park";
 
 // An operator-pre-decided answer to a specific gate question, matched by the envelope's own
-// `qid` (exact) or by a case-insensitive substring of the question text. First match wins, so
-// per-run rules (checked before file/built-in rules) override broader ones.
+// `qid` (exact) or by a case-insensitive substring of the question text (`match` may list several
+// substrings; any one hitting is a match). First match wins, so per-run rules (checked before
+// file/built-in rules) override broader ones.
 export interface AnswerRule {
   qid?: string;
-  match?: string;
+  match?: string | string[];
   answer: string | string[];
 }
 
@@ -100,10 +104,10 @@ function validateMode(raw: unknown, source: string): PlanDefaultsMode {
 }
 
 function validateSelectStrategy(raw: unknown, source: string): SelectStrategy {
-  if (raw === "recommended" || raw === "first") return raw;
+  if (raw === "recommended" || raw === "first" || raw === "park") return raw;
   throw new MinervaError(
     "VALIDATION_FAILED",
-    `Invalid select_strategy "${String(raw)}" from ${source} -- expected "recommended" or "first"`,
+    `Invalid select_strategy "${String(raw)}" from ${source} -- expected "recommended", "first", or "park"`,
   );
 }
 
@@ -127,8 +131,15 @@ function validateAnswerRules(raw: unknown, source: string): AnswerRule[] {
     if (rule.qid !== undefined && typeof rule.qid !== "string") {
       throw new MinervaError("VALIDATION_FAILED", `plan-defaults answers[${i}].qid from ${source} must be a string`);
     }
-    if (rule.match !== undefined && typeof rule.match !== "string") {
-      throw new MinervaError("VALIDATION_FAILED", `plan-defaults answers[${i}].match from ${source} must be a string`);
+    if (
+      rule.match !== undefined &&
+      typeof rule.match !== "string" &&
+      !(isStringArray(rule.match) && rule.match.length > 0)
+    ) {
+      throw new MinervaError(
+        "VALIDATION_FAILED",
+        `plan-defaults answers[${i}].match from ${source} must be a string or a non-empty string[]`,
+      );
     }
     if (rule.qid === undefined && rule.match === undefined) {
       throw new MinervaError(
@@ -194,14 +205,14 @@ function mergeLayer(base: PlanDefaults, overlay: unknown, source: string): PlanD
   return merged;
 }
 
-function readConfigFile(path: string): unknown {
+function readConfigFile(path: string, label: string): unknown {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch (e) {
     throw new MinervaError(
       "VALIDATION_FAILED",
-      `Could not read MINERVA_PLAN_DEFAULTS file ${path}: ${e instanceof Error ? e.message : String(e)}`,
+      `Could not read ${label} file ${path}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
   try {
@@ -210,7 +221,7 @@ function readConfigFile(path: string): unknown {
   } catch (e) {
     throw new MinervaError(
       "VALIDATION_FAILED",
-      `Could not parse MINERVA_PLAN_DEFAULTS file ${path}: ${e instanceof Error ? e.message : String(e)}`,
+      `Could not parse ${label} file ${path}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
 }
@@ -223,22 +234,25 @@ function warnInvalidConfigFile(path: string, e: unknown): void {
   console.warn(`[minerva] Ignoring plan-defaults config file ${path}: ${warningMessage(e)}`);
 }
 
-// Resolve the effective config from three layers, lowest-to-highest priority:
+// Resolve the effective config from these layers, lowest-to-highest priority:
 //   1. built-in defaults (mode: off)
 //   2. MINERVA_PLAN_DEFAULTS  — path to a YAML/JSON config file (per-deployment)
 //   3. MINERVA_PLAN_DEFAULTS_MODE — a bare mode override (per-deployment quick switch)
-//   4. perRun — the `defaults` object passed to startRun (per-run, highest priority)
+//   4. perRun.file — path to a YAML/JSON config file for THIS run (e.g. an operator-defaults
+//      file of known answers; see config/operator-defaults.yaml)
+//   5. perRun — the rest of the `defaults` object passed to startRun (per-run, highest priority)
 // Later layers override earlier ones field-by-field; `answers` accumulate (higher priority
-// first). The optional file layer is best-effort: missing, unreadable, unparsable, or schema-
+// first). The optional env file layer is best-effort: missing, unreadable, unparsable, or schema-
 // invalid files warn and are ignored so Minerva can initialize safely with the built-in empty
-// defaults. Direct env/per-run overrides still fail loudly because they are explicit inputs.
+// defaults. Direct env/per-run overrides (including perRun.file) still fail loudly because they
+// are explicit inputs.
 export function loadPlanDefaults(perRun?: unknown): PlanDefaults {
   let cfg = { ...BUILTIN_PLAN_DEFAULTS };
 
   const filePath = process.env.MINERVA_PLAN_DEFAULTS;
   if (filePath) {
     try {
-      cfg = mergeLayer(cfg, readConfigFile(filePath), `MINERVA_PLAN_DEFAULTS (${filePath})`);
+      cfg = mergeLayer(cfg, readConfigFile(filePath, "MINERVA_PLAN_DEFAULTS"), `MINERVA_PLAN_DEFAULTS (${filePath})`);
     } catch (e) {
       warnInvalidConfigFile(filePath, e);
     }
@@ -247,7 +261,18 @@ export function loadPlanDefaults(perRun?: unknown): PlanDefaults {
   const modeEnv = process.env.MINERVA_PLAN_DEFAULTS_MODE;
   if (modeEnv) cfg = mergeLayer(cfg, { mode: modeEnv }, "MINERVA_PLAN_DEFAULTS_MODE");
 
-  if (perRun !== undefined) cfg = mergeLayer(cfg, perRun, "startRun params.defaults");
+  if (perRun !== undefined && perRun !== null && typeof perRun === "object" && !Array.isArray(perRun)) {
+    const { file, ...inline } = perRun as Record<string, unknown>;
+    if (file !== undefined) {
+      if (typeof file !== "string" || file.length === 0) {
+        throw new MinervaError("VALIDATION_FAILED", "startRun params.defaults.file must be a non-empty string path");
+      }
+      cfg = mergeLayer(cfg, readConfigFile(file, "startRun params.defaults"), `startRun params.defaults.file (${file})`);
+    }
+    cfg = mergeLayer(cfg, inline, "startRun params.defaults");
+  } else if (perRun !== undefined) {
+    cfg = mergeLayer(cfg, perRun, "startRun params.defaults");
+  }
 
   return cfg;
 }
@@ -336,7 +361,10 @@ export function resolveDefaultAnswer(
   // 2. Explicit operator-pre-decided answers win over all remaining defaults.
   for (const rule of d.answers) {
     if (rule.qid !== undefined && q.qid !== undefined && rule.qid === q.qid) return rule.answer;
-    if (rule.match !== undefined && lower.includes(rule.match.toLowerCase())) return rule.answer;
+    if (rule.match !== undefined) {
+      const needles = Array.isArray(rule.match) ? rule.match : [rule.match];
+      if (needles.some((m) => lower.includes(m.toLowerCase()))) return rule.answer;
+    }
   }
 
   // 3. Sign-off / approval gate -> affirm.
@@ -350,7 +378,9 @@ export function resolveDefaultAnswer(
     return d.tech_stack;
   }
 
-  // 5. Structured selects -> pick per strategy.
+  // 5. Structured selects -> pick per strategy ("park" = never pick for the operator).
+  const isSelect = (q.kind === "single-select" || q.kind === "multi-select") && !!q.options && q.options.length > 0;
+  if (isSelect && d.select_strategy === "park") return null;
   if (q.kind === "single-select" && q.options && q.options.length > 0) {
     return pickOption(q.options, d.select_strategy);
   }

@@ -6,6 +6,13 @@ All notable changes to Minerva are documented in this file.
 
 ### Added
 
+- **Operator defaults file for headless planning** (PANT-996): `config/operator-defaults.yaml`
+  records the operator's standing answers (git flow, verification policy, CI is never a gate,
+  cross-god boundaries). A planning run takes it with `startRun` `params.defaults.file` or
+  `minerva-plan --defaults-file`, answers those questions without parking, and still parks on any
+  question the file doesn't cover. Plan-defaults also gained `select_strategy: park` (never pick
+  a select option for the operator) and list-valued `answers[].match`. The format is documented in
+  `mkdocs_docs/configuration.md`.
 - **MkDocs documentation site** (PANT-188): a full MkDocs Material reference site under
   `mkdocs_docs/`, a custom landing page at `site/index.html`, and a two-zone GitHub Pages deploy
   workflow that only ever writes the `/docs/` subdirectory of `gh-pages`.

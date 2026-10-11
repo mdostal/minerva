@@ -59,7 +59,7 @@ loop.
 |-------|------|----------|-------------|
 | `idea` | string | yes | The idea or feature brief to plan |
 | `target_repo` | string | no | Absolute path to an existing local repo. Minerva cuts a git worktree off that repo's `dev` branch. If absent, see *Workspace allocation* below. |
-| `defaults` | object | no | Per-run plan-defaults override (see [Configuration](configuration.md)) |
+| `defaults` | object | no | Per-run plan-defaults override. `defaults.file` names a YAML/JSON defaults file (e.g. `config/operator-defaults.yaml`) loaded under the inline fields (see [Configuration](configuration.md#operator-defaults-file)) |
 
 Any other params are ignored.
 

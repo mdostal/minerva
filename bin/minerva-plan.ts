@@ -4,7 +4,7 @@
 // Multica agent it routes an un-planned ticket to) invokes non-interactively:
 //
 //   minerva-plan --ticket <multica-issue-id> [--target-repo <path>] [--file-to-multica] [--commit] [--push]
-//   minerva-plan --idea-brief <path>          [--mode auto|agent|off] [--json]
+//   minerva-plan --idea-brief <path>          [--mode auto|agent|off] [--defaults-file <path>] [--json]
 //   minerva-plan --idea "<text>"              [--target-repo <path>]  [--json]
 //   minerva-plan --promote <issue_id>[,<issue_id>...] [--json]
 //
@@ -32,7 +32,8 @@ interface Args {
   ideaBrief?: string;
   idea?: string;
   targetRepo?: string;
-  mode: PlanDefaultsMode;
+  mode?: PlanDefaultsMode;
+  defaultsFile?: string;
   project?: string;
   fileToMultica: boolean;
   park: boolean;
@@ -43,7 +44,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { mode: "auto", fileToMultica: false, park: false, commit: false, push: false, json: false };
+  const a: Args = { fileToMultica: false, park: false, commit: false, push: false, json: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const next = (): string => {
@@ -57,6 +58,7 @@ function parseArgs(argv: string[]): Args {
       case "--idea": a.idea = next(); break;
       case "--target-repo": a.targetRepo = next(); break;
       case "--mode": a.mode = next() as PlanDefaultsMode; break;
+      case "--defaults-file": a.defaultsFile = next(); break;
       case "--project": a.project = next(); break;
       case "--file-to-multica": a.fileToMultica = true; break;
       case "--park": a.park = true; break;
@@ -80,7 +82,10 @@ const HELP = `minerva-plan — headless "plan this ticket/idea" entry (Auriga-in
   --idea-brief <path>    plan an idea-brief file
   --idea "<text>"        plan a literal idea string
   --target-repo <path>   plan against an existing repo (worktree off dev); omit = greenfield
-  --mode <auto|agent|off>  pre-baked-defaults mode (default: auto = fully unattended)
+  --mode <auto|agent|off>  pre-baked-defaults mode (default: auto = fully unattended, or the
+                         --defaults-file's own mode when that file is given)
+  --defaults-file <path> plan-defaults YAML/JSON of known operator answers, e.g.
+                         config/operator-defaults.yaml; uncovered questions still park
   --project <id>         Multica project id for filed story sub-issues
   --file-to-multica      file decomposed stories back to Multica as sub-issues of the ticket
   --park                 with --file-to-multica: file the stories in backlog (gated), not todo
@@ -170,7 +175,8 @@ async function main(): Promise<void> {
   const result = await runHeadlessPlan({
     idea,
     ...(targetRepoPath ? { targetRepo: targetRepoPath } : {}),
-    mode: args.mode,
+    ...(args.mode ? { mode: args.mode } : {}),
+    ...(args.defaultsFile ? { defaultsFile: args.defaultsFile } : {}),
     ...(args.ticket ? { ticketId: args.ticket } : {}),
   });
 

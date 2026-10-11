@@ -109,6 +109,28 @@ test("runHeadlessPlan: parks (status waiting_on_human, epic null) when a gate ha
   assert.equal(result.pending_questions.length, 1);
 });
 
+test("runHeadlessPlan: with defaultsFile and no mode, the file's own mode stands (PANT-996)", async () => {
+  // The file sets mode "off". If runHeadlessPlan injected its usual inline mode "auto" over it, the
+  // routine select gates would be auto-answered and the run would complete; it must park instead.
+  const dir = mkdtempSync(join(tmpdir(), "minerva-planrunner-defaults-file-"));
+  const file = join(dir, "operator.yaml");
+  writeFileSync(file, "mode: \"off\"\n");
+  try {
+    const driver = new PlanScriptedDriver(2);
+    __setDriverForTest(driver);
+    const parked = await runHeadlessPlan({ idea: "a file-moded idea", defaultsFile: file });
+    assert.equal(parked.status, "waiting_on_human");
+    assert.equal(driver.turns, 1);
+
+    // An explicit mode still overrides the file.
+    __setDriverForTest(new PlanScriptedDriver(2));
+    const done = await runHeadlessPlan({ idea: "a mode-overridden idea", defaultsFile: file, mode: "auto" });
+    assert.equal(done.status, "complete");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Real headless plugin-hive /plan runs write the FLAT layout: one `.pHive/epics/NN-name.yaml` per
 // epic with an embedded `stories:` list, and a single run produces MANY epics. This driver
 // reproduces that exact shape (2 flat epics, 2 + 3 stories) to prove runHeadlessPlan detects flat

@@ -59,6 +59,9 @@ run as a hosted service.
   leans on a caller answering interactively; the next step is fully headless planning where common
   questions carry sensible pre-baked defaults so a run can complete without a human in the loop when
   nothing genuinely needs a decision — only true `human`-channel questions escalate.
+  *First step shipped (PANT-996):* a run can take an operator defaults file
+  (`config/operator-defaults.yaml`) of known answers (git flow, verification, CI, boundaries),
+  so those questions no longer park; anything the file doesn't cover still does.
 - **Land `ForkedHiveDriver` for real.** Consume plugin-hive-fork's structured headless-question
   protocol directly (no spawn-and-parse), turning the stub into a first-class driver.
 - **Wire the decision surface.** Connect the `human`-channel questions to the live Delphi / Consus

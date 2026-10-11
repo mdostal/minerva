@@ -173,6 +173,14 @@ MINERVA_PLAN_DEFAULTS_MODE=agent \
   | npx tsx bin/minerva.ts
 ```
 
+To answer only the operator's known questions (git flow, verification, CI, boundaries) and park
+everything else, hand the run the shipped operator defaults file:
+
+```bash
+echo '{"method":"startRun","params":{"idea":"add metrics to the API","defaults":{"file":"config/operator-defaults.yaml"}}}' \
+  | npx tsx bin/minerva.ts
+```
+
 See [Configuration](configuration.md) for full details on pre-baked defaults.
 
 ## Next steps

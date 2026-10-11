@@ -22,7 +22,8 @@ skip_sign_off: true
 tech_stack: TypeScript / Node.js
 
 # How to pick from a single/multi-select option list: "recommended" (prefer a recommended/
-# affirmative-looking option, else the first) or "first".
+# affirmative-looking option, else the first), "first", or "park" (never pick; the select parks
+# unless an `answers` rule covers it).
 select_strategy: recommended
 
 # Default answer for free-text questions (and prose questions with no structured kind). `{idea}`
@@ -32,10 +33,13 @@ free_text_default: >-
   defaults. Do not block on this — pick the most reasonable option and continue.
 
 # Operator-pre-decided answers to specific gate questions. Matched by the envelope `qid` (exact)
-# or a case-insensitive substring of the question text; first match wins, and these override the
-# generic rules above regardless of channel/mode. This is the "I already decided this" override.
+# or a case-insensitive substring of the question text (`match` may also be a list of substrings);
+# first match wins, and these override the generic rules above. In `agent` mode they are ignored
+# on human-channel questions; use `auto` for that. This is the "I already decided this" override.
+# For the operator's own standing answers (git flow, verification, CI, boundaries) see
+# config/operator-defaults.yaml.
 answers:
-  - match: "metrics"
+  - match: ["metrics", "telemetry"]
     answer: "Yes, enable metrics."
   - match: "database"
     answer: "Postgres"

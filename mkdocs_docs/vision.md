@@ -63,14 +63,8 @@ service — it's a subprocess driven one JSON call at a time.
 
 ## Good first contributions
 
-- **Add a `--help` / usage banner** to `bin/minerva.ts`.
-- **Expand `docs/abi.md`** with an ABI reference listing every method, its params, and its result
-  shape (much of it is already implied by `src/dispatch.ts`).
 - **Expand pre-baked question defaults** so more of the common kickoff/plan questions resolve on
   the `agent` channel without escalating.
-- **Add a smoke-test harness** that exercises the full ABI (`startRun` → `getQuestions` →
-  `submitAnswers` → `getOutput`) end-to-end against a cheap synthetic drive prompt
-  (`MINERVA_TEST_DRIVE_PROMPT`).
 - **Surface a per-run metrics summary** (turns, escalations, driver, elapsed) — a first step
   toward the plan-quality scoring in §③.
 - **Prototype the `ForkedHiveDriver`** against plugin-hive-fork's structured-question protocol

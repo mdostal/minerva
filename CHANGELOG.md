@@ -6,6 +6,12 @@ All notable changes to Minerva are documented in this file.
 
 ### Added
 
+- **ABI smoke harness and `docs/abi.md`** (PANT-995): `tests/e2e/abi-smoke.test.ts` drives the
+  whole public ABI end to end (`startRun` → `getQuestions` → `submitAnswers` → `getOutput`, plus
+  `getRunStatus`, `listRuns`, `abortRun`, `getMetrics` and the error envelopes) through real
+  `bin/minerva.ts` subprocesses, with a scripted stub planner (`tests/e2e/abi-smoke-planner.mjs`)
+  serving the driver turns. `docs/abi.md` is a one-table ABI summary, and the docs-contract test
+  now checks that its method table lists exactly the registered methods.
 - **Operator defaults file for headless planning** (PANT-996): `config/operator-defaults.yaml`
   records the operator's standing answers (git flow, verification policy, CI is never a gate,
   cross-god boundaries). A planning run takes it with `startRun` `params.defaults.file` or

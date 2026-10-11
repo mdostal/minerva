@@ -16,6 +16,10 @@ import { isAnswerArray } from "./kickoff-engine.ts";
 
 const ABI_REFERENCE = join(dirname(fileURLToPath(import.meta.url)), "..", "mkdocs_docs", "abi-reference.md");
 const doc = readFileSync(ABI_REFERENCE, "utf8");
+// PANT-995: docs/abi.md is the one-table summary of the same contract; its method table must
+// list exactly the registered methods too.
+const ABI_SUMMARY = join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "abi.md");
+const summary = readFileSync(ABI_SUMMARY, "utf8");
 
 // Method sections are level-2 headings of the form "## `methodName`".
 function documentedMethods(): string[] {
@@ -47,6 +51,15 @@ test("every method documented in abi-reference.md is registered in dispatch.ts",
   const registered = new Set(registeredMethods());
   const extra = documentedMethods().filter((m) => !registered.has(m));
   assert.deepEqual(extra, [], `methods documented but not registered in dispatch.ts: ${extra.join(", ")}`);
+});
+
+// Method rows of docs/abi.md's table: lines of the form "| `methodName` | ...".
+function summarizedMethods(): string[] {
+  return [...summary.matchAll(/^\| `([A-Za-z]+)` \|/gm)].map((m) => m[1]!);
+}
+
+test("docs/abi.md's method table lists exactly the methods registered in dispatch.ts", () => {
+  assert.deepEqual([...summarizedMethods()].sort(), [...registeredMethods()].sort());
 });
 
 test("the documented submitAnswers example passes isAnswerArray", () => {

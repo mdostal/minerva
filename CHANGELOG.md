@@ -6,6 +6,13 @@ All notable changes to Minerva are documented in this file.
 
 ### Added
 
+- **Operator token on core-api writes** (PANT-1093): `POST /api/route/select` (driver and agnostic
+  planner) and plan-runner's `/api/backlog/issues` writes now send `x-pantheon-operator-token`, so
+  `PANTHEON_REQUIRE_OPERATOR_TOKEN=enforce` no longer 401s every headless plan run at route
+  selection. The token is fetched through core-api's `/api/secrets/inject` onto the shared secrets
+  volume, read, deleted and cached for 60s (`src/operator-token.ts`); a failed refresh keeps the
+  last working token, and an unresolvable one degrades to an unauthenticated request with the
+  reason logged once.
 - **ABI smoke harness and `docs/abi.md`** (PANT-995): `tests/e2e/abi-smoke.test.ts` drives the
   whole public ABI end to end (`startRun` → `getQuestions` → `submitAnswers` → `getOutput`, plus
   `getRunStatus`, `listRuns`, `abortRun`, `getMetrics` and the error envelopes) through real

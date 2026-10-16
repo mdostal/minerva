@@ -41,6 +41,7 @@ import { classificationSchemaArgs, classificationOnlySchemaArgs, extractClassifi
 import { listEnvelopes } from "./envelope-detection.ts";
 import { emitTelemetryEvent } from "./telemetry.ts";
 import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
+import { withOperatorToken } from "./operator-token.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
@@ -280,7 +281,7 @@ export async function resolveRuntimeRoute(fetchImpl: RouteFetch = globalThis.fet
     const reqBody = JSON.stringify({ task_id: randomUUID(), task_type: "planning" });
     const res = await fetchImpl(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: await withOperatorToken({ "content-type": "application/json" }),
       body: reqBody,
       signal: controller.signal,
     });

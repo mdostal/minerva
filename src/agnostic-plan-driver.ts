@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 import { resolvePantheonCoreApiUrl } from "./pantheon-core-api.ts";
+import { withOperatorToken } from "./operator-token.ts";
 
 const ROUTE_TIMEOUT_MS = Number(process.env.MINERVA_PLAN_ROUTE_TIMEOUT_MS ?? 2000);
 const TURN_TIMEOUT_MS = Number(process.env.MINERVA_TURN_TIMEOUT_MS ?? 600_000);
@@ -102,7 +103,7 @@ export async function resolvePlanningRoute(): Promise<PlanningRoute | null> {
   try {
     const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/route/select`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: await withOperatorToken({ "content-type": "application/json" }),
       body: JSON.stringify({ task_id: randomUUID(), task_type: "planning" }),
       signal: controller.signal,
     });

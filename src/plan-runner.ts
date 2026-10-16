@@ -19,6 +19,7 @@ import type { CompletedEpic } from "./output-emitter.ts";
 import type { PlanDefaultsMode } from "./plan-defaults.ts";
 import { parseTargetRepoLine, stampTargetRepo, deriveRepoSlugFromWorkspace } from "./target-repo-signal.ts";
 import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
+import { withOperatorToken } from "./operator-token.ts";
 
 export interface PlanRequest {
   idea: string;
@@ -98,10 +99,11 @@ async function pantheonRequest(method: string, path: string, body?: unknown): Pr
   const baseUrl = resolvePantheonCoreApiUrl();
   if (!baseUrl) throw new Error(PANTHEON_CORE_API_URL_MISSING);
   const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
+  // Writes carry the operator token (PANT-1093); reads don't need it.
+  const headers: Record<string, string> = body !== undefined ? { "content-type": "application/json" } : {};
   const init: { method: string; headers?: Record<string, string>; body?: string } =
-    body !== undefined
-      ? { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
-      : { method };
+    method === "GET" ? { method } : { method, headers: await withOperatorToken(headers) };
+  if (body !== undefined) init.body = JSON.stringify(body);
   const res = await _pantheonFetch(url, init);
   const text = await res.text();
   if (!res.ok) {

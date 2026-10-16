@@ -147,6 +147,8 @@ Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 | `MINERVA_HOME` | Run-state root | `~/.minerva` |
 | `PANTHEON_API_URL` | Pantheon core-api base URL (route select + backlog); exported by the Pantheon runtime | unset |
 | `PANTHEON_CORE_API_URL` / `MINERVA_PANTHEON_CORE_API_URL` | Overrides for the core-api base URL. Precedence: `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` > `PANTHEON_API_URL` | unset |
+| `PANTHEON_SECRETS_SHARED_DIR` | Shared secrets volume Minerva reads the operator token from. Every core-api write (route select, backlog writes) sends `x-pantheon-operator-token`, injected via `POST /api/secrets/inject` and cached for 60s; when it can't be resolved the write goes out without it and the reason is logged once | `/pantheon-secrets` |
+| `MINERVA_OPERATOR_TOKEN_INJECT` | `off` skips the operator-token inject (the test suite sets it so tests never ask a live core-api for a secret) | unset |
 | `MINERVA_GIT_CLONE_PROTOCOL` | Clone protocol for a bare `owner/repo` `target_repo` slug: `https` or `ssh`. Explicit URLs are used as given. | `https` |
 
 ```bash

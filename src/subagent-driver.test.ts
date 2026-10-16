@@ -20,7 +20,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,9 +30,10 @@ import { call, createSeedRepo, testHeimdallRouteUrl, CLAUDE_AUTH_AVAILABLE } fro
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIGKILL_HARNESS = join(__dirname, "subagent-driver-sigkill-harness.ts");
-// Spawn tsx directly (not via `npx tsx`) -- npx's own resolution can interpose an extra process
-// hop, so a SIGKILL sent to the handle `spawn()` returns doesn't necessarily reach the real
-// work process. tsx's local bin is a single-hop node script; killing it kills the real process.
+// Spawn tsx directly (not via `npx tsx`) to avoid npx's own extra process hop. Note tsx itself is
+// still two processes: its CLI re-runs the script in a child node, so a SIGKILL sent to the
+// handle `spawn()` returns kills only the wrapper -- the harness guards against outliving it
+// (see the sigkill harness helpers below).
 const TSX_BIN = join(__dirname, "..", "node_modules", ".bin", "tsx");
 
 // Isolated scratch workspace, NOT process.cwd() (the real minerva repo). Driving a real claude
@@ -210,57 +211,220 @@ test("SubagentDriver poll timeout reaps the underlying --bg session instead of l
   }
 });
 
-test("SIGKILL of the launching process does not orphan or lose the underlying --bg session -- it remains independently trackable", async () => {
+// ── sigkill harness: launch + lifetime helpers ───────────────────────────────
+//
+// The harness must never outlive the test that launched it (PANT-1094 / mdostal/minerva#94):
+// an orphan sits on the subagent-driver path and kept calling core-api for hours after its run
+// finished. So every harness is spawned into its own process group (detached: true makes the
+// tsx launcher a group leader; tsx's real node child, esbuild and the dispatch CLI inherit that
+// group), every test kill(-pgid)s that group from a `finally`, and the tests assert the
+// processes are actually gone -- not merely that the harness handle returned.
+
+type Harness = {
+  launcher: ChildProcess;
+  pgid: number;
+  /** The real harness process -- tsx runs the script in a child node, not in `launcher`. */
+  harnessPid: Promise<number>;
+  dispatchedId: Promise<string>;
+};
+
+function spawnHarness(cwd: string, env: NodeJS.ProcessEnv = process.env): Harness {
+  const launcher = spawn(TSX_BIN, [SIGKILL_HARNESS, "Say hello."], {
+    cwd,
+    env,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.ok(launcher.pid, "harness launcher failed to spawn");
+  let buf = "";
+  launcher.stdout!.setEncoding("utf8").on("data", (d: string) => (buf += d));
+  // Synchronize on the harness's own stdout instead of guessing a wall-clock delay.
+  const waitFor = (re: RegExp, what: string) =>
+    new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        launcher.stdout!.off("data", check);
+        reject(new Error(`harness never printed ${what} within 30s; stdout so far: ${JSON.stringify(buf)}`));
+      }, 30_000);
+      const check = () => {
+        const match = buf.match(re);
+        if (match?.[1]) {
+          clearTimeout(timer);
+          launcher.stdout!.off("data", check);
+          resolve(match[1]);
+        }
+      };
+      launcher.stdout!.on("data", check);
+      check();
+    });
+  const harnessPid = waitFor(/HARNESS_PID:(\d+)/, "HARNESS_PID:").then(Number);
+  const dispatchedId = waitFor(/DISPATCHED:(\S+)/, "DISPATCHED:");
+  // Don't let a rejection that a test never awaits (it failed earlier) surface as unhandled.
+  harnessPid.catch(() => {});
+  dispatchedId.catch(() => {});
+  return { launcher, pgid: launcher.pid, harnessPid, dispatchedId };
+}
+
+function errnoCode(e: unknown): string | undefined {
+  return (e as NodeJS.ErrnoException).code;
+}
+
+/** kill(target, 0) probe; a negative target probes a whole process group. Zombies count as gone. */
+function isAlive(target: number): boolean {
+  try {
+    process.kill(target, 0);
+  } catch (e) {
+    return errnoCode(e) !== "ESRCH";
+  }
+  if (target > 0 && process.platform === "linux") {
+    try {
+      // /proc/<pid>/stat: "pid (comm) STATE ..." -- comm may contain spaces/parens.
+      const stat = readFileSync(`/proc/${target}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function waitUntilGone(target: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (isAlive(target)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return true;
+}
+
+/** Safety net for every harness test: SIGKILL whatever is left of the group and wait it out. */
+async function reapHarnessGroup(h: Harness): Promise<void> {
+  try {
+    process.kill(-h.pgid, "SIGKILL");
+  } catch (e) {
+    if (errnoCode(e) !== "ESRCH") throw e;
+  }
+  await waitUntilGone(-h.pgid, 10_000);
+}
+
+function exitOf(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  }
+  return new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+}
+
+function stopBackgroundSessionsIn(cwd: string): any[] {
+  const entries = listBackgroundAgentsRaw().filter((a) => a.cwd === cwd);
+  for (const entry of entries) {
+    if (entry.id) {
+      try {
+        execFileSync("claude", ["stop", entry.id]);
+      } catch {
+        // already stopped/finished -- fine
+      }
+    }
+  }
+  return entries;
+}
+
+// How long a harness gets to notice its launcher died / its deadline passed and exit on its
+// own. The watchdog polls every 200ms; this is generous headroom for a loaded CI box.
+const SELF_EXIT_GRACE_MS = 5_000;
+
+test("SIGKILL of the launching process does not orphan or lose the underlying --bg session -- it remains independently trackable, and the harness itself does not outlive it", async () => {
   // realpath'd: macOS's os.tmpdir() returns /var/folders/... but `claude agents --json`
   // reports the resolved /private/var/folders/... form -- compare like-for-like.
   const scratchCwd = realpathSync(mkdtempSync(join(tmpdir(), "minerva-subagent-sigkill-")));
-  let dispatchedId: string | null = null;
+  const h = spawnHarness(scratchCwd);
   try {
-    const child = spawn(TSX_BIN, [SIGKILL_HARNESS, "Say hello."], {
-      cwd: scratchCwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    // Synchronize on the harness's own stdout instead of guessing a wall-clock delay -- it
-    // prints DISPATCHED:<id> the instant `claude --bg` succeeds, then hangs. We kill it the
-    // moment we see that line, proving survival independent of npx/tsx startup variance.
-    dispatchedId = await new Promise<string>((resolve, reject) => {
-      let buf = "";
-      const timer = setTimeout(() => reject(new Error("harness never printed DISPATCHED: within 30s")), 30_000);
-      child.stdout.on("data", (d) => {
-        buf += d;
-        const match = buf.match(/DISPATCHED:(\S+)/);
-        if (match && match[1]) {
-          clearTimeout(timer);
-          resolve(match[1]);
-        }
-      });
-    });
+    const harnessPid = await h.harnessPid;
+    const dispatchedId = await h.dispatchedId;
     assert.notEqual(dispatchedId, "UNKNOWN");
+    assert.notEqual(harnessPid, h.launcher.pid, "expected tsx to run the harness in a child process");
 
-    child.kill("SIGKILL");
-    await new Promise<void>((resolve) => child.on("exit", () => resolve()));
+    // SIGKILL only the launching process, exactly as before -- not its group. This is the
+    // case that used to leak: the real harness process survived, reparented to init.
+    h.launcher.kill("SIGKILL");
+    await exitOf(h.launcher);
+
+    assert.ok(
+      await waitUntilGone(harnessPid, SELF_EXIT_GRACE_MS),
+      `harness pid ${harnessPid} outlived its SIGKILL'd launcher by more than ${SELF_EXIT_GRACE_MS}ms -- it would leak`,
+    );
 
     // Confirm the session is still alive/trackable via `claude agents --json`, keyed on cwd
     // (a --bg session's reported prompt-derived "name" isn't reliable to match on, but cwd is).
     const all = listBackgroundAgentsRaw();
-    const entries = all.filter((a) => a.cwd === scratchCwd);
     assert.ok(
-      entries.length > 0,
+      all.some((a) => a.cwd === scratchCwd),
       `expected the --bg session to survive its launching process being SIGKILL'd. scratchCwd=${scratchCwd}, dispatchedId=${dispatchedId}, observed cwds=${JSON.stringify(all.map((a) => a.cwd))}`,
     );
 
-    // Cleanup: release the session we just proved survives, so it doesn't linger.
-    for (const entry of entries) {
-      if (entry.id) {
-        try {
-          execFileSync("claude", ["stop", entry.id]);
-        } catch {
-          // already stopped/finished -- fine
-        }
-      }
-    }
+    // Release the session we just proved survives, then prove nothing from the harness's own
+    // process group (tsx, the real harness, esbuild, the dispatch CLI) is left either -- before
+    // the `finally` safety net gets a chance to hide a leak.
+    stopBackgroundSessionsIn(scratchCwd);
+    assert.ok(
+      await waitUntilGone(-h.pgid, SELF_EXIT_GRACE_MS),
+      `process group ${h.pgid} still has live members ${SELF_EXIT_GRACE_MS}ms after the harness exited`,
+    );
   } finally {
+    await reapHarnessGroup(h);
+    stopBackgroundSessionsIn(scratchCwd);
+    rmSync(scratchCwd, { recursive: true, force: true });
+  }
+});
+
+test("SIGKILL of the harness process itself leaves nothing from its process group behind", async () => {
+  const scratchCwd = realpathSync(mkdtempSync(join(tmpdir(), "minerva-subagent-sigkill-self-")));
+  const h = spawnHarness(scratchCwd);
+  try {
+    const harnessPid = await h.harnessPid;
+    await h.dispatchedId;
+
+    // No JS exit path runs on SIGKILL, so nothing inside the harness can clean up here.
+    process.kill(harnessPid, "SIGKILL");
+    await exitOf(h.launcher);
+    stopBackgroundSessionsIn(scratchCwd);
+
+    assert.ok(await waitUntilGone(harnessPid, SELF_EXIT_GRACE_MS), `harness pid ${harnessPid} survived SIGKILL`);
+    assert.ok(
+      await waitUntilGone(-h.pgid, SELF_EXIT_GRACE_MS),
+      `process group ${h.pgid} still has live members ${SELF_EXIT_GRACE_MS}ms after the harness was SIGKILL'd`,
+    );
+  } finally {
+    await reapHarnessGroup(h);
+    stopBackgroundSessionsIn(scratchCwd);
+    rmSync(scratchCwd, { recursive: true, force: true });
+  }
+});
+
+test("the sigkill harness exits on its own at its hard deadline even if nobody ever kills it", async () => {
+  const scratchCwd = realpathSync(mkdtempSync(join(tmpdir(), "minerva-subagent-sigkill-deadline-")));
+  const h = spawnHarness(scratchCwd, { ...process.env, MINERVA_SIGKILL_HARNESS_DEADLINE_MS: "3000" });
+  try {
+    const harnessPid = await h.harnessPid;
+    await h.dispatchedId;
+
+    // Nobody kills anything: the deadline alone must end it.
+    let timer: NodeJS.Timeout | undefined;
+    const { code } = await Promise.race([
+      exitOf(h.launcher),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("harness ignored its 3000ms hard deadline")), 3_000 + SELF_EXIT_GRACE_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    assert.equal(code, 124, "expected the harness's deadline exit code to propagate through tsx");
+    stopBackgroundSessionsIn(scratchCwd);
+
+    assert.ok(await waitUntilGone(harnessPid, SELF_EXIT_GRACE_MS), `harness pid ${harnessPid} outlived its deadline`);
+    assert.ok(
+      await waitUntilGone(-h.pgid, SELF_EXIT_GRACE_MS),
+      `process group ${h.pgid} still has live members after the harness's deadline exit`,
+    );
+  } finally {
+    await reapHarnessGroup(h);
+    stopBackgroundSessionsIn(scratchCwd);
     rmSync(scratchCwd, { recursive: true, force: true });
   }
 });

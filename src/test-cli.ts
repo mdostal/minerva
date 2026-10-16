@@ -19,9 +19,10 @@ export function testHeimdallRouteUrl(model = DEFAULT_TEST_MODEL, cli = "claude")
 }
 
 function withDefaultTestRoute(env: Record<string, string>): Record<string, string> {
-  // The PANTHEON_API_URL a Pantheon runtime exports must not opt the suite out of the stub route
-  // (that would send route selection to a live core-api); only an explicit test override does.
-  const { PANTHEON_API_URL: _runtimeCoreApiUrl, ...ambient } = process.env;
+  // The PANTHEON_API_URL / PANTHEON_CORE_API_URL a Pantheon runtime exports must not opt the suite
+  // out of the stub route (that would send route selection to a live core-api); only an explicit
+  // test override does. The runtime exports both (PANT-1094), so strip both.
+  const { PANTHEON_API_URL: _runtimeApiUrl, PANTHEON_CORE_API_URL: _runtimeCoreApiUrl, ...ambient } = process.env;
   if (
     env.MINERVA_PANTHEON_ROUTE_SELECT_URL ||
     ambient.MINERVA_PANTHEON_ROUTE_SELECT_URL ||

@@ -74,6 +74,15 @@ All notable changes to Minerva are documented in this file.
 
 ### Fixed
 
+- **Filed stories name their dependencies by ticket identifier** (minerva#97, PANT-1160): every
+  story with a dependency now gets a `Depends on: FFE-111 (vt2-01-...)` line, the form Auriga's
+  dependency gate (auriga#260) reads, instead of a slug or prose it cannot resolve. Stories are
+  filed dependencies-first so each sibling's identifier is known when the line is written, and a
+  sibling id named only in prose ("Depends on wall-1") counts as a dependency too. The line comes
+  with a note telling the agent not to self-block, and to set `blocked_reason` to
+  `dependency:<ids>` if it must, so the ticket can be re-queued. A dependency with no identifier
+  yet goes on a comment line, never as a slug on the `Depends on:` line.
+
 - **Parked stories no longer run before their gate opens** (PANT-929): Multica runs any
   agent-assigned issue regardless of status, so stories filed in `backlog` with an assignee ran
   straight through the decision gate. `fileStoriesToMultica` never sends an assignee (now covered

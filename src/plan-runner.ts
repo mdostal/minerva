@@ -164,6 +164,86 @@ export function parseStoryDependsOn(story: { id: string; content: string }): str
   return [];
 }
 
+// Sibling story ids a story names as a dependency only in PROSE (minerva#97): "Depends on
+// content-wall-1", "builds on top of vt2-01 ...". The planner does not always mirror these into
+// the YAML depends_on list, and a prose-only dependency is invisible to every gate. Only exact
+// sibling story ids count (never fuzzy titles), and YAML `depends_on:` lines are skipped -- the
+// story-level one is read by parseStoryDependsOn and the step-level ones name steps, not stories.
+const PROSE_DEPENDENCY_CUE = /\b(?:depends?\s+on|blocked\s+by|builds?\s+on|requires|needs|waits?\s+(?:for|on))\b/i;
+
+export function parseProseDependsOn(story: { id: string; content: string }, siblingIds: string[]): string[] {
+  const out: string[] = [];
+  for (const line of story.content.split(/\r?\n/)) {
+    if (/^\s*-?\s*depends_on\s*:/i.test(line)) continue;
+    const cue = line.search(PROSE_DEPENDENCY_CUE);
+    if (cue < 0) continue;
+    const tail = line.slice(cue);
+    for (const id of siblingIds) {
+      if (id === story.id || out.includes(id)) continue;
+      const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(tail)) out.push(id);
+    }
+  }
+  return out;
+}
+
+// Order stories so every story is filed AFTER the siblings it depends on: a dependent's
+// `Depends on:` line can then carry the ticket identifiers the create calls already returned.
+// core-api has no description-update route, so the line has to be right at creation. Stories in a
+// dependency cycle (or naming one another in a loop) keep their original relative order at the end.
+export function orderStoriesForFiling<T extends { id: string }>(stories: T[], depsByStory: Map<string, string[]>): T[] {
+  const ids = new Set(stories.map((s) => s.id));
+  const placed = new Set<string>();
+  const ordered: T[] = [];
+  let remaining = [...stories];
+  while (remaining.length > 0) {
+    const ready = remaining.filter((s) => (depsByStory.get(s.id) ?? []).every((d) => !ids.has(d) || d === s.id || placed.has(d)));
+    if (ready.length === 0) {
+      ordered.push(...remaining);
+      break;
+    }
+    for (const s of ready) {
+      ordered.push(s);
+      placed.add(s.id);
+    }
+    remaining = remaining.filter((s) => !placed.has(s.id));
+  }
+  return ordered;
+}
+
+// The dependency block appended to a filed story's description (minerva#97). Auriga (auriga#260)
+// gates dispatch on `Depends on:` lines holding uppercase ticket identifiers (FFE-86) and never
+// resolves a story slug, so the line carries identifiers, each with its slug alongside for humans.
+// A dependency with no identifier yet is listed on a comment line, never on the Depends on line.
+// The comment lines keep the description valid YAML, and the gating note replaces the old "set
+// this ticket to blocked and pick it up again" pattern: a blocked ticket with no blocked_reason
+// is skipped by every pass, while `dependency:<ids>` is the reason Auriga re-queues on.
+export function dependencyBlock(deps: Array<{ story_id: string; identifier: string | null }>): string {
+  if (deps.length === 0) return "";
+  const resolved = deps.filter((d) => d.identifier);
+  const unresolved = deps.filter((d) => !d.identifier).map((d) => d.story_id);
+  const lines: string[] = [];
+  if (resolved.length > 0) {
+    const ids = resolved.map((d) => d.identifier!).join(",");
+    lines.push(`Depends on: ${resolved.map((d) => `${d.identifier} (${d.story_id})`).join(", ")}`);
+    lines.push(
+      `# Dependency gating: the router does not dispatch this story until every ticket on the Depends on line is done, ` +
+        `so do not self-block on them. If one is still unmerged, set metadata blocked_reason to "dependency:${ids}" ` +
+        `before setting this ticket to blocked; a blocked ticket with no blocked_reason is never re-queued.`,
+    );
+  }
+  if (unresolved.length > 0) {
+    lines.push(`# Unresolved dependencies (no ticket identifier at filing time): ${unresolved.join(", ")}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+function appendBlock(description: string, block: string): string {
+  if (!block) return description;
+  const sep = description.length > 0 && !description.endsWith("\n") ? "\n" : "";
+  return `${description}${sep}${block}`;
+}
+
 export interface FiledStory {
   story_id: string;
   issue_id: string;
@@ -230,15 +310,23 @@ export async function fileStoriesToMultica(
   // whole epic so the dependency graph can be wired AFTER every sibling exists (a dependency may
   // be filed later in the loop than the story that depends on it).
   const idByStory = new Map<string, string>();
+  const identifierByStory = new Map<string, string>();
   const dependsByStory = new Map<string, string[]>();
-
+  const siblingIds = epic.stories.map((s) => s.id);
   for (const story of epic.stories) {
+    const declared = parseStoryDependsOn(story);
+    const prose = parseProseDependsOn(story, siblingIds).filter((d) => !declared.includes(d));
+    dependsByStory.set(story.id, [...declared, ...prose].filter((d) => d !== story.id));
+  }
+
+  for (const story of orderStoriesForFiling(epic.stories, dependsByStory)) {
     const { title, description } = storyToIssueFields(story);
-    dependsByStory.set(story.id, parseStoryDependsOn(story));
     // Stamp the seed's target repo onto every child story description (Gate-2), so the build
     // lane resolves the SAME repo for the decomposed work it resolved for the seed. Without this
     // a child story carries no target_repo and the build lane cannot resolve where to build it.
-    const stampedDescription = stampTargetRepo(description, effectiveTargetRepo);
+    // Then the Depends on line, built from the identifiers of the siblings already filed.
+    const deps = (dependsByStory.get(story.id) ?? []).map((d) => ({ story_id: d, identifier: identifierByStory.get(d) ?? null }));
+    const stampedDescription = appendBlock(stampTargetRepo(description, effectiveTargetRepo), dependencyBlock(deps));
     const createBody: Record<string, unknown> = {
       title,
       description: stampedDescription,
@@ -254,6 +342,7 @@ export async function fileStoriesToMultica(
       const issueId = typeof created.id === "string" ? created.id : String(created.id ?? "");
       filed.push({ story_id: story.id, issue_id: issueId });
       if (issueId) idByStory.set(story.id, issueId);
+      if (typeof created.identifier === "string" && created.identifier.length > 0) identifierByStory.set(story.id, created.identifier);
     } catch (e) {
       errors.push({ story_id: story.id, error: e instanceof Error ? e.message : String(e) });
     }

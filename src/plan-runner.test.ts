@@ -15,6 +15,8 @@ import {
   storyToIssueFields,
   parseStoryDependsOn,
   fileStoriesToMultica,
+  parseProseDependsOn,
+  orderStoriesForFiling,
   promoteParkedStories,
   __setPantheonFetchForTest,
 } from "./plan-runner.ts";
@@ -256,6 +258,126 @@ test("fileStoriesToMultica: files into the SEED ticket's project (not the API de
     const metaBody = metaPuts[0]!.body as Record<string, unknown>;
     assert.equal(metaBody.depends_on, "ISSUE-1");
     // s1 has no deps -> no metadata PUT for it (only one metadata PUT total).
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+// minerva#97 / PANT-1160: Auriga (auriga#260) gates on `Depends on:` lines holding ticket
+// identifiers and never resolves story slugs. FFE-109 shipped `Depends on: vt2-01-...` and sat dead
+// 5h38m after its dependency merged; FFE-91 named its dependency only in prose and sat 14h50m.
+// This copies Auriga's own parser (src/router/lib/story-identity.mjs descIdentifierDeps) so the
+// assertion is "the dispatcher can read it", not "the string looks right".
+const AURIGA_DEP_LINE = /^[ \t>*_-]*(?:depends[ \t_-]+on|blocked[ \t_-]+by)[ \t*_]*:[ \t*_]*(.*)$/gim;
+const AURIGA_IDENTIFIER = /\b[A-Z][A-Z0-9]*-\d+\b/g;
+function aurigaDeps(description: string): string[] {
+  const out: string[] = [];
+  for (const m of description.matchAll(AURIGA_DEP_LINE)) {
+    for (const id of m[1]!.match(AURIGA_IDENTIFIER) || []) if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+test("fileStoriesToMultica: a batch-filed chain names its dependencies by ticket identifier, never by slug", async () => {
+  type Call = { method: string; url: string; body: Record<string, unknown> };
+  const calls: Call[] = [];
+  let next = 111;
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, url, body });
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST" && url.endsWith("/api/backlog/issues")) {
+      const n = next++;
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: `uuid-${n}`, identifier: `FFE-${n}` }) };
+    }
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    // Listed dependents-first on purpose: the filer must still know every identifier it writes.
+    const epic = {
+      epic_id: "voice-v2",
+      stories: [
+        { id: "vt2-03-mixer", content: "id: vt2-03-mixer\ntitle: Mixer\ndepends_on: [vt2-02-epoch-loader]\n" },
+        { id: "vt2-04-final", content: "id: vt2-04-final\ntitle: Final\ndepends_on: [vt2-02-epoch-loader, vt2-03-mixer]\n" },
+        { id: "vt2-02-epoch-loader", content: "id: vt2-02-epoch-loader\ntitle: Loader\ndepends_on: [vt2-01-checkpoint-adapters]\n" },
+        { id: "vt2-01-checkpoint-adapters", content: "id: vt2-01-checkpoint-adapters\ntitle: Adapters\ndepends_on: []\n" },
+        // Prose-only dependency, the FFE-91 shape: nothing in depends_on.
+        {
+          id: "vt2-05-preview",
+          content: "id: vt2-05-preview\ntitle: Preview\ndepends_on: []\ndescription: |\n  Depends on vt2-01-checkpoint-adapters; ship the preview after it.\n",
+        },
+      ],
+    } as any;
+    const r = await fileStoriesToMultica("SEED", epic);
+    assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+
+    const creates = calls.filter((c) => c.method === "POST" && c.url.endsWith("/api/backlog/issues"));
+    const byStory = new Map(creates.map((c, i) => [String(c.body.title).match(/^\[([^\]]+)\]/)![1]!, { identifier: `FFE-${111 + i}`, description: String(c.body.description) }]));
+    const ident = (id: string) => byStory.get(id)!.identifier;
+
+    // Foundations are created first, so a dependent always has its dependency's identifier in hand.
+    assert.equal(ident("vt2-01-checkpoint-adapters"), "FFE-111");
+
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-01-checkpoint-adapters")!.description), []);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-02-epoch-loader")!.description), [ident("vt2-01-checkpoint-adapters")]);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-03-mixer")!.description), [ident("vt2-02-epoch-loader")]);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-04-final")!.description), [ident("vt2-02-epoch-loader"), ident("vt2-03-mixer")]);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-05-preview")!.description), [ident("vt2-01-checkpoint-adapters")]);
+
+    for (const [storyId, { description }] of byStory) {
+      for (const line of description.split("\n").filter((l) => /^Depends on:/.test(l))) {
+        // The slug may sit beside its identifier, but never alone: every entry is "FFE-n (slug)".
+        for (const entry of line.slice("Depends on:".length).split(",")) {
+          assert.match(entry.trim(), /^FFE-\d+ \([a-z0-9-]+\)$/, `${storyId}: ${line}`);
+        }
+        assert.match(description, /blocked_reason to "dependency:FFE-/, `${storyId} carries the unpark instruction`);
+      }
+    }
+    assert.doesNotMatch(byStory.get("vt2-04-final")!.description, /pick it up again/);
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+test("parseProseDependsOn: only exact sibling ids after a dependency cue, never YAML depends_on lines", () => {
+  const siblings = ["wall-1", "wall-10", "wall-2", "wall-3"];
+  const story = {
+    id: "wall-3",
+    content: "id: wall-3\ndepends_on: []\nsteps:\n  - id: wall-2\n    depends_on: [wall-2]\ndescription: |\n  Depends on wall-1; preview mentions wall-10 later.\n  wall-2 is related but not required.\n",
+  };
+  assert.deepEqual(parseProseDependsOn(story, siblings), ["wall-1", "wall-10"]);
+  assert.deepEqual(parseProseDependsOn({ id: "a", content: "Requires a-b." }, ["a", "a-b", "b"]), ["a-b"]);
+});
+
+test("orderStoriesForFiling: dependencies first, cycles kept at the end in original order", () => {
+  const deps = new Map([["c", ["b"]], ["b", ["a"]], ["a", []], ["x", ["y"]], ["y", ["x"]]]);
+  const order = orderStoriesForFiling([{ id: "x" }, { id: "c" }, { id: "b" }, { id: "y" }, { id: "a" }], deps).map((s) => s.id);
+  assert.deepEqual(order, ["a", "b", "c", "x", "y"]);
+});
+
+test("fileStoriesToMultica: a dependency with no identifier yet is never written as a slug on the Depends on line", async () => {
+  const creates: Array<Record<string, unknown>> = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST" && url.endsWith("/api/backlog/issues")) {
+      creates.push(body);
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: `uuid-${creates.length}` }) };
+    }
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    const epic = {
+      epic_id: "e1",
+      stories: [
+        { id: "s1", content: "id: s1\ntitle: First\ndepends_on: []\n" },
+        { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: [s1]\n" },
+      ],
+    } as any;
+    await fileStoriesToMultica("SEED", epic);
+    const s2 = String(creates.find((b) => String(b.title).startsWith("[s2]"))!.description);
+    assert.doesNotMatch(s2, /^Depends on:/m);
+    assert.match(s2, /^# Unresolved dependencies \(no ticket identifier at filing time\): s1$/m);
   } finally {
     __setPantheonFetchForTest(prev);
   }

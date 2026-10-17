@@ -19,7 +19,15 @@ npm install
 npm run ci   # test + typecheck -- the authoritative local gate
 ```
 
-No build step — `bin/minerva.ts` runs directly via `tsx`.
+No build step — `bin/minerva.ts` runs directly via `tsx`. `npm run build` is an alias for
+`npm run typecheck` so the shared CI workflow (which runs `npm run build --if-present` before
+`npm test`) enforces the typecheck too.
+
+The suite is hermetic by default: `src/test-cli.ts` puts a stub `claude`
+(`bin/stub-claude.ts`) first on PATH, so `npm test` never calls the real CLI, even when you're
+logged in. `npm run test:hermetic` proves it with a tripwire `claude` that fails if invoked.
+Opt into live integration with `MINERVA_TEST_REAL_CLAUDE=1`; the plugin-hive-fork tests also
+need `MINERVA_HIVE_PLUGIN_DIR` pointing at a local checkout and skip without it.
 
 ## Discipline this project follows
 

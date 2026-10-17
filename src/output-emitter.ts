@@ -28,7 +28,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { MinervaError } from "./errors.ts";
-import { finalizeRunMetrics, readRunRecord, updateRunRecord, type RunRecord } from "./run-manager.ts";
+import { finalizeRunMetrics, isTerminalStatus, mutateRunRecord, readRunRecord, type RunRecord } from "./run-manager.ts";
 import { recordCleanup } from "./cleanup-ledger.ts";
 
 export interface CompletedEpic {
@@ -398,7 +398,8 @@ export function pushPlan(root: string, runId: string): void {
 // completion output (multi-epic plans are the norm, not the exception).
 export function checkAndMarkComplete(runId: string): boolean {
   const record = readRunRecord(runId);
-  if (record.status === "complete") return true; // already marked; idempotent
+  // Already terminal (complete, or aborted by a concurrent abortRun): nothing left to record.
+  if (isTerminalStatus(record.status)) return true;
   const baselineIds = new Set(record.baseline_epic_ids ?? []);
   const epics = findCompletedEpics(record.workspace_path, baselineIds);
   if (epics.length === 0) return false;
@@ -415,12 +416,17 @@ export function checkAndMarkComplete(runId: string): boolean {
     planPush = { committed: false, pushed: false, branch: null, reason: `commit/push errored: ${e instanceof Error ? e.message : String(e)}` };
   }
   const output: CompletionOutput = { epic: epics[0]!, epics }; // length checked non-empty above
-  updateRunRecord(runId, { status: "complete", output, plan_push: planPush });
+  // The transition is decided under the run lock: if an abort landed while we were committing,
+  // the run stays aborted and this is not a second terminal transition.
+  const { changed } = mutateRunRecord(runId, (current) =>
+    isTerminalStatus(current.status) ? null : { status: "complete", output, plan_push: planPush },
+  );
+  if (!changed) return true;
   finalizeRunMetrics(runId);
 
   // AD-4: exactly one ledger record + one cleanup_needed event per run, at the moment it
-  // transitions to a terminal state. This branch only runs once per run (guarded by the
-  // status === "complete" early return above), so this call is not repeated on re-checks.
+  // transitions to a terminal state. Only the process whose locked write made the transition
+  // reaches this line, so this call is not repeated on re-checks.
   recordCleanup(runId, "complete");
   return true;
 }

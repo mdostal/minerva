@@ -6,8 +6,9 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { startRun, getQuestions, __setDriverForTest } from "./kickoff-engine.ts";
 import { getRunStatus, readRunRecord } from "./run-manager.ts";
 import { getOutput } from "./output-emitter.ts";
@@ -196,4 +197,33 @@ test("max_auto_answers guardrail stops the loop instead of spinning forever", as
   // 1 initial drive + 3 auto-answers = 4 turns, then the guardrail trips and the run parks.
   assert.equal((getRunStatus({ run_id }) as { status: string }).status, "waiting_on_human");
   assert.equal(driver.turns, 4);
+});
+
+// PANT-996: a run handed the operator-defaults file answers the operator's known questions and
+// still parks on the first question the file does not cover.
+const OPERATOR_DEFAULTS = join(dirname(fileURLToPath(import.meta.url)), "..", "config", "operator-defaults.yaml");
+
+function operatorScript(turn: number): object {
+  const known = [
+    { question: "Which base branch should the PRs target?", qid: "git_flow" },
+    { question: "Should we block the merge on the CI pipeline?", qid: "ci" },
+    { question: "How should we verify each story is done?", qid: "verify" },
+  ];
+  const k = known[turn - 1];
+  if (k) return { ...k, suggested_channel: "human", confidence: 0.3, reason: "policy", kind: "free-text", options: null };
+  return humanStrategicQuestion();
+}
+
+test("operator-defaults file: known operator questions are answered, the first uncovered one parks", async () => {
+  const driver = new ScriptedDriver(9999, operatorScript);
+  __setDriverForTest(driver);
+  const { run_id } = (await startRun({ idea: "a tiny CLI todo app", defaults: { file: OPERATOR_DEFAULTS } })) as {
+    run_id: string;
+  };
+
+  assert.equal((getRunStatus({ run_id }) as { status: string }).status, "waiting_on_human");
+  assert.equal(driver.turns, 4); // initial drive + 3 operator-answered gates, then the strategy question parks
+  assert.equal(readRunRecord(run_id).metrics?.auto_resolutions, 3);
+  const pending = getQuestions({ run_id, channel: "human" }) as { questions: Array<{ qid: string }> };
+  assert.deepEqual(pending.questions.map((x) => x.qid), ["strategy"]);
 });

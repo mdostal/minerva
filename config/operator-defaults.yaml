@@ -1,0 +1,119 @@
+# Minerva operator defaults: known operator answers for headless planning (PANT-996).
+#
+# Pass this file to a planning run so the questions the operator has already answered once (git
+# flow, verification policy, CI, cross-god boundaries) get answered from here instead of parking
+# the run. Anything this file does NOT cover still parks as `waiting_on_human`. Nothing is
+# guessed on the operator's behalf.
+#
+#   minerva-plan:   npx tsx bin/minerva-plan.ts --idea "..." --defaults-file config/operator-defaults.yaml
+#   startRun ABI:   {"method":"startRun","params":{"idea":"...","defaults":{"file":"config/operator-defaults.yaml"}}}
+#   per deployment: MINERVA_PLAN_DEFAULTS=/abs/path/to/operator-defaults.yaml
+#
+# Format: the plan-defaults schema (see mkdocs_docs/configuration.md, "Operator defaults file").
+# Each `answers` rule matches a question by envelope `qid` (exact) or by any of its `match`
+# substrings (case-insensitive); the first matching rule wins. Keep match phrases specific:
+# a bare "ci" would also hit "decision".
+
+# auto: explicit answers apply on BOTH the agent and the human channel. The generic fallbacks below
+# are switched off, so only the `answers` rules ever fire.
+mode: auto
+
+# Don't rubber-stamp sign-off / approval gates; they park unless a rule below covers them.
+skip_sign_off: false
+
+# No standing tech-stack answer; it is decided per idea.
+tech_stack: null
+
+# Never pick a select option on the operator's behalf.
+select_strategy: park
+
+# No generic free-text answer. An uncovered free-text question parks.
+free_text_default: null
+
+max_auto_answers: 40
+
+answers:
+  # --- Git flow ---------------------------------------------------------------------------------
+  - match:
+      - "git flow"
+      - "gitflow"
+      - "branching strategy"
+      - "branching model"
+      - "base branch"
+      - "target branch"
+      - "which branch"
+      - "default branch"
+      - "rebase"
+      - "merge strategy"
+      - "force-push"
+      - "force push"
+      - "pull request"
+    answer: >-
+      Branch off `dev` and pull `dev` often. `main` is release-only: never target it and never
+      merge into it. Update a branch by merging `origin/dev` into it; never rebase, and never
+      force-push unless the operator approved it for that branch. Open the PR against `dev` and
+      link it on the ticket. The review squad merges; nobody merges their own PR.
+
+  # --- Verification policy ----------------------------------------------------------------------
+  - match:
+      - "verification"
+      - "how should we verify"
+      - "how do we verify"
+      - "how will we verify"
+      - "testing strategy"
+      - "test strategy"
+      - "definition of done"
+      - "acceptance evidence"
+    answer: >-
+      Verification is local: run the repo's own test suite, plus a live check on hive wherever
+      there is a running service. Put the evidence (commands and output) in the PR. If the base
+      branch's tests are already red, fix them in a separate PR rather than waiting.
+
+  # --- CI is never a gate -----------------------------------------------------------------------
+  - match:
+      - "ci gate"
+      - "ci pipeline"
+      - "ci/cd"
+      - "ci check"
+      - "ci must"
+      - "wait for ci"
+      - "continuous integration"
+      - "github actions"
+      - "required checks"
+    answer: >-
+      CI is never a gate. Don't wait on CI or poll it; local tests plus the live check are the
+      acceptance evidence. Note in the PR that CI is running and hand off.
+
+  # --- Boundaries -------------------------------------------------------------------------------
+  - match:
+      - "another god"
+      - "other god"
+      - "god-to-god"
+      - "cross-god"
+      - "call minerva"
+      - "call auriga"
+      - "call heimdall"
+      - "core-api"
+      - "core api"
+      - "service-to-service"
+      - "integrate with pantheon"
+    answer: >-
+      No god calls another god directly. All cross-god traffic goes through Pantheon core-api.
+  - match:
+      - "polling"
+      - "poll loop"
+      - "background loop"
+      - "background worker"
+      - "watch loop"
+    answer: >-
+      No new polling loops. Use events or wakeups through Pantheon core-api, or do the work
+      synchronously within the call.
+  - match:
+      - "operator decision"
+      - "needs a decision"
+      - "if unsure"
+      - "if uncertain"
+      - "when in doubt"
+    answer: >-
+      Don't guess. If only the operator can answer, park with a `[needs-decision]` comment that
+      lists the options.

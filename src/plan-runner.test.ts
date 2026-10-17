@@ -5,7 +5,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -15,7 +15,10 @@ import {
   storyToIssueFields,
   parseStoryDependsOn,
   fileStoriesToMultica,
-  __setMulticaRunnerForTest,
+  parseProseDependsOn,
+  orderStoriesForFiling,
+  promoteParkedStories,
+  __setPantheonFetchForTest,
 } from "./plan-runner.ts";
 import type { Driver, DriverInput, DriverResult } from "./driver.ts";
 
@@ -66,6 +69,9 @@ before(() => {
   execFileSync("git", ["-C", seedRepo, "commit", "-q", "--allow-empty", "-m", "seed init"]);
   process.env.MINERVA_SEED_REPO = seedRepo;
 
+  // Pantheon core-api base URL required by fileStoriesToMultica/resolveIdeaFromTicket.
+  process.env.PANTHEON_CORE_API_URL = "http://pantheon.test:3000";
+
   savedDriver = __setDriverForTest(new PlanScriptedDriver(0));
 });
 
@@ -73,6 +79,7 @@ after(() => {
   __setDriverForTest(savedDriver);
   rmSync(minervaHome, { recursive: true, force: true });
   rmSync(seedRepo, { recursive: true, force: true });
+  delete process.env.PANTHEON_CORE_API_URL;
 });
 
 test("runHeadlessPlan: auto mode drives an idea to a complete epic+stories, unattended", async () => {
@@ -102,6 +109,28 @@ test("runHeadlessPlan: parks (status waiting_on_human, epic null) when a gate ha
   assert.equal(result.status, "waiting_on_human");
   assert.equal(result.epic, null);
   assert.equal(result.pending_questions.length, 1);
+});
+
+test("runHeadlessPlan: with defaultsFile and no mode, the file's own mode stands (PANT-996)", async () => {
+  // The file sets mode "off". If runHeadlessPlan injected its usual inline mode "auto" over it, the
+  // routine select gates would be auto-answered and the run would complete; it must park instead.
+  const dir = mkdtempSync(join(tmpdir(), "minerva-planrunner-defaults-file-"));
+  const file = join(dir, "operator.yaml");
+  writeFileSync(file, "mode: \"off\"\n");
+  try {
+    const driver = new PlanScriptedDriver(2);
+    __setDriverForTest(driver);
+    const parked = await runHeadlessPlan({ idea: "a file-moded idea", defaultsFile: file });
+    assert.equal(parked.status, "waiting_on_human");
+    assert.equal(driver.turns, 1);
+
+    // An explicit mode still overrides the file.
+    __setDriverForTest(new PlanScriptedDriver(2));
+    const done = await runHeadlessPlan({ idea: "a mode-overridden idea", defaultsFile: file, mode: "auto" });
+    assert.equal(done.status, "complete");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // Real headless plugin-hive /plan runs write the FLAT layout: one `.pHive/epics/NN-name.yaml` per
@@ -178,21 +207,25 @@ test("parseStoryDependsOn: reads top-level depends_on list, ignores step-level d
   assert.deepEqual(parseStoryDependsOn({ id: "s0", content: "not: yaml: [broken" }), []);
 });
 
-test("fileStoriesToMultica: files into the SEED ticket's project (not the CLI default) and carries depends_on", () => {
-  const calls: string[][] = [];
-  const prev = __setMulticaRunnerForTest((args: string[]) => {
-    calls.push(args);
-    if (args[0] === "issue" && args[1] === "get") {
+test("fileStoriesToMultica: files into the SEED ticket's project (not the API default) and carries depends_on", async () => {
+  type Call = { method: string; url: string; body: unknown };
+  const calls: Call[] = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, url, body });
+    if (init.method === "GET" && url.includes("/api/backlog/issues/SEED")) {
       // The seed ticket lives in Pantheon Core — filed stories must inherit THIS project.
-      return { id: "SEED", project_id: "d8ecfab4-pantheon-core", status: "todo" };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "d8ecfab4-pantheon-core", status: "todo" }) };
     }
-    if (args[0] === "issue" && args[1] === "create") {
-      const title = String(args[args.indexOf("--title") + 1] ?? "");
+    if (init.method === "POST" && url.includes("/api/backlog/issues")) {
+      const title = String((body as Record<string, unknown>).title ?? "");
       // Return a distinct id per story so the depends_on map can resolve.
-      return { id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" };
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" }) };
     }
-    if (args[0] === "issue" && args[1] === "metadata") return { ok: true };
-    return null;
+    if (init.method === "PUT" && url.includes("/metadata")) {
+      return { ok: true, status: 204, text: async () => "" };
+    }
+    return { ok: false, status: 500, text: async () => "unexpected call" };
   });
   try {
     const epic = {
@@ -202,47 +235,230 @@ test("fileStoriesToMultica: files into the SEED ticket's project (not the CLI de
         { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: [s1]\n" },
       ],
     } as any;
-    const r = fileStoriesToMultica("SEED", epic);
+    const r = await fileStoriesToMultica("SEED", epic);
 
     assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
     assert.deepEqual(r.filed.map((f) => f.issue_id).sort(), ["ISSUE-1", "ISSUE-2"]);
 
-    // Every create carried --project = the seed's own project and --status todo.
-    const creates = calls.filter((a) => a[0] === "issue" && a[1] === "create");
+    // Every create used the seed's own project and status todo, parented to SEED.
+    const creates = calls.filter((c) => c.method === "POST" && c.url.includes("/api/backlog/issues"));
     assert.equal(creates.length, 2);
     for (const c of creates) {
-      assert.equal(c[c.indexOf("--project") + 1], "d8ecfab4-pantheon-core");
-      assert.equal(c[c.indexOf("--status") + 1], "todo");
-      assert.equal(c[c.indexOf("--parent") + 1], "SEED");
+      const b = c.body as Record<string, unknown>;
+      assert.equal(b.project, "d8ecfab4-pantheon-core");
+      assert.equal(b.status, "todo");
+      assert.equal(b.parent, "SEED");
+      assert.ok(!("assignee" in b) && !("assignee_id" in b), "filed stories are never assigned at creation");
     }
+    assert.ok(!calls.some((c) => c.url.includes("/assign")), "filing never calls the assign route");
 
     // s2's depends_on [s1] was carried as metadata pointing at s1's RESOLVED issue id.
-    const meta = calls.find((a) => a[0] === "issue" && a[1] === "metadata" && a[2] === "set");
-    assert.ok(meta, "expected a depends_on metadata set for the dependent story");
-    assert.equal(meta![meta!.indexOf("--key") + 1], "depends_on");
-    assert.equal(meta![meta!.indexOf("--value") + 1], "ISSUE-1");
-    // s1 has no deps -> no metadata call for it (only one metadata set total).
-    assert.equal(calls.filter((a) => a[1] === "metadata").length, 1);
+    const metaPuts = calls.filter((c) => c.method === "PUT" && c.url.includes("/metadata"));
+    assert.equal(metaPuts.length, 1, "only one metadata PUT (for s2's depends_on)");
+    const metaBody = metaPuts[0]!.body as Record<string, unknown>;
+    assert.equal(metaBody.depends_on, "ISSUE-1");
+    // s1 has no deps -> no metadata PUT for it (only one metadata PUT total).
   } finally {
-    __setMulticaRunnerForTest(prev);
+    __setPantheonFetchForTest(prev);
   }
 });
 
-test("fileStoriesToMultica: stamps opts.targetRepo onto each child story (description + metadata)", () => {
-  const calls: string[][] = [];
-  const descs: Record<string, string> = {};
-  const prev = __setMulticaRunnerForTest((args: string[]) => {
-    calls.push(args);
-    if (args[0] === "issue" && args[1] === "get") return { id: "SEED", project_id: "proj" };
-    if (args[0] === "issue" && args[1] === "create") {
-      // capture the description file contents the create was given
-      const df = args[args.indexOf("--description-file") + 1];
-      if (df) { try { descs[df] = readFileSync(df, "utf8"); } catch {} }
-      const title = String(args[args.indexOf("--title") + 1] ?? "");
-      return { id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" };
+// minerva#97 / PANT-1160: Auriga (auriga#260) gates on `Depends on:` lines holding ticket
+// identifiers and never resolves story slugs. FFE-109 shipped `Depends on: vt2-01-...` and sat dead
+// 5h38m after its dependency merged; FFE-91 named its dependency only in prose and sat 14h50m.
+// This copies Auriga's own parser (src/router/lib/story-identity.mjs descIdentifierDeps) so the
+// assertion is "the dispatcher can read it", not "the string looks right".
+const AURIGA_DEP_LINE = /^[ \t>*_-]*(?:depends[ \t_-]+on|blocked[ \t_-]+by)[ \t*_]*:[ \t*_]*(.*)$/gim;
+const AURIGA_IDENTIFIER = /\b[A-Z][A-Z0-9]*-\d+\b/g;
+function aurigaDeps(description: string): string[] {
+  const out: string[] = [];
+  for (const m of description.matchAll(AURIGA_DEP_LINE)) {
+    for (const id of m[1]!.match(AURIGA_IDENTIFIER) || []) if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+test("fileStoriesToMultica: a batch-filed chain names its dependencies by ticket identifier, never by slug", async () => {
+  type Call = { method: string; url: string; body: Record<string, unknown> };
+  const calls: Call[] = [];
+  let next = 111;
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, url, body });
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST" && url.endsWith("/api/backlog/issues")) {
+      const n = next++;
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: `uuid-${n}`, identifier: `FFE-${n}` }) };
     }
-    if (args[0] === "issue" && args[1] === "metadata") return { ok: true };
-    return null;
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    // Listed dependents-first on purpose: the filer must still know every identifier it writes.
+    const epic = {
+      epic_id: "voice-v2",
+      stories: [
+        { id: "vt2-03-mixer", content: "id: vt2-03-mixer\ntitle: Mixer\ndepends_on: [vt2-02-epoch-loader]\n" },
+        { id: "vt2-04-final", content: "id: vt2-04-final\ntitle: Final\ndepends_on: [vt2-02-epoch-loader, vt2-03-mixer]\n" },
+        { id: "vt2-02-epoch-loader", content: "id: vt2-02-epoch-loader\ntitle: Loader\ndepends_on: [vt2-01-checkpoint-adapters]\n" },
+        { id: "vt2-01-checkpoint-adapters", content: "id: vt2-01-checkpoint-adapters\ntitle: Adapters\ndepends_on: []\n" },
+        // Prose-only dependency, the FFE-91 shape: nothing in depends_on.
+        {
+          id: "vt2-05-preview",
+          content: "id: vt2-05-preview\ntitle: Preview\ndepends_on: []\ndescription: |\n  Depends on vt2-01-checkpoint-adapters; ship the preview after it.\n",
+        },
+      ],
+    } as any;
+    const r = await fileStoriesToMultica("SEED", epic);
+    assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+
+    const creates = calls.filter((c) => c.method === "POST" && c.url.endsWith("/api/backlog/issues"));
+    const byStory = new Map(creates.map((c, i) => [String(c.body.title).match(/^\[([^\]]+)\]/)![1]!, { identifier: `FFE-${111 + i}`, description: String(c.body.description) }]));
+    const ident = (id: string) => byStory.get(id)!.identifier;
+
+    // Foundations are created first, so a dependent always has its dependency's identifier in hand.
+    assert.equal(ident("vt2-01-checkpoint-adapters"), "FFE-111");
+
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-01-checkpoint-adapters")!.description), []);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-02-epoch-loader")!.description), [ident("vt2-01-checkpoint-adapters")]);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-03-mixer")!.description), [ident("vt2-02-epoch-loader")]);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-04-final")!.description), [ident("vt2-02-epoch-loader"), ident("vt2-03-mixer")]);
+    assert.deepEqual(aurigaDeps(byStory.get("vt2-05-preview")!.description), [ident("vt2-01-checkpoint-adapters")]);
+
+    for (const [storyId, { description }] of byStory) {
+      for (const line of description.split("\n").filter((l) => /^Depends on:/.test(l))) {
+        // The slug may sit beside its identifier, but never alone: every entry is "FFE-n (slug)".
+        for (const entry of line.slice("Depends on:".length).split(",")) {
+          assert.match(entry.trim(), /^FFE-\d+ \([a-z0-9-]+\)$/, `${storyId}: ${line}`);
+        }
+        assert.match(description, /blocked_reason to "dependency:FFE-/, `${storyId} carries the unpark instruction`);
+      }
+    }
+    assert.doesNotMatch(byStory.get("vt2-04-final")!.description, /pick it up again/);
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+test("parseProseDependsOn: only exact sibling ids after a dependency cue, never YAML depends_on lines", () => {
+  const siblings = ["wall-1", "wall-10", "wall-2", "wall-3"];
+  const story = {
+    id: "wall-3",
+    content: "id: wall-3\ndepends_on: []\nsteps:\n  - id: wall-2\n    depends_on: [wall-2]\ndescription: |\n  Depends on wall-1; preview mentions wall-10 later.\n  wall-2 is related but not required.\n",
+  };
+  assert.deepEqual(parseProseDependsOn(story, siblings), ["wall-1", "wall-10"]);
+  assert.deepEqual(parseProseDependsOn({ id: "a", content: "Requires a-b." }, ["a", "a-b", "b"]), ["a-b"]);
+});
+
+test("orderStoriesForFiling: dependencies first, cycles kept at the end in original order", () => {
+  const deps = new Map([["c", ["b"]], ["b", ["a"]], ["a", []], ["x", ["y"]], ["y", ["x"]]]);
+  const order = orderStoriesForFiling([{ id: "x" }, { id: "c" }, { id: "b" }, { id: "y" }, { id: "a" }], deps).map((s) => s.id);
+  assert.deepEqual(order, ["a", "b", "c", "x", "y"]);
+});
+
+test("fileStoriesToMultica: a dependency with no identifier yet is never written as a slug on the Depends on line", async () => {
+  const creates: Array<Record<string, unknown>> = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST" && url.endsWith("/api/backlog/issues")) {
+      creates.push(body);
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: `uuid-${creates.length}` }) };
+    }
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    const epic = {
+      epic_id: "e1",
+      stories: [
+        { id: "s1", content: "id: s1\ntitle: First\ndepends_on: []\n" },
+        { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: [s1]\n" },
+      ],
+    } as any;
+    await fileStoriesToMultica("SEED", epic);
+    const s2 = String(creates.find((b) => String(b.title).startsWith("[s2]"))!.description);
+    assert.doesNotMatch(s2, /^Depends on:/m);
+    assert.match(s2, /^# Unresolved dependencies \(no ticket identifier at filing time\): s1$/m);
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+// PANT-929: Multica runs any agent-assigned issue whatever its status, so a parked story that is
+// assigned at creation runs straight through its gate. Parked stories must be backlog AND unassigned.
+test("fileStoriesToMultica: park files stories in backlog with no assignee", async () => {
+  type Call = { method: string; url: string; body: unknown };
+  const calls: Call[] = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, url, body });
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST" && url.endsWith("/api/backlog/issues")) {
+      const title = String((body as Record<string, unknown>).title ?? "");
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" }) };
+    }
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    const epic = {
+      epic_id: "e1",
+      stories: [
+        { id: "s1", content: "id: s1\ntitle: First\ndepends_on: []\n" },
+        { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: [s1]\n" },
+      ],
+    } as any;
+    const r = await fileStoriesToMultica("SEED", epic, { park: true });
+    assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+
+    const creates = calls.filter((c) => c.method === "POST" && c.url.endsWith("/api/backlog/issues"));
+    assert.equal(creates.length, 2);
+    for (const c of creates) {
+      const b = c.body as Record<string, unknown>;
+      assert.equal(b.status, "backlog");
+      assert.ok(!("assignee" in b) && !("assignee_id" in b), "parked stories have no assignee");
+    }
+    // Nothing after creation assigns them or moves them out of backlog either.
+    assert.ok(!calls.some((c) => c.url.includes("/assign") || c.url.includes("/status")));
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+test("promoteParkedStories: moves each story to todo via the status route, never assigns", async () => {
+  type Call = { method: string; url: string; body: unknown };
+  const calls: Call[] = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    calls.push({ method: init.method, url, body: init.body ? JSON.parse(init.body) : null });
+    if (url.includes("/BAD/")) return { ok: false, status: 502, text: async () => "boom" };
+    return { ok: true, status: 204, text: async () => "" };
+  });
+  try {
+    const r = await promoteParkedStories(["ISSUE-1", "BAD", "ISSUE-2"]);
+    assert.deepEqual(r.promoted, ["ISSUE-1", "ISSUE-2"]);
+    assert.equal(r.errors.length, 1);
+    assert.equal(r.errors[0]!.issue_id, "BAD");
+    assert.equal(calls.length, 3);
+    for (const c of calls) {
+      assert.equal(c.method, "POST");
+      assert.match(c.url, /\/api\/backlog\/issues\/[^/]+\/status$/);
+      assert.deepEqual(c.body, { status: "todo" });
+    }
+  } finally {
+    __setPantheonFetchForTest(prev);
+  }
+});
+
+test("fileStoriesToMultica: stamps opts.targetRepo onto each child story (description + metadata)", async () => {
+  type Call = { method: string; url: string; body: unknown };
+  const calls: Call[] = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, url, body });
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST") {
+      const title = String((body as Record<string, unknown>).title ?? "");
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" }) };
+    }
+    return { ok: true, status: 204, text: async () => "" };
   });
   try {
     const epic = {
@@ -252,24 +468,24 @@ test("fileStoriesToMultica: stamps opts.targetRepo onto each child story (descri
         { id: "s2", content: "id: s2\ntitle: Second\ndepends_on: []\n" },
       ],
     } as any;
-    const r = fileStoriesToMultica("SEED", epic, { targetRepo: "mdostal/cron-maker" });
+    const r = await fileStoriesToMultica("SEED", epic, { targetRepo: "mdostal/cron-maker" });
     assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
 
     // Every filed story's DESCRIPTION carried the build-lane target_repo signal.
-    const bodies = Object.values(descs);
-    assert.equal(bodies.length, 2);
-    for (const b of bodies) assert.match(b, /target_repo:\s*mdostal\/cron-maker/, `desc must carry target_repo: ${b}`);
-
-    // And each was ALSO set as ticket metadata target_repo (build lane's secondary signal).
-    const metaSets = calls.filter((a) => a[1] === "metadata" && a[2] === "set" && a[a.indexOf("--key") + 1] === "target_repo");
-    assert.equal(metaSets.length, 2, "one target_repo metadata set per filed story");
-    for (const m of metaSets) assert.equal(m[m.indexOf("--value") + 1], "mdostal/cron-maker");
+    const creates = calls.filter((c) => c.method === "POST");
+    assert.equal(creates.length, 2);
+    for (const c of creates) {
+      const b = c.body as Record<string, unknown>;
+      assert.match(String(b.description ?? ""), /target_repo:\s*mdostal\/cron-maker/, `desc must carry target_repo`);
+      // target_repo also carried as ticket metadata (the build lane's secondary signal).
+      assert.equal((b.metadata as Record<string, unknown> | undefined)?.target_repo, "mdostal/cron-maker");
+    }
   } finally {
-    __setMulticaRunnerForTest(prev);
+    __setPantheonFetchForTest(prev);
   }
 });
 
-test("fileStoriesToMultica: falls back to the WORKSPACE origin remote for target_repo when none is declared", () => {
+test("fileStoriesToMultica: falls back to the WORKSPACE origin remote for target_repo when none is declared", async () => {
   // A seed that never declared an explicit target_repo still plans inside a real run workspace whose
   // git origin IS the build target. Every child story must carry that workspace-derived target_repo,
   // so the build lane never blocks with "missing target_repo" (the regression this closes forward).
@@ -277,19 +493,17 @@ test("fileStoriesToMultica: falls back to the WORKSPACE origin remote for target
   execFileSync("git", ["-C", gitRepo, "init", "-q"]);
   execFileSync("git", ["-C", gitRepo, "remote", "add", "origin", "git@github.com:mdostal/janus.git"]);
 
-  const descs: Record<string, string> = {};
-  const calls: string[][] = [];
-  const prev = __setMulticaRunnerForTest((args: string[]) => {
-    calls.push(args);
-    if (args[0] === "issue" && args[1] === "get") return { id: "SEED", project_id: "proj" };
-    if (args[0] === "issue" && args[1] === "create") {
-      const df = args[args.indexOf("--description-file") + 1];
-      if (df) { try { descs[df] = readFileSync(df, "utf8"); } catch {} }
-      const title = String(args[args.indexOf("--title") + 1] ?? "");
-      return { id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" };
+  type Call = { method: string; url: string; body: unknown };
+  const calls: Call[] = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, url, body });
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "proj" }) };
+    if (init.method === "POST") {
+      const title = String((body as Record<string, unknown>).title ?? "");
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: title.includes("s1") ? "ISSUE-1" : "ISSUE-2" }) };
     }
-    if (args[0] === "issue" && args[1] === "metadata") return { ok: true };
-    return null;
+    return { ok: true, status: 204, text: async () => "" };
   });
   try {
     const epic = {
@@ -300,37 +514,37 @@ test("fileStoriesToMultica: falls back to the WORKSPACE origin remote for target
       ],
     } as any;
     // NOTE: no opts.targetRepo is passed — only the run workspace path.
-    const r = fileStoriesToMultica("SEED", epic, { workspacePath: gitRepo });
+    const r = await fileStoriesToMultica("SEED", epic, { workspacePath: gitRepo });
     assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
 
-    const bodies = Object.values(descs);
-    assert.equal(bodies.length, 2, "both child stories filed");
-    for (const b of bodies) {
-      assert.match(b, /target_repo:\s*mdostal\/janus/, `child story must carry workspace-derived target_repo: ${b}`);
+    const creates = calls.filter((c) => c.method === "POST");
+    assert.equal(creates.length, 2, "both child stories filed");
+    for (const c of creates) {
+      const b = c.body as Record<string, unknown>;
+      assert.match(String(b.description ?? ""), /target_repo:\s*mdostal\/janus/, `child story must carry workspace-derived target_repo`);
+      // Also carried as ticket metadata (the build lane's secondary signal).
+      assert.equal((b.metadata as Record<string, unknown> | undefined)?.target_repo, "mdostal/janus");
     }
-    // Also carried as ticket metadata (the build lane's secondary signal).
-    const metaSets = calls.filter((a) => a[1] === "metadata" && a[2] === "set" && a[a.indexOf("--key") + 1] === "target_repo");
-    assert.equal(metaSets.length, 2, "one target_repo metadata set per filed story");
-    for (const m of metaSets) assert.equal(m[m.indexOf("--value") + 1], "mdostal/janus");
   } finally {
-    __setMulticaRunnerForTest(prev);
+    __setPantheonFetchForTest(prev);
     rmSync(gitRepo, { recursive: true, force: true });
   }
 });
 
-test("fileStoriesToMultica: explicit opts.project overrides the seed's project", () => {
-  const creates: string[][] = [];
-  const prev = __setMulticaRunnerForTest((args: string[]) => {
-    if (args[0] === "issue" && args[1] === "get") return { id: "SEED", project_id: "seed-proj" };
-    if (args[0] === "issue" && args[1] === "create") { creates.push(args); return { id: "X" }; }
-    return null;
+test("fileStoriesToMultica: explicit opts.project overrides the seed's project", async () => {
+  const creates: Array<Record<string, unknown>> = [];
+  const prev = __setPantheonFetchForTest(async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (init.method === "GET") return { ok: true, status: 200, text: async () => JSON.stringify({ id: "SEED", project_id: "seed-proj" }) };
+    if (init.method === "POST") { creates.push(body as Record<string, unknown>); return { ok: true, status: 201, text: async () => JSON.stringify({ id: "X" }) }; }
+    return { ok: true, status: 204, text: async () => "" };
   });
   try {
     const epic = { epic_id: "e1", stories: [{ id: "s1", content: "id: s1\ntitle: One\ndepends_on: []\n" }] } as any;
-    fileStoriesToMultica("SEED", epic, { project: "explicit-proj" });
-    const create = creates[0]!;
-    assert.equal(create[create.indexOf("--project") + 1], "explicit-proj");
+    await fileStoriesToMultica("SEED", epic, { project: "explicit-proj" });
+    assert.equal(creates.length, 1);
+    assert.equal(creates[0]!.project, "explicit-proj");
   } finally {
-    __setMulticaRunnerForTest(prev);
+    __setPantheonFetchForTest(prev);
   }
 });

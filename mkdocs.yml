@@ -1,0 +1,77 @@
+site_name: Minerva
+site_url: https://mdostal.github.io/minerva/docs/
+site_description: >-
+  Turns an idea into a spec and a plan, headless. The Pantheon's Planner.
+site_author: Mathew Dostal
+
+repo_name: mdostal/minerva
+repo_url: https://github.com/mdostal/minerva
+
+docs_dir: mkdocs_docs
+site_dir: site
+
+theme:
+  name: material
+  logo: assets/icon.svg
+  favicon: assets/favicon.ico
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mermaid2
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - ABI Reference: abi-reference.md
+  - MCP Server: mcp-server.md
+  - Architecture: architecture.md
+  - Configuration: configuration.md
+  - Vision & Roadmap: vision.md
+  - Contributing: contributing.md
+  - Changelog: changelog.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/mdostal/minerva

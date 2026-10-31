@@ -10,6 +10,12 @@ what you want to change and why. Minerva has a deliberately narrow scope (see th
 it's its own thing" section and [Vision & Roadmap](vision.md)) — a PR that expands scope without
 prior discussion is likely to be asked to narrow before it's reviewed.
 
+## Contributing an integration
+
+An integration for a new tool lives in its own repo, not in this one. See
+[Integrations, section 4](integrations.md#4-contributing-an-integration) for the path: a descriptor, a gate
+test that drives it through `bin/minerva.ts`, and how a host selects it.
+
 ## Development setup
 
 ```bash

@@ -65,6 +65,7 @@ nav:
   - Quickstart: quickstart.md
   - ABI Reference: abi-reference.md
   - MCP Server: mcp-server.md
+  - Integrations: integrations.md
   - Architecture: architecture.md
   - Configuration: configuration.md
   - Vision & Roadmap: vision.md

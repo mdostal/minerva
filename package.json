@@ -1,7 +1,7 @@
 {
   "name": "pantheon-minerva",
   "version": "0.3.0",
-  "description": "Minerva — the Pantheon's Planner. Agent-drivable idea-to-spec engine.",
+  "description": "Headless engine that drives an interactive tool, parks on disk when it needs an answer, and resumes later. plugin-hive kickoff+plan is the default tool.",
   "type": "module",
   "license": "MIT",
   "author": "Mathew Dostal",

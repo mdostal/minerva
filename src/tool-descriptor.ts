@@ -73,12 +73,6 @@ export function defaultTool(): ToolDescriptor {
   return invoke ? { ...PLUGIN_HIVE_TOOL, invoke } : PLUGIN_HIVE_TOOL;
 }
 
-// True when the drive prompt has been overridden by config (either name). The agnostic planning
-// route only serves the stock plugin-hive invocation, so an override keeps the built-in driver.
-export function drivePromptOverridden(): boolean {
-  return Boolean(process.env.MINERVA_DRIVE_PROMPT || process.env.MINERVA_TEST_DRIVE_PROMPT);
-}
-
 function relPath(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0) fail(`tool descriptor ${field} must be a non-empty string`);
   if (isAbsolute(value)) fail(`tool descriptor ${field} must be workspace-relative, got absolute path "${value}"`);

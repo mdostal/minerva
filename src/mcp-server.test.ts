@@ -61,7 +61,7 @@ after(async () => {
   if (previousSeedRepo) process.env.MINERVA_SEED_REPO = previousSeedRepo; else delete process.env.MINERVA_SEED_REPO;
 });
 
-test("listTools returns all 9 ABI methods as real MCP tools with names + descriptions + schemas", async () => {
+test("listTools returns all 10 ABI methods as real MCP tools with names + descriptions + schemas", async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
@@ -72,6 +72,7 @@ test("listTools returns all 9 ABI methods as real MCP tools with names + descrip
     "getQuestions",
     "getRunStatus",
     "listRuns",
+    "resumeRun",
     "startRun",
     "submitAnswers",
   ]);
@@ -119,17 +120,19 @@ test("a full startRun -> getRunStatus -> listRuns round trip works identically t
 // validate-run-id-uuid-shape story -- mcp-server.ts's CallToolRequestSchema handler is the other
 // of the two ABI boundaries (alongside dispatch.ts's method routing) that must reject a non-UUID
 // run_id with VALIDATION_FAILED before forwarding to dispatch() at all, for exactly these five
-// tools.
-const RUN_ID_TOOLS = ["getRunStatus", "getQuestions", "submitAnswers", "getOutput", "abortRun"] as const;
+// tools (six, with resumeRun).
+const RUN_ID_TOOLS = ["getRunStatus", "getQuestions", "submitAnswers", "resumeRun", "getOutput", "abortRun"] as const;
 const NON_UUID_RUN_IDS = ["x", "", "../../etc/passwd", "not-a-uuid-at-all", "12345"];
 
-// Every one of these tools declares other required params too (channel, answers) -- pass
+// Every one of these tools declares other required params too (channel, answers, cause, evidence) -- pass
 // well-formed values for those so a rejection can only be attributed to run_id shape.
 function fullArgsFor(runId: string): Record<string, unknown> {
   return {
     run_id: runId,
     channel: "agent",
     answers: [{ question_id: "q1", answer: "an answer" }],
+    cause: "time",
+    evidence: { observed_at: "2026-10-31T00:00:00Z" },
   };
 }
 

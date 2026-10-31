@@ -336,6 +336,23 @@ for the underlying plugin-hive kickoff+plan engine, not just for Minerva's own w
 directly violates the hard exclusion against auto-approving or guessing. Resolves REQ-06 /
 PRD GAP-04.
 
+**AD-6 — Park and resume follow the Pantheon interaction lifecycle (PANT-1249).**
+Every park is recorded on the run as an epoch-numbered `park` and reported by `getRunStatus` as a
+`pantheon:park-record/v1`. A run parks on a question (`awaiting-answer`), and `parkRun` can park
+it on time or a signal; `resumeRun` resumes those with no answer and drives exactly one turn.
+A resume is ordered **claim → turn → settle**. The claim (pid, host, epoch) is written first, and
+the question stays pending while it is held. The turn runs. Then marking the question answered,
+releasing the claim and opening the next park happen in one locked write in `recordTurn`. A
+crash before that write leaves the question pending and a dead claim, and the claim is released
+on the next read (dead pid on the same host, or older than `MINERVA_RESUME_CLAIM_STALE_MS`). So a
+crash between "answered" and "session persisted" cannot strand the run, and a duplicate resume
+of a settled epoch returns `already_resumed` without a second turn.
+When the recorded session no longer resolves (or was never recorded), the turn is rebuilt from
+`state_ref`: a fresh session gets the run's stored `drive_prompt` plus the answer or resume note.
+`state_ref` is `{kind: "file"}`, the run's worktree on the parking host. Resuming on another
+device is out of scope, because the worktree is not pushed anywhere until the plan completes.
+Multi-answer sets are refused whole; staged sets are PANT-925.
+
 ## PRD Gap Report — resolution status
 - GAP-01 (Q&A message schema) — **resolved**, see API Contract above.
 - GAP-02 (escalation threshold mechanics) — **resolved**, see AD-2.

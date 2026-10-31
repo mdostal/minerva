@@ -27,10 +27,11 @@ echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
 |--------|--------|--------|--------|
 | `capabilities` | none | `{abi_version}` (`1.0.0`) | |
 | `startRun` | `idea` (required), `target_repo?`, `defaults?`, `tool?` (see [Tool descriptor](#tool-descriptor)) | `{run_id}`. Returns after the first drive turn and any in-process auto-answers | `VALIDATION_FAILED`, `UPSTREAM_ERROR` |
-| `getRunStatus` | `run_id` | `{status, metrics}`. `status` is `in_progress`, `waiting_on_human`, `complete` or `aborted` | `NOT_FOUND` |
+| `getRunStatus` | `run_id` | `{status, metrics, park}`. `park` is the open `pantheon:park-record/v1` or `null`. `status` is `in_progress`, `waiting_on_human`, `complete` or `aborted` | `NOT_FOUND` |
 | `listRuns` | none | `{runs: [{run_id, status, created_at}]}` | |
 | `getQuestions` | `run_id`, `channel` (`agent` or `human`) | `{questions: Question[]}`, pending questions on that enforced channel. Read-only | `NOT_FOUND`, `VALIDATION_FAILED` |
-| `submitAnswers` | `run_id`, `channel`, `answers: [{question_id, answer}]` (exactly one) | `{result: {}}`. The only method that moves a run past a question | `WRONG_CHANNEL`, `NOT_FOUND`, `VALIDATION_FAILED`, `UPSTREAM_ERROR` |
+| `submitAnswers` | `run_id`, `channel`, `answers: [{question_id, answer}]` (exactly one) | `{result: {}, outcome, run_id, park_epoch, resumed_via?}`. The only method that moves a run past a question. A repeat returns `already_resumed`; more than one answer is refused whole | `WRONG_CHANNEL`, `NOT_FOUND`, `VALIDATION_FAILED`, `UPSTREAM_ERROR` |
+| `resumeRun` | `run_id`, `cause` (`time` or `signal`), `evidence: {observed_at, signal_key?}`, `park_epoch?` | `{outcome, run_id, park_epoch, resumed_via?}`. Resumes a time- or signal-parked run with no answer, one turn | `NOT_FOUND`, `VALIDATION_FAILED`, `UPSTREAM_ERROR` |
 | `getOutput` | `run_id` | `{epic, epics, metrics}`: the plan as plugin-hive epic + story YAML | `NOT_READY`, `NOT_FOUND` |
 | `abortRun` | `run_id` | `{result: {}}`. Records cleanup; never deletes the workspace. Idempotent | `NOT_FOUND` |
 | `getMetrics` | none | `{generated_at, skipped_records, overall, by_driver, by_lane}`, cross-run planning KPIs | |

@@ -1,4 +1,4 @@
-// dns-cutover-example.test.ts -- PANT-1262. Runs the worked example in docs/integrations.md
+// dns-cutover-example.test.ts -- PANT-1262. Runs the worked example in mkdocs_docs/integrations.md
 // literally: a fresh `bin/minerva.ts` process per call, the descriptor from
 // docs/examples/dns-cutover/tool.json, the turn runner docs/examples/dns-cutover/turn-runner.sh in
 // place of `claude`, and a fake `dig` on PATH standing in for DNS. Nothing from src/ is imported
@@ -63,10 +63,10 @@ after(() => {
   rmSync(seedRepo, { recursive: true, force: true });
 });
 
-test("docs/integrations.md shows tool.json verbatim", () => {
-  const page = readFileSync(join(REPO, "docs", "integrations.md"), "utf8");
+test("mkdocs_docs/integrations.md shows tool.json verbatim", () => {
+  const page = readFileSync(join(REPO, "mkdocs_docs", "integrations.md"), "utf8");
   const block = page.match(/<!-- from: docs\/examples\/dns-cutover\/tool\.json -->\n```json\n([\s\S]*?)```/);
-  assert.ok(block, "docs/integrations.md has no tool.json block");
+  assert.ok(block, "mkdocs_docs/integrations.md has no tool.json block");
   assert.equal(block[1], readFileSync(join(EXAMPLE, "tool.json"), "utf8"));
 });
 

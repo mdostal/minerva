@@ -26,7 +26,7 @@ echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
 | Method | Params | Result | Errors |
 |--------|--------|--------|--------|
 | `capabilities` | none | `{abi_version}` (`1.0.0`) | |
-| `startRun` | `idea` (required), `target_repo?`, `defaults?` | `{run_id}`. Returns after the first drive turn and any in-process auto-answers | `VALIDATION_FAILED`, `UPSTREAM_ERROR` |
+| `startRun` | `idea` (required), `target_repo?`, `defaults?`, `tool?` (see [Tool descriptor](#tool-descriptor)) | `{run_id}`. Returns after the first drive turn and any in-process auto-answers | `VALIDATION_FAILED`, `UPSTREAM_ERROR` |
 | `getRunStatus` | `run_id` | `{status, metrics}`. `status` is `in_progress`, `waiting_on_human`, `complete` or `aborted` | `NOT_FOUND` |
 | `listRuns` | none | `{runs: [{run_id, status, created_at}]}` | |
 | `getQuestions` | `run_id`, `channel` (`agent` or `human`) | `{questions: Question[]}`, pending questions on that enforced channel. Read-only | `NOT_FOUND`, `VALIDATION_FAILED` |
@@ -34,6 +34,26 @@ echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
 | `getOutput` | `run_id` | `{epic, epics, metrics}`: the plan as plugin-hive epic + story YAML | `NOT_READY`, `NOT_FOUND` |
 | `abortRun` | `run_id` | `{result: {}}`. Records cleanup; never deletes the workspace. Idempotent | `NOT_FOUND` |
 | `getMetrics` | none | `{generated_at, skipped_records, overall, by_driver, by_lane}`, cross-run planning KPIs | |
+
+### Tool descriptor
+
+`startRun`'s `tool` names the planning tool the run drives. Omit it (or pass `"plugin-hive"`) for
+the default, which behaves exactly as before. Otherwise pass a descriptor object; it is validated
+strictly (`VALIDATION_FAILED` on any bad field), frozen onto the run record and reused by every
+later turn of the run:
+
+| Field | Meaning | plugin-hive default |
+| --- | --- | --- |
+| `tool.id` | Tool name, stored on the run record as `tool_id` | `plugin-hive` |
+| `tool.invoke` | First-turn prompt; every `{idea}` is replaced with the idea | `/plugin-hive:plan {idea} --skip-sign-off --lite` |
+| `tool.state_path` | Workspace-relative state dir, created at allocation | `.pHive` |
+| `tool.completion_detector` | `{kind: "epics-dir", epics_dir, worktree_roots}`: the run completes once a new epic with stories appears under `epics_dir` (or under `<root>/<name>/<epics_dir>` for each worktree root) | `{kind: "epics-dir", epics_dir: ".pHive/epics", worktree_roots: [".claude/worktrees"]}` |
+| `tool.question_source` | `{kind: "envelope-dir", path}` (question envelopes on disk, read by `MINERVA_DRIVER=forked`) or `{kind: "response"}` (questions come back in the turn response; not usable with the forked driver) | `{kind: "envelope-dir", path: ".pHive/questions"}` |
+| `tool.base_branch?` | Branch the run worktree is cut from and the plan is pushed to | `MINERVA_BASE_BRANCH`, else `dev` |
+
+All paths are workspace-relative and may not leave the workspace. `MINERVA_DRIVE_PROMPT` overrides
+the default descriptor's `invoke` (its old name `MINERVA_TEST_DRIVE_PROMPT` still works); an
+explicit descriptor's own `invoke` always wins.
 
 Error codes are a closed enum: `NOT_FOUND`, `VALIDATION_FAILED`, `WRONG_CHANNEL`, `NOT_READY`,
 `UPSTREAM_ERROR`, `UNKNOWN_METHOD` (unknown method, or an unexpected internal error).

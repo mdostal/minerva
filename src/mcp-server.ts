@@ -48,6 +48,13 @@ const TOOLS: Tool[] = [
         idea: { type: "string", description: "The idea/requirement to plan, as free text. Required." },
         target_repo: { type: "string", description: "Optional owner/repo (or local path) to plan against. Omit for a fresh scratch workspace." },
         defaults: { type: "object", description: "Optional pre-baked-defaults override (see docs/plan-defaults.example.yaml). Omit to use the operator-configured default." },
+        tool: {
+          type: ["string", "object"],
+          description:
+            "Optional planning-tool descriptor: a built-in id (\"plugin-hive\") or " +
+            "{id, invoke, state_path, completion_detector, question_source, base_branch?} (see docs/abi.md). " +
+            "Omit to use plugin-hive.",
+        },
       },
       required: ["idea"],
     },

@@ -9,13 +9,21 @@
 Built by [Mathew Dostal](https://mdostal.com) — fractional CTO, Dostal Technology.
 <!-- /shared:byline -->
 
-**The Pantheon's Planner.** Minerva turns a raw **idea** into an **approved, planned spec** — an
-epic with dependency-tracked stories — autonomously and headlessly.
+**A headless engine for interactive tools.** Minerva drives an interactive tool one turn at a
+time in an isolated git workspace. When the tool needs an answer, Minerva parks the run on disk and
+exits. When the answer arrives, from a person or an agent, minutes or days later, it resumes the run
+from disk. The result is an epic with dependency-tracked stories.
 
-Named for the Roman goddess of wisdom and strategic planning, Minerva runs the *front half* of
-the hive flow (`kickoff` + `plan`), extracts the human-gate questions along the way, routes them
-to the decision surface, iterates the back-and-forth, and emits the approved epic/stories — then
-hands off to **Auriga** (routing) and **Vulcan** (provisioning) for the build.
+The tool is **semi-agnostic**. Out of the box Minerva drives [plugin-hive](https://firefly-events.github.io/plugin-hive/)'s
+`kickoff` + `plan`: that is the batteries-included **default**, not a requirement. Any tool that fits
+a small descriptor and turn contract can take its place, including a plain shell program. That
+contract still assumes a run ends in a plan and parks only on questions. See
+[Integrations](mkdocs_docs/integrations.md) for the contract, a worked non-plugin-hive example, and what Minerva
+deliberately does not do.
+
+Minerva is named for the Roman goddess of wisdom and strategic planning. Inside the Pantheon it is
+the planner: questions go to the decision surface, and the approved epic is handed to **Auriga**
+(routing) and **Vulcan** (provisioning). None of them is needed to run it.
 
 ## Get your agent using it in one command
 
@@ -123,10 +131,10 @@ echo '{"method":"capabilities"}' | npx tsx bin/minerva.ts
 echo '{"method":"startRun","params":{"idea":"add SSO to the billing app"}}' | npx tsx bin/minerva.ts
 
 # Pull the pending questions for a run
-echo '{"method":"getQuestions","params":{"run_id":"<run_id>"}}' | npx tsx bin/minerva.ts
+echo '{"method":"getQuestions","params":{"run_id":"<run_id>","channel":"human"}}' | npx tsx bin/minerva.ts
 
 # Answer them (this is the only write path that advances a run)
-echo '{"method":"submitAnswers","params":{"run_id":"<run_id>","answers":[...]}}' | npx tsx bin/minerva.ts
+echo '{"method":"submitAnswers","params":{"run_id":"<run_id>","channel":"human","answers":[{"question_id":"<id>","answer":"..."}]}}' | npx tsx bin/minerva.ts
 
 # Fetch the approved epic + stories once the run is complete
 echo '{"method":"getOutput","params":{"run_id":"<run_id>"}}' | npx tsx bin/minerva.ts
@@ -145,12 +153,24 @@ Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 | `MINERVA_DRIVE_MODEL` | Model used to drive a turn | `claude-haiku-4-5-20251001` |
 | `MINERVA_TURN_TIMEOUT_MS` | Per-turn ceiling | `600000` (10 min) |
 | `MINERVA_HOME` | Run-state root | `~/.minerva` |
+| `MINERVA_DRIVE_PROMPT` | First-turn prompt for the default plugin-hive tool; `{idea}` is replaced with the idea. Old name `MINERVA_TEST_DRIVE_PROMPT` still works. A `tool` descriptor passed to `startRun` wins (see `docs/abi.md`) | `/plugin-hive:plan {idea} --skip-sign-off --lite` |
+| `MINERVA_BASE_BRANCH` | Branch run worktrees are cut from and plans are pushed to, unless the `tool` descriptor sets `base_branch` | `dev` |
+| `PANTHEON_API_URL` | Pantheon core-api base URL (route select + backlog); exported by the Pantheon runtime | unset |
+| `PANTHEON_CORE_API_URL` / `MINERVA_PANTHEON_CORE_API_URL` | Overrides for the core-api base URL. Precedence: `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` > `PANTHEON_API_URL` | unset |
+| `PANTHEON_SECRETS_SHARED_DIR` | Shared secrets volume Minerva reads the operator token from. Every core-api write (route select, backlog writes) sends `x-pantheon-operator-token`, injected via `POST /api/secrets/inject` and cached for 60s; when it can't be resolved the write goes out without it and the reason is logged once | `/pantheon-secrets` |
+| `MINERVA_OPERATOR_TOKEN_INJECT` | `off` skips the operator-token inject (the test suite sets it so tests never ask a live core-api for a secret) | unset |
+| `MINERVA_GIT_CLONE_PROTOCOL` | Clone protocol for a bare `owner/repo` `target_repo` slug: `https` or `ssh`. Explicit URLs are used as given. | `https` |
 
 ```bash
 npm test          # tsx --test, TDD suite across src/ + bin/
 npm run typecheck # tsc --noEmit
 npm run ci        # test + typecheck — the authoritative gate, run locally before every merge
+npm run test:hermetic  # npm test behind a tripwire `claude` that fails if the real CLI is called
 ```
+
+Tests use a stub `claude` (`bin/stub-claude.ts`) by default and never make real model calls. Set
+`MINERVA_TEST_REAL_CLAUDE=1` for live integration against the real CLI (the plugin-hive-fork tests
+additionally need `MINERVA_HIVE_PLUGIN_DIR`). CI enforces the typecheck through `npm run build`.
 
 ## Status
 

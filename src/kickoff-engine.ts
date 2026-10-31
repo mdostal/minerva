@@ -8,9 +8,11 @@ import {
   allocateRun,
   readRunRecord,
   updateRunRecord,
+  mutateRunRecord,
+  isTerminalStatus,
   normalizeQuestionKind,
   recordDriverTurn,
-  recordHumanEscalation,
+  recordHumanEscalations,
   recordAutoResolution,
   updateRunMetricsDriver,
   type Question,
@@ -20,11 +22,19 @@ import {
 import { abortRun } from "./cleanup-ledger.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
+import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, laneOf, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
 import { normalizeTargetRepoValue } from "./target-repo-signal.ts";
+import {
+  PLUGIN_HIVE_TOOL,
+  expandInvoke,
+  questionsDirOf,
+  resolveTool,
+  toolForRecord,
+  type ToolDescriptor,
+} from "./tool-descriptor.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
@@ -161,6 +171,26 @@ function driverForRecord(record: Pick<RunRecord, "plan_runtime" | "plan_model">)
   return driver;
 }
 
+// The DriverInput fields a run's tool descriptor contributes to every turn: where the tool
+// surfaces question envelopes. Omitted for the plugin-hive default's own dir and for tools whose
+// questions come from the turn response, so a default run's inputs are unchanged.
+function toolTurnInput(record: Pick<RunRecord, "tool" | "tool_id">): Pick<DriverInput, "questions_dir"> {
+  const dir = questionsDirOf(toolForRecord(record));
+  return dir && dir !== questionsDirOf(PLUGIN_HIVE_TOOL) ? { questions_dir: dir } : {};
+}
+
+// The forked driver reads questions ONLY from on-disk envelopes, so it cannot drive a tool whose
+// questions come back in the turn response. Fail loudly at startRun rather than park forever.
+function assertDriverSupportsTool(tool: ToolDescriptor): void {
+  if (tool.question_source.kind === "response" && driver instanceof ForkedHiveDriver) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `tool "${tool.id}" has question_source "response", which MINERVA_DRIVER=forked cannot read -- ` +
+        `use an "envelope-dir" question_source or another driver`,
+    );
+  }
+}
+
 // Build the initial headless drive prompt. This must PLAN (decompose), never IMPLEMENT: it
 // drives plugin-hive's `/plugin-hive:plan` DECOMPOSE skill, which writes an epic +
 // dependency-tracked stories into `.pHive/epics/<id>/` -- the filesystem fact
@@ -173,14 +203,14 @@ function driverForRecord(record: Pick<RunRecord, "plan_runtime" | "plan_model">)
 // design-discussion artifact). Any residual routine gate is still auto-answered by the
 // pre-baked-defaults loop.
 //
-// Test seam: MINERVA_TEST_DRIVE_PROMPT swaps this real skill prompt for a cheap synthetic one so
-// the automated suite doesn't drive a full real plan (slow, costly, many gates) on every run.
-// The spawn/resume MECHANISM is identical either way -- only prompt content differs.
-function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
-  const override = process.env.MINERVA_TEST_DRIVE_PROMPT;
-  const base = override
-    ? override.replace(/\{idea\}/g, idea)
-    : `/plugin-hive:plan ${idea} --skip-sign-off --lite`;
+// That command is the plugin-hive tool descriptor's `invoke` (tool-descriptor.ts), the default
+// value of startRun's `tool` parameter; a caller-supplied descriptor brings its own invoke string.
+// MINERVA_DRIVE_PROMPT (real config; its original test-seam name MINERVA_TEST_DRIVE_PROMPT still
+// works) overrides the default descriptor's invoke -- the automated suite uses it to swap in a
+// cheap synthetic prompt. The spawn/resume MECHANISM is identical either way -- only prompt
+// content differs.
+function buildDrivePrompt(idea: string, defaults: PlanDefaults, tool: ToolDescriptor): string {
+  const base = expandInvoke(tool.invoke, idea);
   // Append any operator-configured suffix (e.g. an explicit "skip the sign-off gate"
   // instruction). Empty string when unset -> prompt is byte-identical to before.
   return base + drivePromptSuffix(defaults);
@@ -194,13 +224,60 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
 // whatever the schema-forced response said once completion is detected.
 export async function recordTurn(runId: string, rawResult: string): Promise<void> {
   if (checkAndMarkComplete(runId)) {
-    return; // run is complete -- no pending question to append, ever
+    // Run is terminal (complete or aborted) -- no pending question to append, ever. Optional
+    // leftovers of an envelope set can no longer be answered either.
+    mutateRunRecord(runId, (record) => {
+      const questions = supersedeClosedSets(record.questions, undefined);
+      return questions === record.questions ? null : { questions };
+    });
+    return;
   }
-  const record = readRunRecord(runId);
-  const classified = extractClassifiedQuestion(rawResult);
-  const shape = extractQuestionShape(rawResult);
-  const question: Question = {
-    id: `q-${record.questions.length + 1}`,
+  const set = extractQuestionSet(rawResult);
+  // Built from the freshest record under the run lock (PANT-904): an abortRun that landed while
+  // this turn was in flight wins -- the run stays aborted and no question is parked on it.
+  mutateRunRecord(runId, (record) => {
+    if (isTerminalStatus(record.status)) return null;
+    if (set) {
+      // PANT-923: the driver surfaced a whole open question set (ForkedHiveDriver's pending
+      // envelope). Park every question of it at once. After a sibling is answered the driver
+      // re-surfaces the rest of the same set, so a qid already pending in this set is kept as is
+      // (its channel may have been escalated since) rather than parked twice.
+      const kept = supersedeClosedSets(record.questions, set.set_id);
+      const alreadyPending = new Set(
+        kept.filter((q) => q.status === "pending" && q.set_id === set.set_id && q.qid).map((q) => q.qid),
+      );
+      const added: Question[] = [];
+      for (const entry of set.entries) {
+        if (entry.shape.qid !== undefined && alreadyPending.has(entry.shape.qid)) continue;
+        added.push({
+          ...buildQuestion(`q-${kept.length + added.length + 1}`, entry.classified, entry.shape),
+          set_id: set.set_id,
+          required: entry.required,
+        });
+      }
+      return { status: "waiting_on_human", questions: [...kept, ...added] };
+    }
+    const id = `q-${record.questions.length + 1}`;
+    // Prose drivers park one question per turn (the one-question guard in
+    // question-extraction.ts): a set of 1 whose set_id is its own id.
+    const question: Question = {
+      ...buildQuestion(id, extractClassifiedQuestion(rawResult), extractQuestionShape(rawResult)),
+      set_id: id,
+    };
+    return {
+      status: "waiting_on_human",
+      questions: [...supersedeClosedSets(record.questions, id), question],
+    };
+  });
+}
+
+function buildQuestion(
+  id: string,
+  classified: ReturnType<typeof extractClassifiedQuestion>,
+  shape: Partial<Pick<Question, "kind" | "options" | "qid">>,
+): Question {
+  return {
+    id,
     text: classified.text,
     suggested_channel: classified.suggested_channel,
     confidence: classified.confidence,
@@ -216,10 +293,50 @@ export async function recordTurn(runId: string, rawResult: string): Promise<void
     // single/multi-select gate instead of only ever answering free-text.
     ...shape,
   };
-  updateRunRecord(runId, {
-    status: "waiting_on_human",
-    questions: [...record.questions, question],
-  });
+}
+
+// An envelope set closes once every required question is answered, and the driver then moves
+// on. Its optional questions still pending at that point can never be answered, so they are
+// marked superseded when a turn surfaces a different set (or the run ends). Only envelope-set
+// questions (those carrying `required`) are touched: a prose question is always answered before
+// the next turn runs. Returns the input array unchanged when nothing was superseded.
+function supersedeClosedSets(questions: Question[], currentSetId: string | undefined): Question[] {
+  const stale = (q: Question) => q.status === "pending" && q.required !== undefined && q.set_id !== currentSetId;
+  if (!questions.some(stale)) return questions;
+  return questions.map((q) => (stale(q) ? { ...q, status: "superseded" as const } : q));
+}
+
+interface QuestionSetEntry {
+  classified: ReturnType<typeof extractClassifiedQuestion>;
+  shape: Partial<Pick<Question, "kind" | "options" | "qid">>;
+  required: boolean;
+}
+
+// Parse the open question set a driver may return in raw_result (ForkedHiveDriver:
+// `{set_id, questions: [{text, kind, options, qid, required, suggested_channel, confidence,
+// reason}]}`). Null when absent or malformed, so the caller falls back to the single-question
+// path exactly as before. Each entry goes through the same parsers as a single question.
+function extractQuestionSet(rawResult: string): { set_id: string; entries: QuestionSetEntry[] } | null {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(rawResult);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || typeof parsed.set_id !== "string" || !Array.isArray(parsed.questions)) {
+    return null;
+  }
+  const entries: QuestionSetEntry[] = [];
+  for (const q of parsed.questions) {
+    if (!q || typeof q !== "object" || typeof q.text !== "string" || q.text.trim().length === 0) continue;
+    const entryJson = JSON.stringify({ ...q, question: q.text });
+    entries.push({
+      classified: extractClassifiedQuestion(entryJson),
+      shape: extractQuestionShape(entryJson),
+      required: q.required === true,
+    });
+  }
+  return entries.length > 0 ? { set_id: parsed.set_id, entries } : null;
 }
 
 // Best-effort parse of the structured envelope fields a driver may embed alongside the question
@@ -292,12 +409,24 @@ async function autoAnswerLoop(runId: string): Promise<void> {
     updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
 
     const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    const { session_id, raw_result } = await runTurnResumable(driverForRecord(record), {
-      cwd: record.workspace_path,
-      sessionId: record.session_id,
-      prompt: answerPrompt,
-    });
-    recordDriverTurn(runId);
+    let session_id: string;
+    let raw_result: string;
+    let route_decision: DriverResult["route_decision"];
+    let route: DriverResult["route"];
+    try {
+      ({ session_id, raw_result, route_decision, route } = await runTurnResumable(driverForRecord(record), {
+        cwd: record.workspace_path,
+        sessionId: record.session_id,
+        prompt: answerPrompt,
+        qid: pending.qid,
+        ...toolTurnInput(record),
+      }));
+    } catch (err) {
+      // Same stranding risk as submitAnswers (PANT-903): leave the gate answerable.
+      restorePendingQuestion(runId, pending.id);
+      throw err;
+    }
+    recordDriverTurn(runId, route_decision, laneOf(route));
     recordAutoResolution(runId);
     updateRunRecord(runId, { session_id });
     await recordTurn(runId, raw_result);
@@ -313,6 +442,12 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     throw new MinervaError("VALIDATION_FAILED", "startRun requires a non-empty string `idea`");
   }
   const explicitRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
+
+  // The planning tool this run drives (tool-descriptor.ts). Omitted => plugin-hive, today's
+  // behavior. Validated before anything is allocated; frozen onto the run record by allocateRun so
+  // every continuation turn resolves the same tool.
+  const tool = resolveTool(params.tool);
+  assertDriverSupportsTool(tool);
 
   // Resolve a REAL build-target repo for this seed (PAN-6745 autonomy unlock). An explicit
   // target_repo wins; otherwise god-scoped work maps to that god's repo, and greenfield work
@@ -342,7 +477,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // Every subsequent auto-answer turn uses this same frozen config.
   const defaults = loadPlanDefaults(params.defaults);
 
-  const { run_id: runId } = allocateRun(idea, targetRepo, defaults, resolved.source);
+  const { run_id: runId } = allocateRun(idea, targetRepo, defaults, resolved.source, tool);
 
   // Runner-agnostic planning (agnostic-plan-driver.ts): ask Heimdall which runtime should serve
   // planning. When it routes to a non-Claude runtime AND the ported entrypoint + opencode are
@@ -351,7 +486,10 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // returns null on ANY doubt (feature off, test mode, Heimdall down, claude route, missing
   // CLI/opencode) — in which case this is a no-op and the built-in claude driver runs, so planning
   // never breaks on an unavailable route or port.
-  const planDriver = await resolveAgnosticPlanDriver();
+  // The agnostic route only serves the stock plugin-hive invocation; any other tool, or a
+  // configured drive-prompt override, keeps the built-in driver.
+  const stockPluginHive = tool.id === PLUGIN_HIVE_TOOL.id && tool.invoke === PLUGIN_HIVE_TOOL.invoke;
+  const planDriver = stockPluginHive ? await resolveAgnosticPlanDriver() : null;
   if (planDriver) {
     updateRunRecord(runId, { plan_runtime: planDriver.runtime, plan_model: planDriver.model });
     updateRunMetricsDriver(runId, planDriver.runtime);
@@ -362,7 +500,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
 
   // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
   // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
-  const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults);
+  const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults, tool);
 
   // auto-cleanup-orphaned-runs-on-first-turn-failure: allocateRun() above already durably wrote
   // this run's record (status "in_progress") and its workspace/worktree, BEFORE this very first
@@ -382,17 +520,20 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // been reached) -- that is a stall, explicitly protected by AD-5 and out of scope here.
   let sessionId: string;
   let rawResult: string;
+  let routeDecision: DriverResult["route_decision"];
+  let route: DriverResult["route"];
   try {
-    ({ session_id: sessionId, raw_result: rawResult } = await runTurnResumable(driver, {
+    ({ session_id: sessionId, raw_result: rawResult, route_decision: routeDecision, route } = await runTurnResumable(driver, {
       cwd: record.workspace_path,
       sessionId: null,
       prompt: drivePrompt,
+      ...toolTurnInput(record),
     }));
   } catch (err) {
     abortRun({ run_id: runId });
     throw err;
   }
-  recordDriverTurn(runId);
+  recordDriverTurn(runId, routeDecision, laneOf(route));
 
   // Persisted after EVERY turn, not just here at start -- see driver.ts's Driver contract note.
   updateRunRecord(runId, { session_id: sessionId });
@@ -401,6 +542,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // Auto-answer any routine gate questions from the pre-baked defaults so a fresh headless run
   // drives itself forward instead of hanging on the first gate. No-op when mode is "off".
   await autoAnswerLoop(runId);
+  recordHumanEscalations(runId);
 
   return { run_id: runId };
 }
@@ -415,10 +557,9 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
     throw new MinervaError("VALIDATION_FAILED", 'getQuestions requires channel "agent" or "human"');
   }
   const record = readRunRecord(runId);
+  // Read-only: escalations are counted once when a question is parked on the human queue
+  // (recordHumanEscalations, after each drive), never per read -- polling must not inflate them.
   const questions = record.questions.filter((q) => q.status === "pending" && q.channel === channel);
-  if (channel === "human" && questions.length > 0) {
-    recordHumanEscalation(runId);
-  }
   return { questions };
 }
 
@@ -433,13 +574,23 @@ function isValidAnswerValue(value: unknown): value is string | string[] {
   return typeof value === "string" || (Array.isArray(value) && value.every((v) => typeof v === "string"));
 }
 
-function isAnswerArray(value: unknown): value is Answer[] {
+// Exported for docs-contract.test.ts, which checks the documented submitAnswers example against it.
+export function isAnswerArray(value: unknown): value is Answer[] {
   return (
     Array.isArray(value) &&
     value.every(
       (a) => a && typeof a === "object" && typeof (a as any).question_id === "string" && isValidAnswerValue((a as any).answer),
     )
   );
+}
+
+// Undo a mark-answered after its resumed turn failed: the question goes back to pending and the
+// run back to waiting_on_human (what recordTurn set when it surfaced the question), so a later
+// answer can advance it again.
+function restorePendingQuestion(runId: string, questionId: string): void {
+  const current = readRunRecord(runId);
+  const questions = current.questions.map((q) => (q.id === questionId ? { ...q, status: "pending" as const } : q));
+  updateRunRecord(runId, { questions, status: "waiting_on_human" });
 }
 
 export async function submitAnswers(params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -456,10 +607,18 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   if (!isAnswerArray(answers) || answers.length === 0) {
     throw new MinervaError("VALIDATION_FAILED", "submitAnswers requires a non-empty answers array of {question_id, answer}");
   }
+  // PANT-903: the engine drives exactly one question per turn, so only one answer can ever be
+  // applied per call. Reject extras loudly instead of silently dropping them (batch staging of
+  // partial answers is PANT-697).
+  if (answers.length > 1) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `submitAnswers got ${answers.length} answers; submit one answer per call (batch staging is PANT-697)`,
+    );
+  }
 
   const record = readRunRecord(runId);
-  const firstAnswer = answers[0] as Answer;
-  const { question_id: questionId, answer } = firstAnswer;
+  const { question_id: questionId, answer } = answers[0] as Answer;
   const question = record.questions.find((q) => q.id === questionId && q.status === "pending");
 
   if (!question) {
@@ -472,7 +631,12 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
     );
   }
   if (!record.session_id) {
-    throw new MinervaError("VALIDATION_FAILED", `Run ${runId} has no active drive session to resume`);
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Run ${runId} has no active drive session to resume: its record has no session_id (the driver ` +
+        `returned an empty one on its last turn, e.g. plan-agnostic output without session_id). ` +
+        `The run cannot be advanced; abortRun it and start a new run.`,
+    );
   }
 
   // Mark answered BEFORE resuming -- this is the run's only advancement path (see
@@ -485,12 +649,27 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // joined into readable prose for the driven turn, matching how a human would phrase multiple
   // selections in a chat message.
   const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  const { session_id: newSessionId, raw_result: rawResult } = await runTurnResumable(driverForRecord(record), {
-    cwd: record.workspace_path,
-    sessionId: record.session_id,
-    prompt: answerPrompt,
-  });
-  recordDriverTurn(runId);
+  let newSessionId: string;
+  let rawResult: string;
+  let routeDecision: DriverResult["route_decision"];
+  let route: DriverResult["route"];
+  try {
+    ({ session_id: newSessionId, raw_result: rawResult, route_decision: routeDecision, route } = await runTurnResumable(driverForRecord(record), {
+      cwd: record.workspace_path,
+      sessionId: record.session_id,
+      prompt: answerPrompt,
+      qid: question.qid,
+      ...toolTurnInput(record),
+    }));
+  } catch (err) {
+    // PANT-903: the resumed turn never happened, so the answer was never delivered. Put the
+    // question back to pending and the run back to waiting_on_human, so the same question can be
+    // answered again. Without this the run is stranded in_progress with no pending question and
+    // nothing can ever advance it. The caller still gets the error.
+    restorePendingQuestion(runId, questionId);
+    throw err;
+  }
+  recordDriverTurn(runId, routeDecision, laneOf(route));
   // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
   // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
   updateRunRecord(runId, { session_id: newSessionId });
@@ -500,6 +679,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   // routine gates from the pre-baked defaults, so answering one strategic question doesn't leave
   // the run stalled on the next mechanical one. No-op when mode is "off".
   await autoAnswerLoop(runId);
+  recordHumanEscalations(runId);
 
   return { result: {} };
 }

@@ -1,0 +1,71 @@
+name: Deploy Docs
+
+# Two-zone gh-pages architecture:
+#
+#   Zone 1 — /         hand-authored landing page (index.html, assets/, install.sh)
+#                       Lives in the root of the gh-pages branch.
+#                       THIS WORKFLOW NEVER TOUCHES IT.
+#
+#   Zone 2 — /docs/    MkDocs-built reference documentation
+#                       Deployed here, and ONLY here, by this workflow.
+#
+# Safe mechanism: peaceiris/actions-gh-pages with destination_dir: docs.
+# That action checks out the gh-pages branch, replaces ONLY the docs/ subdirectory,
+# and commits the result — root-zone files are untouched in every run.
+#
+# This is explicitly NOT `mkdocs gh-deploy --force`, which rewrites the entire
+# gh-pages branch as a single force-pushed commit on every run (portunus incident).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy-docs:
+    name: build and deploy docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check mkdocs.yml exists
+        id: check
+        run: |
+          if [ ! -f mkdocs.yml ]; then
+            echo "mkdocs.yml not found — docs site not yet configured. Skipping deploy."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.skip == 'false'
+        with:
+          python-version: '3.12'
+
+      - name: Install MkDocs
+        if: steps.check.outputs.skip == 'false'
+        run: pip install mkdocs mkdocs-material
+
+      - name: Build docs
+        if: steps.check.outputs.skip == 'false'
+        run: mkdocs build --site-dir site
+
+      - name: Deploy to /docs/ — zone 2 only, root untouched
+        if: steps.check.outputs.skip == 'false'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          # destination_dir scopes the write to docs/ only.
+          # Files outside docs/ (the root zone) are preserved by the action.
+          destination_dir: docs

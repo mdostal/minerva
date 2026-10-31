@@ -48,6 +48,13 @@ const TOOLS: Tool[] = [
         idea: { type: "string", description: "The idea/requirement to plan, as free text. Required." },
         target_repo: { type: "string", description: "Optional owner/repo (or local path) to plan against. Omit for a fresh scratch workspace." },
         defaults: { type: "object", description: "Optional pre-baked-defaults override (see docs/plan-defaults.example.yaml). Omit to use the operator-configured default." },
+        tool: {
+          type: ["string", "object"],
+          description:
+            "Optional planning-tool descriptor: a built-in id (\"plugin-hive\") or " +
+            "{id, invoke, state_path, completion_detector, question_source, base_branch?} (see docs/abi.md). " +
+            "Omit to use plugin-hive.",
+        },
       },
       required: ["idea"],
     },
@@ -91,7 +98,9 @@ const TOOLS: Tool[] = [
     description:
       "Answer a run's pending question on a channel, advancing the run. This is the ONLY thing " +
       "that ever advances a parked run -- never call this with a fabricated or guessed answer on " +
-      "the 'human' channel; only submit an answer a real human actually gave.",
+      "the 'human' channel; only submit an answer a real human actually gave. Answers one " +
+      "question per call. If the resumed turn fails, the question stays pending and the run " +
+      "stays waiting_on_human, so the call can be retried.",
     inputSchema: {
       type: "object",
       properties: {
@@ -99,7 +108,9 @@ const TOOLS: Tool[] = [
         channel: { type: "string", enum: ["agent", "human"] },
         answers: {
           type: "array",
-          description: "Exactly the pending question(s) being answered, as {question_id, answer}.",
+          description:
+            "Exactly one pending question being answered, as [{question_id, answer}]. More than " +
+            "one entry is rejected with VALIDATION_FAILED; submit one answer per call.",
           items: {
             type: "object",
             properties: {
@@ -135,6 +146,15 @@ const TOOLS: Tool[] = [
       properties: { run_id: { type: "string" } },
       required: ["run_id"],
     },
+  },
+  {
+    name: "getMetrics",
+    description:
+      "Summarize planning KPIs across every local run: run count by status, completion rate " +
+      "(complete / finished runs), and median/p90 turns, escalations, auto-resolutions and " +
+      "time-to-spec -- overall, by driver, and by route lane. Read-only; reads local run records " +
+      "only, never the network.",
+    inputSchema: { type: "object", properties: {} },
   },
 ];
 

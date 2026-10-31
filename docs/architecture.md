@@ -48,7 +48,7 @@ architecture should be built to expect, or wait for, autonomous movement between
   surface; there is no daemon.
 - **MCP server (`minerva mcp`, agent-interactivity epic)** — the same argv-mode branch on
   `bin/minerva`, an alternate transport onto the identical `dispatch()` call, not a second
-  implementation of the ABI. Exposes each of the 8 methods as an MCP tool (`src/mcp-server.ts`)
+  implementation of the ABI. Exposes each of the 9 methods as an MCP tool (`src/mcp-server.ts`)
   over `@modelcontextprotocol/sdk`'s stdio transport, so any MCP-aware caller (Claude Code, Codex
   CLI) can call `startRun`/`submitAnswers`/etc. as a native tool instead of hand-rolling a
   subprocess-spawn-and-parse-JSON adapter. AD-1's "no daemon" invariant still holds: this is a

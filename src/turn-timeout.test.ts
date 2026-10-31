@@ -57,7 +57,7 @@ test("a planning turn that times out twice is retried automatically and the run 
       MINERVA_HOME: minervaHome,
       MINERVA_SEED_REPO: seedRepo,
       MINERVA_TURN_TIMEOUT_MS: "500", // tiny -- forces the hung invocations to be SIGKILL'd fast
-      MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl("unused-model", HARNESS),
+      MINERVA_PANTHEON_ROUTE_SELECT_URL: testHeimdallRouteUrl("unused-model", HARNESS),
       HARNESS_COUNTER_FILE: counterFile,
       HARNESS_HANG_COUNT: "2", // the first 2 invocations hang past the timeout; the 3rd responds
     };
@@ -92,7 +92,7 @@ test("retrying a turn that never stops timing out is bounded -- it eventually gi
       MINERVA_SEED_REPO: seedRepo,
       MINERVA_TURN_TIMEOUT_MS: "300",
       MINERVA_TURN_RETRY_LIMIT: "1", // 1 initial attempt + 1 retry = 2 total, both time out
-      MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: testHeimdallRouteUrl("unused-model", HARNESS),
+      MINERVA_PANTHEON_ROUTE_SELECT_URL: testHeimdallRouteUrl("unused-model", HARNESS),
       HARNESS_COUNTER_FILE: counterFile,
       HARNESS_HANG_COUNT: "999", // every invocation hangs -- never recovers
     };

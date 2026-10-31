@@ -145,6 +145,8 @@ Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 | `MINERVA_DRIVE_MODEL` | Model used to drive a turn | `claude-haiku-4-5-20251001` |
 | `MINERVA_TURN_TIMEOUT_MS` | Per-turn ceiling | `600000` (10 min) |
 | `MINERVA_HOME` | Run-state root | `~/.minerva` |
+| `MINERVA_DRIVE_PROMPT` | First-turn prompt for the default plugin-hive tool; `{idea}` is replaced with the idea. Old name `MINERVA_TEST_DRIVE_PROMPT` still works. A `tool` descriptor passed to `startRun` wins (see `docs/abi.md`) | `/plugin-hive:plan {idea} --skip-sign-off --lite` |
+| `MINERVA_BASE_BRANCH` | Branch run worktrees are cut from and plans are pushed to, unless the `tool` descriptor sets `base_branch` | `dev` |
 | `PANTHEON_API_URL` | Pantheon core-api base URL (route select + backlog); exported by the Pantheon runtime | unset |
 | `PANTHEON_CORE_API_URL` / `MINERVA_PANTHEON_CORE_API_URL` | Overrides for the core-api base URL. Precedence: `MINERVA_PANTHEON_CORE_API_URL` > `PANTHEON_CORE_API_URL` > `PANTHEON_API_URL` | unset |
 | `PANTHEON_SECRETS_SHARED_DIR` | Shared secrets volume Minerva reads the operator token from. Every core-api write (route select, backlog writes) sends `x-pantheon-operator-token`, injected via `POST /api/secrets/inject` and cached for 60s; when it can't be resolved the write goes out without it and the reason is logged once | `/pantheon-secrets` |

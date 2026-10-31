@@ -22,6 +22,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { resolveBaseBranch } from "./tool-descriptor.ts";
 
 // Local base directory where target/plugin repos are checked out. A resolved owner/repo slug maps
 // to <base>/<repo>. Config-driven so a different deployment can relocate it without a code change.
@@ -192,25 +193,27 @@ function tryGit(runGit: GitRunner, cwd: string, args: string[]): boolean {
   }
 }
 
-// Guarantee the checkout has a local `dev` branch for a worktree to be cut from. A freshly cloned
-// repo only has its default branch checked out, so `dev` must be materialized. Best-effort refresh
-// of local dev to origin/dev keeps run worktrees cut from current dev (Minerva is the only writer
-// of these managed checkouts, and `dev` is never the checked-out branch of the bare/default clone,
-// so a force-update of the ref is safe). Never throws -- a git hiccup here must not wedge planning.
-function ensureDevBranch(localPath: string, runGit: GitRunner): void {
+// Guarantee the checkout has a local base branch (`dev` unless MINERVA_BASE_BRANCH says otherwise;
+// see tool-descriptor.ts resolveBaseBranch) for a worktree to be cut from. A freshly cloned repo
+// only has its default branch checked out, so the base must be materialized. Best-effort refresh
+// of the local base to origin's keeps run worktrees cut from the current base (Minerva is the only
+// writer of these managed checkouts, and the base is never the checked-out branch of the
+// bare/default clone, so a force-update of the ref is safe). Never throws -- a git hiccup here
+// must not wedge planning.
+function ensureDevBranch(localPath: string, runGit: GitRunner, base: string = resolveBaseBranch({})): void {
   tryGit(runGit, localPath, ["fetch", "origin", "--prune"]);
-  const hasOriginDev = tryGit(runGit, localPath, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/dev"]);
-  const hasLocalDev = tryGit(runGit, localPath, ["rev-parse", "--verify", "--quiet", "refs/heads/dev"]);
+  const hasOriginDev = tryGit(runGit, localPath, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${base}`]);
+  const hasLocalDev = tryGit(runGit, localPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${base}`]);
   if (hasOriginDev) {
-    if (hasLocalDev) tryGit(runGit, localPath, ["branch", "-f", "dev", "origin/dev"]);
-    else tryGit(runGit, localPath, ["branch", "dev", "origin/dev"]);
+    if (hasLocalDev) tryGit(runGit, localPath, ["branch", "-f", base, `origin/${base}`]);
+    else tryGit(runGit, localPath, ["branch", base, `origin/${base}`]);
     return;
   }
   if (!hasLocalDev) {
-    // No dev anywhere -> create it off the current default HEAD and publish it so the run branch
-    // (and downstream build lane, which integrates into dev) has a real dev to target.
-    tryGit(runGit, localPath, ["branch", "dev"]);
-    tryGit(runGit, localPath, ["push", "-u", "origin", "dev"]);
+    // No base anywhere -> create it off the current default HEAD and publish it so the run branch
+    // (and downstream build lane, which integrates into the base) has a real base to target.
+    tryGit(runGit, localPath, ["branch", base]);
+    tryGit(runGit, localPath, ["push", "-u", "origin", base]);
   }
 }
 

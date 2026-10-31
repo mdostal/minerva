@@ -910,20 +910,25 @@ export async function resumeRun(params: Record<string, unknown>): Promise<Record
       "resumeRun requires evidence {observed_at: ISO timestamp, signal_key?: string, detail?: object}",
     );
   }
-  if (parkEpoch !== undefined && (!Number.isInteger(parkEpoch) || (parkEpoch as number) < 0)) {
-    throw new MinervaError("VALIDATION_FAILED", "resumeRun park_epoch must be a non-negative integer");
+  // Required: the epoch is the idempotency key. Without it a repeat after the run has moved on
+  // could not be told apart from a resume of the new park.
+  if (typeof parkEpoch !== "number" || !Number.isInteger(parkEpoch) || parkEpoch < 0) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      "resumeRun requires park_epoch, a non-negative integer (getRunStatus's park.park_epoch)",
+    );
   }
 
   const verdict: ClaimVerdict = {};
   mutateRunRecord(runId, (current) => {
     const recovery = abandonedClaimPatch(current);
     const record: RunRecord = { ...current, ...recovery };
-    const epoch = (parkEpoch as number | undefined) ?? epochOf(record);
-    if (parkEpoch !== undefined && (record.last_resumed_epoch ?? 0) >= epoch) {
+    const epoch = parkEpoch;
+    if ((record.last_resumed_epoch ?? 0) >= epoch) {
       verdict.result = { outcome: "already_resumed", run_id: runId, park_epoch: epoch };
       return recovery;
     }
-    if (isTerminalStatus(record.status) || (parkEpoch !== undefined && record.park?.epoch !== epoch)) {
+    if (isTerminalStatus(record.status) || record.park?.epoch !== epoch) {
       verdict.result = { outcome: "stale_handle", run_id: runId, park_epoch: epoch, recorded_at: new Date().toISOString() };
       return recovery;
     }

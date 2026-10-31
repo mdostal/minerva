@@ -88,6 +88,11 @@ async function startParkedRun(): Promise<{ runId: string; questionId: string }> 
 
 const NOW = "2026-10-31T18:00:00.000Z";
 
+// The epoch of the run's open park, as a caller reads it from getRunStatus.
+function openEpoch(runId: string): number {
+  return readRunRecord(runId).park!.epoch;
+}
+
 // --- resume without an answer ---------------------------------------------------------------
 
 test("a run parked awaiting-time resumes with cause time and no answers: exactly one turn, and it advances", async () => {
@@ -106,7 +111,7 @@ test("a run parked awaiting-time resumes with cause time and no answers: exactly
   assert.equal(parked.park?.reason.kind, "awaiting-time");
   const turnsBefore = d.turns;
 
-  const res = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW } });
+  const res = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW }, park_epoch: openEpoch(runId) });
 
   assert.equal(res.outcome, "resumed");
   assert.equal(res.park_epoch, parked.park!.epoch);
@@ -129,13 +134,13 @@ test("a run parked awaiting-signal resumes only with cause signal and the matchi
   parkRun(runId, { kind: "awaiting-signal", signal_key: "ci-green" });
   const turnsBefore = d.turns;
 
-  const wrongCause = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW } });
+  const wrongCause = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW }, park_epoch: openEpoch(runId) });
   assert.equal(wrongCause.outcome, "refused");
-  const wrongKey = await resumeRun({ run_id: runId, cause: "signal", evidence: { observed_at: NOW, signal_key: "deploy" } });
+  const wrongKey = await resumeRun({ run_id: runId, cause: "signal", evidence: { observed_at: NOW, signal_key: "deploy" }, park_epoch: openEpoch(runId) });
   assert.equal(wrongKey.outcome, "refused");
   assert.equal(d.turns, turnsBefore, "a refused resume drives no turn");
 
-  const ok = await resumeRun({ run_id: runId, cause: "signal", evidence: { observed_at: NOW, signal_key: "ci-green" } });
+  const ok = await resumeRun({ run_id: runId, cause: "signal", evidence: { observed_at: NOW, signal_key: "ci-green" }, park_epoch: openEpoch(runId) });
   assert.equal(ok.outcome, "resumed");
   assert.equal(d.turns, turnsBefore + 1);
 });
@@ -146,14 +151,14 @@ test("a cause resume of a run waiting on an answer is refused and drives nothing
   const { runId } = await startParkedRun();
   const before = readRunRecord(runId);
 
-  const res = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW } });
+  const res = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW }, park_epoch: openEpoch(runId) });
 
   assert.equal(res.outcome, "refused");
   assert.ok(Array.isArray(res.problems) && (res.problems as string[]).length > 0);
   assert.deepEqual(readRunRecord(runId), before);
 });
 
-test("resumeRun validates its cause and evidence", async () => {
+test("resumeRun validates its cause, evidence and required park_epoch", async () => {
   const d = new ScriptedDriver();
   install(d);
   const { runId } = await startParkedRun();
@@ -162,6 +167,8 @@ test("resumeRun validates its cause and evidence", async () => {
     { run_id: runId, cause: "answer", evidence: { observed_at: NOW } },
     { run_id: runId, cause: "time" },
     { run_id: runId, cause: "time", evidence: { observed_at: 7 } },
+    { run_id: runId, cause: "time", evidence: { observed_at: NOW } },
+    { run_id: runId, cause: "time", evidence: { observed_at: NOW }, park_epoch: -1 },
   ]) {
     await assert.rejects(resumeRun(params), (e: unknown) => e instanceof MinervaError && e.code === "VALIDATION_FAILED");
   }
@@ -301,7 +308,7 @@ test("a cause resume whose session is gone also rebuilds", async () => {
   updateRunRecord(runId, { questions: readRunRecord(runId).questions.map((q) => ({ ...q, status: "superseded" as const })) });
   parkRun(runId, { kind: "awaiting-time", not_before: NOW, renewals: 0 });
 
-  const res = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW } });
+  const res = await resumeRun({ run_id: runId, cause: "time", evidence: { observed_at: NOW }, park_epoch: openEpoch(runId) });
 
   assert.equal(res.outcome, "resumed");
   assert.equal(res.resumed_via, "state");

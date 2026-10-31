@@ -137,7 +137,8 @@ const TOOLS: Tool[] = [
       "Resume a run parked on time or a signal, with no answer. cause must fit the open park " +
       "(getRunStatus's park.reason): 'time' for awaiting-time, 'signal' with the park's " +
       "signal_key for awaiting-signal; anything else is outcome 'refused' and drives nothing. " +
-      "Pass the park_epoch you saw: a repeat returns 'already_resumed' without a second turn.",
+      "park_epoch (getRunStatus's park.park_epoch) is required and is the idempotency key: a repeat " +
+      "with the same epoch returns 'already_resumed' without a second turn.",
     inputSchema: {
       type: "object",
       properties: {
@@ -154,7 +155,7 @@ const TOOLS: Tool[] = [
         },
         park_epoch: { type: "integer", minimum: 0 },
       },
-      required: ["run_id", "cause", "evidence"],
+      required: ["run_id", "cause", "evidence", "park_epoch"],
     },
   },
   {

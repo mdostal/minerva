@@ -362,7 +362,8 @@ Anything else, including a run parked on a question, returns `outcome: "refused"
 `problems` and drives nothing. Answers go through `submitAnswers`.
 
 The same claim, idempotency and session-gone fallback as `submitAnswers` apply. A repeat of a
-resume that already ran returns `already_resumed` without a second turn.
+resume that already ran (same `park_epoch`) returns `already_resumed` without a second turn,
+even after the run has moved on to a new park.
 
 **Params:**
 
@@ -371,7 +372,7 @@ resume that already ran returns `already_resumed` without a second turn.
 | `run_id` | string (UUID) | The run to resume |
 | `cause` | `"time"` \| `"signal"` | Why the run is being resumed |
 | `evidence` | object | `{observed_at, signal_key?, detail?}`: when the time passed or the signal arrived |
-| `park_epoch` | number? | The epoch you read from `getRunStatus`. A stale epoch returns `stale_handle`. |
+| `park_epoch` | number | **Required.** The epoch you read from `getRunStatus` (`park.park_epoch`). It is the idempotency key: a repeat with the same epoch returns `already_resumed`, and an epoch the run has not reached, or has left without being resumed, returns `stale_handle`. |
 
 **Returns:** a ResumeResult: `{outcome, run_id, park_epoch}` plus `resumed_via` when `outcome`
 is `resumed`, `problems` when it is `refused`, and `claimed_by` when it is `claimed`.
@@ -381,7 +382,7 @@ is `resumed`, `problems` when it is `refused`, and `claimed_by` when it is `clai
 | Code | Meaning |
 |------|---------|
 | `NOT_FOUND` | `run_id` doesn't exist |
-| `VALIDATION_FAILED` | Malformed `cause` or `evidence`, or the session is gone and the worktree cannot be rebuilt |
+| `VALIDATION_FAILED` | Malformed `cause` or `evidence`, missing `park_epoch`, or the session is gone and the worktree cannot be rebuilt |
 
 **Example:**
 ```bash

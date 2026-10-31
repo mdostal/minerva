@@ -8,7 +8,8 @@ All notable changes to Minerva are documented in this file.
 
 - **Resume without an answer, and a fallback when the session is gone** (PANT-1249): runs record
   an epoch-numbered park, and `getRunStatus` returns it as a `pantheon:park-record/v1`. The new
-  `resumeRun` method resumes a time- or signal-parked run with no answer and drives one turn.
+  `resumeRun` method resumes a time- or signal-parked run with no answer and drives one turn;
+  its required `park_epoch` is the idempotency key.
   Resumes are claim → turn → settle, so a duplicate returns `already_resumed` without a turn and
   a crash mid-resume leaves the question answerable. When the drive session no longer resolves,
   the turn is rebuilt from the run's worktree (`resumed_via: "state"`). `submitAnswers` now

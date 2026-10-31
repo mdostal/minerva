@@ -221,7 +221,7 @@ echo "{\"method\":\"getOutput\",\"params\":{\"run_id\":\"$RUN\"}}" | minerva | j
 ```
 
 To try the finished path against real DNS, use a name and value that already resolve, for example
-`google.com v=spf1`. Set `DNS_CUTOVER_RESOLVER` to change the resolver.
+`google.com v=spf1` (this path is not covered by the test). Set `DNS_CUTOVER_RESOLVER` to change the resolver.
 
 ### What this does and does not show
 

@@ -9,13 +9,21 @@
 Built by [Mathew Dostal](https://mdostal.com) — fractional CTO, Dostal Technology.
 <!-- /shared:byline -->
 
-**The Pantheon's Planner.** Minerva turns a raw **idea** into an **approved, planned spec** — an
-epic with dependency-tracked stories — autonomously and headlessly.
+**A headless engine for interactive tools.** Minerva drives an interactive tool one turn at a
+time in an isolated git workspace. When the tool needs an answer, Minerva parks the run on disk and
+exits. When the answer arrives, from a person or an agent, minutes or days later, it resumes the run
+from disk. The result is an epic with dependency-tracked stories.
 
-Named for the Roman goddess of wisdom and strategic planning, Minerva runs the *front half* of
-the hive flow (`kickoff` + `plan`), extracts the human-gate questions along the way, routes them
-to the decision surface, iterates the back-and-forth, and emits the approved epic/stories — then
-hands off to **Auriga** (routing) and **Vulcan** (provisioning) for the build.
+The tool is **semi-agnostic**. Out of the box Minerva drives [plugin-hive](https://firefly-events.github.io/plugin-hive/)'s
+`kickoff` + `plan`: that is the batteries-included **default**, not a requirement. Any tool that fits
+a small descriptor and turn contract can take its place, including a plain shell program. That
+contract still assumes a run ends in a plan and parks only on questions. See
+[Integrations](mkdocs_docs/integrations.md) for the contract, a worked non-plugin-hive example, and what Minerva
+deliberately does not do.
+
+Minerva is named for the Roman goddess of wisdom and strategic planning. Inside the Pantheon it is
+the planner: questions go to the decision surface, and the approved epic is handed to **Auriga**
+(routing) and **Vulcan** (provisioning). None of them is needed to run it.
 
 ## Get your agent using it in one command
 

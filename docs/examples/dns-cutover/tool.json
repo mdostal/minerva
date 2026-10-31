@@ -1,0 +1,7 @@
+{
+  "id": "dns-cutover",
+  "invoke": "dns-cutover {idea}",
+  "state_path": ".dns-cutover",
+  "completion_detector": { "kind": "epics-dir", "epics_dir": ".dns-cutover/plans", "worktree_roots": [] },
+  "question_source": { "kind": "response" }
+}

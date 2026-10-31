@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import type { PlanDefaults } from "./plan-defaults.ts";
 import type { RouteDecision } from "./driver.ts";
+import { defaultTool, resolveBaseBranch, type ToolDescriptor } from "./tool-descriptor.ts";
 
 export type WorkspaceKind = "worktree" | "fresh_init";
 export type RunStatus = "in_progress" | "waiting_on_human" | "complete" | "aborted";
@@ -156,6 +157,14 @@ export interface RunRecord {
   // driver behavior.
   plan_runtime?: string;
   plan_model?: string;
+  // Tool descriptor (tool-descriptor.ts, PANT-1248): the planning tool this run drives, frozen at
+  // allocation so every continuation turn resolves the same tool -- the same way plan_runtime and
+  // plan_model are. `base_branch` is the branch the run worktree was cut from and the finished
+  // plan is pushed to. All absent on records written before descriptors existed; readers fall
+  // back to the plugin-hive default and "dev" (toolForRecord / baseBranchForRecord).
+  tool_id?: string;
+  tool?: ToolDescriptor;
+  base_branch?: string;
   metrics?: RunMetrics;
 }
 
@@ -462,26 +471,26 @@ export function finalizeRunMetrics(runId: string): RunRecord {
   });
 }
 
-function allocateWorktreeWorkspace(targetRepo: string, runId: string, workspacePath: string): void {
+function allocateWorktreeWorkspace(targetRepo: string, runId: string, workspacePath: string, baseBranch: string): void {
   if (!existsSync(targetRepo)) {
     throw new MinervaError("VALIDATION_FAILED", `target_repo does not exist: ${targetRepo}`);
   }
-  // Fetch + fast-forward dev before cutting the worktree so dispatched runs start from the
-  // freshest available base. Non-fatal: if offline or not a fast-forward (diverged local
-  // dev), we proceed with the current local state rather than blocking the run entirely.
+  // Fetch + fast-forward the base branch (default `dev`; see resolveBaseBranch) before cutting the
+  // worktree so dispatched runs start from the freshest available base. Non-fatal: if offline or
+  // not a fast-forward (diverged local base), we proceed with the current local state rather than blocking the run entirely.
   // Without this, a stale local dev branch causes all dispatched runs to see an outdated
   // codebase — confirmed live: a run dispatched 2026-09-07 was 94 commits behind origin/main,
   // causing it to duplicate work that had already been merged by a parallel build agent.
   try {
-    execFileSync("git", ["-C", targetRepo, "fetch", "origin", "dev", "--no-tags", "--quiet"], { stdio: "pipe" });
-    execFileSync("git", ["-C", targetRepo, "merge", "--ff-only", "origin/dev"], { stdio: "pipe" });
+    execFileSync("git", ["-C", targetRepo, "fetch", "origin", baseBranch, "--no-tags", "--quiet"], { stdio: "pipe" });
+    execFileSync("git", ["-C", targetRepo, "merge", "--ff-only", `origin/${baseBranch}`], { stdio: "pipe" });
   } catch {
-    // non-fatal: proceed with current local dev
+    // non-fatal: proceed with current local base branch
   }
   try {
     execFileSync(
       "git",
-      ["-C", targetRepo, "worktree", "add", "-b", `run/${runId}`, workspacePath, "dev"],
+      ["-C", targetRepo, "worktree", "add", "-b", `run/${runId}`, workspacePath, baseBranch],
       { stdio: "pipe" },
     );
   } catch (e) {
@@ -503,13 +512,13 @@ function allocateFreshInitWorkspace(runId: string, workspacePath: string): void 
 }
 
 // Bug fix (2026-07-26, real regression): reads whatever epic ids already exist under
-// .pHive/epics/ in a freshly-allocated workspace, BEFORE any kickoff turn has run. For a
+// the tool's epics dir (.pHive/epics/ for plugin-hive) in a freshly-allocated workspace, BEFORE any kickoff turn has run. For a
 // worktree workspace this reflects exactly the target repo's `dev` branch state (git worktree
 // add checks out dev's tracked tree regardless of .gitignore, which only affects untracked
 // files) -- for a fresh_init workspace it's always []. See baseline_epic_ids's own doc comment
 // on RunRecord for why this snapshot exists.
-function snapshotEpicIds(workspacePath: string): string[] {
-  const epicsDir = join(workspacePath, ".pHive", "epics");
+function snapshotEpicIds(workspacePath: string, epicsRel: string): string[] {
+  const epicsDir = join(workspacePath, epicsRel);
   if (!existsSync(epicsDir)) return [];
   return readdirSync(epicsDir);
 }
@@ -518,29 +527,33 @@ function snapshotEpicIds(workspacePath: string): string[] {
 // startRun composes this with driveStart() to produce the full API-contract startRun method.
 // `defaults` (prebaked-plan-defaults epic) is the resolved plan-defaults config to freeze onto
 // the record; optional so existing callers (and the test suite) that don't pass it are
-// unaffected -- an absent defaults means the auto-answer loop stays "off".
+// unaffected -- an absent defaults means the auto-answer loop stays "off". `tool` is the resolved
+// tool descriptor (default: plugin-hive); it supplies the state dir, the epics dir the baseline is
+// snapshotted from, and (with MINERVA_BASE_BRANCH / "dev" as fallbacks) the base branch.
 export function allocateRun(
   idea: string,
   targetRepo: string | undefined,
   defaults?: PlanDefaults,
   repoSource?: string,
+  tool: ToolDescriptor = defaultTool(),
 ): { run_id: string } {
   const runId = randomUUID();
   const workspacePath = join(runDir(runId), "workspace");
   let workspaceKind: WorkspaceKind;
+  const baseBranch = resolveBaseBranch(tool);
 
   if (targetRepo) {
-    allocateWorktreeWorkspace(targetRepo, runId, workspacePath);
+    allocateWorktreeWorkspace(targetRepo, runId, workspacePath, baseBranch);
     workspaceKind = "worktree";
   } else {
-    allocateWorktreeWorkspace(resolveSeedRepo(), runId, workspacePath);
+    allocateWorktreeWorkspace(resolveSeedRepo(), runId, workspacePath, baseBranch);
     workspaceKind = "worktree";
   }
 
-  const statePath = join(workspacePath, ".pHive");
+  const statePath = join(workspacePath, tool.state_path);
   mkdirSync(statePath, { recursive: true });
 
-  const baselineEpicIds = snapshotEpicIds(workspacePath);
+  const baselineEpicIds = snapshotEpicIds(workspacePath, tool.completion_detector.epics_dir);
 
   writeRunRecord({
     run_id: runId,
@@ -555,6 +568,9 @@ export function allocateRun(
     baseline_epic_ids: baselineEpicIds,
     idea,
     defaults,
+    tool_id: tool.id,
+    tool,
+    base_branch: baseBranch,
     metrics: {
       turns: 0,
       escalations: 0,

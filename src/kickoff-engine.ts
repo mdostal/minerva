@@ -27,6 +27,14 @@ import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFrom
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
 import { normalizeTargetRepoValue } from "./target-repo-signal.ts";
+import {
+  PLUGIN_HIVE_TOOL,
+  expandInvoke,
+  questionsDirOf,
+  resolveTool,
+  toolForRecord,
+  type ToolDescriptor,
+} from "./tool-descriptor.ts";
 
 // MINERVA_DRIVER selects the Driver implementation, following MODEL/CLAUDE_TIMEOUT_MS's
 // existing env-var-read pattern in driver.ts. Default remains "spawn" -- cheaper, faster,
@@ -163,6 +171,26 @@ function driverForRecord(record: Pick<RunRecord, "plan_runtime" | "plan_model">)
   return driver;
 }
 
+// The DriverInput fields a run's tool descriptor contributes to every turn: where the tool
+// surfaces question envelopes. Omitted for the plugin-hive default's own dir and for tools whose
+// questions come from the turn response, so a default run's inputs are unchanged.
+function toolTurnInput(record: Pick<RunRecord, "tool" | "tool_id">): Pick<DriverInput, "questions_dir"> {
+  const dir = questionsDirOf(toolForRecord(record));
+  return dir && dir !== questionsDirOf(PLUGIN_HIVE_TOOL) ? { questions_dir: dir } : {};
+}
+
+// The forked driver reads questions ONLY from on-disk envelopes, so it cannot drive a tool whose
+// questions come back in the turn response. Fail loudly at startRun rather than park forever.
+function assertDriverSupportsTool(tool: ToolDescriptor): void {
+  if (tool.question_source.kind === "response" && driver instanceof ForkedHiveDriver) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `tool "${tool.id}" has question_source "response", which MINERVA_DRIVER=forked cannot read -- ` +
+        `use an "envelope-dir" question_source or another driver`,
+    );
+  }
+}
+
 // Build the initial headless drive prompt. This must PLAN (decompose), never IMPLEMENT: it
 // drives plugin-hive's `/plugin-hive:plan` DECOMPOSE skill, which writes an epic +
 // dependency-tracked stories into `.pHive/epics/<id>/` -- the filesystem fact
@@ -175,14 +203,14 @@ function driverForRecord(record: Pick<RunRecord, "plan_runtime" | "plan_model">)
 // design-discussion artifact). Any residual routine gate is still auto-answered by the
 // pre-baked-defaults loop.
 //
-// Test seam: MINERVA_TEST_DRIVE_PROMPT swaps this real skill prompt for a cheap synthetic one so
-// the automated suite doesn't drive a full real plan (slow, costly, many gates) on every run.
-// The spawn/resume MECHANISM is identical either way -- only prompt content differs.
-function buildDrivePrompt(idea: string, defaults: PlanDefaults): string {
-  const override = process.env.MINERVA_TEST_DRIVE_PROMPT;
-  const base = override
-    ? override.replace(/\{idea\}/g, idea)
-    : `/plugin-hive:plan ${idea} --skip-sign-off --lite`;
+// That command is the plugin-hive tool descriptor's `invoke` (tool-descriptor.ts), the default
+// value of startRun's `tool` parameter; a caller-supplied descriptor brings its own invoke string.
+// MINERVA_DRIVE_PROMPT (real config; its original test-seam name MINERVA_TEST_DRIVE_PROMPT still
+// works) overrides the default descriptor's invoke -- the automated suite uses it to swap in a
+// cheap synthetic prompt. The spawn/resume MECHANISM is identical either way -- only prompt
+// content differs.
+function buildDrivePrompt(idea: string, defaults: PlanDefaults, tool: ToolDescriptor): string {
+  const base = expandInvoke(tool.invoke, idea);
   // Append any operator-configured suffix (e.g. an explicit "skip the sign-off gate"
   // instruction). Empty string when unset -> prompt is byte-identical to before.
   return base + drivePromptSuffix(defaults);
@@ -391,6 +419,7 @@ async function autoAnswerLoop(runId: string): Promise<void> {
         sessionId: record.session_id,
         prompt: answerPrompt,
         qid: pending.qid,
+        ...toolTurnInput(record),
       }));
     } catch (err) {
       // Same stranding risk as submitAnswers (PANT-903): leave the gate answerable.
@@ -413,6 +442,12 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     throw new MinervaError("VALIDATION_FAILED", "startRun requires a non-empty string `idea`");
   }
   const explicitRepo = typeof params.target_repo === "string" ? params.target_repo : undefined;
+
+  // The planning tool this run drives (tool-descriptor.ts). Omitted => plugin-hive, today's
+  // behavior. Validated before anything is allocated; frozen onto the run record by allocateRun so
+  // every continuation turn resolves the same tool.
+  const tool = resolveTool(params.tool);
+  assertDriverSupportsTool(tool);
 
   // Resolve a REAL build-target repo for this seed (PAN-6745 autonomy unlock). An explicit
   // target_repo wins; otherwise god-scoped work maps to that god's repo, and greenfield work
@@ -442,7 +477,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // Every subsequent auto-answer turn uses this same frozen config.
   const defaults = loadPlanDefaults(params.defaults);
 
-  const { run_id: runId } = allocateRun(idea, targetRepo, defaults, resolved.source);
+  const { run_id: runId } = allocateRun(idea, targetRepo, defaults, resolved.source, tool);
 
   // Runner-agnostic planning (agnostic-plan-driver.ts): ask Heimdall which runtime should serve
   // planning. When it routes to a non-Claude runtime AND the ported entrypoint + opencode are
@@ -451,7 +486,10 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
   // returns null on ANY doubt (feature off, test mode, Heimdall down, claude route, missing
   // CLI/opencode) — in which case this is a no-op and the built-in claude driver runs, so planning
   // never breaks on an unavailable route or port.
-  const planDriver = await resolveAgnosticPlanDriver();
+  // The agnostic route only serves the stock plugin-hive invocation; any other tool, or a
+  // configured drive-prompt override, keeps the built-in driver.
+  const stockPluginHive = tool.id === PLUGIN_HIVE_TOOL.id && tool.invoke === PLUGIN_HIVE_TOOL.invoke;
+  const planDriver = stockPluginHive ? await resolveAgnosticPlanDriver() : null;
   if (planDriver) {
     updateRunRecord(runId, { plan_runtime: planDriver.runtime, plan_model: planDriver.model });
     updateRunMetricsDriver(runId, planDriver.runtime);
@@ -462,7 +500,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
 
   // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
   // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
-  const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults);
+  const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults, tool);
 
   // auto-cleanup-orphaned-runs-on-first-turn-failure: allocateRun() above already durably wrote
   // this run's record (status "in_progress") and its workspace/worktree, BEFORE this very first
@@ -489,6 +527,7 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
       cwd: record.workspace_path,
       sessionId: null,
       prompt: drivePrompt,
+      ...toolTurnInput(record),
     }));
   } catch (err) {
     abortRun({ run_id: runId });
@@ -620,6 +659,7 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
       sessionId: record.session_id,
       prompt: answerPrompt,
       qid: question.qid,
+      ...toolTurnInput(record),
     }));
   } catch (err) {
     // PANT-903: the resumed turn never happened, so the answer was never delivered. Put the

@@ -328,6 +328,10 @@ export interface DriverInput {
   // the one actually answered rather than the one the session pointer happens to name. Drivers
   // without envelope questions ignore it.
   qid?: string;
+  // PANT-1248: the workspace-relative dir the run's tool surfaces question envelopes in (its
+  // descriptor's question_source). Absent => plugin-hive's .pHive/questions. Drivers without
+  // envelope questions ignore it.
+  questions_dir?: string;
 }
 
 export interface DriverResult {
@@ -1054,22 +1058,22 @@ export class ForkedHiveDriver implements Driver {
 
   private async dispatch(input: DriverInput): Promise<DriverResult> {
     if (input.sessionId === null) {
-      return this.dispatchFresh(input.cwd, input.prompt);
+      return this.dispatchFresh(input.cwd, input.prompt, input.questions_dir);
     }
     const pointer = decodeEnvelopePointer(input.sessionId);
     if (!pointer) {
       // No pending envelope from the prior turn (NO_PENDING_SENTINEL), or an unrecognized
       // session_id -- treat as a fresh dispatch rather than throwing, matching this epic's
       // "never guess, but degrade gracefully" discipline for an odd-but-not-catastrophic input.
-      return this.dispatchFresh(input.cwd, input.prompt);
+      return this.dispatchFresh(input.cwd, input.prompt, input.questions_dir);
     }
     // PANT-923: answer the question the caller actually answered. The pointer names only the
     // first question of the surfaced set; any sibling of that envelope may be the one answered.
     const target = input.qid ? { ...pointer, qid: input.qid } : pointer;
-    return this.answerAndContinue(input.cwd, target, input.prompt);
+    return this.answerAndContinue(input.cwd, target, input.prompt, input.questions_dir);
   }
 
-  protected async dispatchFresh(cwd: string, skillPrompt: string): Promise<DriverResult> {
+  protected async dispatchFresh(cwd: string, skillPrompt: string, questionsDir?: string): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
     const args = adapter.formatTurnArgs(
@@ -1079,24 +1083,29 @@ export class ForkedHiveDriver implements Driver {
       pluginDirArgs()
     );
     await spawnRuntime(route, cwd, args, adapter.parseTurnResult.bind(adapter), { HIVE_HEADLESS: "1" });
-    return withRouteDecision(await this.surfaceNextQuestion(cwd, skillPrompt), route);
+    return withRouteDecision(await this.surfaceNextQuestion(cwd, skillPrompt, questionsDir), route);
   }
 
-  private async answerAndContinue(cwd: string, pointer: EnvelopePointer, answerText: string): Promise<DriverResult> {
+  private async answerAndContinue(
+    cwd: string,
+    pointer: EnvelopePointer,
+    answerText: string,
+    questionsDir?: string,
+  ): Promise<DriverResult> {
     const closureSatisfied = writeAnswerOntoEnvelope(pointer.envelopePath, pointer.qid, answerText);
     if (!closureSatisfied) {
       // A required sibling question in the SAME envelope is still unanswered -- surface it with
       // no new live dispatch at all.
-      return this.surfaceNextQuestion(cwd, pointer.skillPrompt);
+      return this.surfaceNextQuestion(cwd, pointer.skillPrompt, questionsDir);
     }
     // Every required question now has an answer -- re-dispatch the ORIGINAL skill-invocation
     // prompt (confirmed by the spike: re-issuing the same initial prompt, not a generic
     // "continue", is what makes the skill re-check its own on-disk state and progress).
-    return this.dispatchFresh(cwd, pointer.skillPrompt);
+    return this.dispatchFresh(cwd, pointer.skillPrompt, questionsDir);
   }
 
-  protected async surfaceNextQuestion(cwd: string, skillPrompt: string): Promise<DriverResult> {
-    const pending = listEnvelopes(cwd).find((e) => e.status === "pending");
+  protected async surfaceNextQuestion(cwd: string, skillPrompt: string, questionsDir?: string): Promise<DriverResult> {
+    const pending = listEnvelopes(cwd, questionsDir).find((e) => e.status === "pending");
     if (!pending) {
       // Zero-envelopes observability: this placeholder fires both when a run legitimately
       // completed AND when no envelope was ever written because MINERVA_HIVE_PLUGIN_DIR is

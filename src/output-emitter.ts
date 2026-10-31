@@ -30,6 +30,12 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { MinervaError } from "./errors.ts";
 import { finalizeRunMetrics, isTerminalStatus, mutateRunRecord, readRunRecord, type RunRecord } from "./run-manager.ts";
 import { recordCleanup } from "./cleanup-ledger.ts";
+import { PLUGIN_HIVE_TOOL, baseBranchForRecord, toolForRecord, type CompletionDetector } from "./tool-descriptor.ts";
+
+// The plugin-hive layout (.pHive/epics + .claude/worktrees) is the default detector; a run's own
+// tool descriptor (tool-descriptor.ts) can supply another.
+const DEFAULT_DETECTOR: CompletionDetector = PLUGIN_HIVE_TOOL.completion_detector;
+const DEFAULT_EPICS_DIR = DEFAULT_DETECTOR.epics_dir;
 
 export interface CompletedEpic {
   epic_id: string;
@@ -50,8 +56,8 @@ export interface CompletedEpic {
 // YAML so downstream `storyToIssueFields` can parse its `title:` exactly as it does a nested
 // story's own YAML file. Returns null if the file is unparseable or clearly not an epic (no
 // `stories:` and no `id:`/`title:`), so a stray non-epic .yaml never trips false completion.
-function parseFlatEpic(root: string, entryName: string, baselineIds: Set<string>): CompletedEpic | null {
-  const filePath = join(root, ".pHive", "epics", entryName);
+function parseFlatEpic(root: string, epicsRel: string, entryName: string, baselineIds: Set<string>): CompletedEpic | null {
+  const filePath = join(root, epicsRel, entryName);
   const epicYaml = readFileSync(filePath, "utf8");
   let parsed: any;
   try {
@@ -83,8 +89,8 @@ function parseFlatEpic(root: string, entryName: string, baselineIds: Set<string>
 }
 
 // Parse one NESTED epic dir (`.pHive/epics/<id>/epic.yaml` + `stories/*.yaml`) into a CompletedEpic.
-function parseNestedEpic(root: string, entryName: string): CompletedEpic | null {
-  const epicDir = join(root, ".pHive", "epics", entryName);
+function parseNestedEpic(root: string, epicsRel: string, entryName: string): CompletedEpic | null {
+  const epicDir = join(root, epicsRel, entryName);
   const epicYamlPath = join(epicDir, "epic.yaml");
   if (!existsSync(epicYamlPath)) return null;
 
@@ -113,8 +119,8 @@ function parseNestedEpic(root: string, entryName: string): CompletedEpic | null 
 //
 // Returns ALL of this run's own epics found directly under `root`, in readdirSync order (stable,
 // numeric-prefixed for flat plans). A single /plan run legitimately produces multiple epics.
-function findCompletedEpicsUnder(root: string, baselineIds: Set<string>): CompletedEpic[] {
-  const epicsDir = join(root, ".pHive", "epics");
+function findCompletedEpicsUnder(root: string, epicsRel: string, baselineIds: Set<string>): CompletedEpic[] {
+  const epicsDir = join(root, epicsRel);
   if (!existsSync(epicsDir)) return [];
 
   const found: CompletedEpic[] = [];
@@ -129,9 +135,9 @@ function findCompletedEpicsUnder(root: string, baselineIds: Set<string>): Comple
     }
     let epic: CompletedEpic | null = null;
     if (st.isFile() && /\.ya?ml$/i.test(entry)) {
-      epic = parseFlatEpic(root, entry, baselineIds); // FLAT: NN-name.yaml with embedded stories
+      epic = parseFlatEpic(root, epicsRel, entry, baselineIds); // FLAT: NN-name.yaml with embedded stories
     } else if (st.isDirectory()) {
-      epic = parseNestedEpic(root, entry); // NESTED: <id>/epic.yaml + stories/*.yaml
+      epic = parseNestedEpic(root, epicsRel, entry); // NESTED: <id>/epic.yaml + stories/*.yaml
     }
     if (epic) found.push(epic);
   }
@@ -148,14 +154,20 @@ function findCompletedEpicsUnder(root: string, baselineIds: Set<string>): Comple
 // Returns ALL of the run's own epics across both locations, de-duplicated by epic_id (an epic can
 // legitimately appear only once; dedup guards against the same worktree being scanned twice).
 // `baselineIds` defaults to an empty set (backward compatible for fresh_init workspaces).
-export function findCompletedEpics(workspacePath: string, baselineIds: Set<string> = new Set()): CompletedEpic[] {
-  const collected: CompletedEpic[] = [...findCompletedEpicsUnder(workspacePath, baselineIds)];
+// `detector` is the run's tool's completion detector (tool-descriptor.ts); the default is the
+// plugin-hive layout, where the epics dir is .pHive/epics and the worktree root .claude/worktrees.
+export function findCompletedEpics(
+  workspacePath: string,
+  baselineIds: Set<string> = new Set(),
+  detector: CompletionDetector = DEFAULT_DETECTOR,
+): CompletedEpic[] {
+  const collected: CompletedEpic[] = [...findCompletedEpicsUnder(workspacePath, detector.epics_dir, baselineIds)];
 
-
-  const worktreesDir = join(workspacePath, ".claude", "worktrees");
-  if (existsSync(worktreesDir)) {
+  for (const rootRel of detector.worktree_roots) {
+    const worktreesDir = join(workspacePath, rootRel);
+    if (!existsSync(worktreesDir)) continue;
     for (const worktreeName of readdirSync(worktreesDir).sort()) {
-      collected.push(...findCompletedEpicsUnder(join(worktreesDir, worktreeName), baselineIds));
+      collected.push(...findCompletedEpicsUnder(join(worktreesDir, worktreeName), detector.epics_dir, baselineIds));
     }
   }
 
@@ -193,8 +205,11 @@ export function ensureEpicNotGitIgnored(
   workspacePath: string,
   entryName: string,
   layout: "nested" | "flat" = "nested",
+  epicsRel: string = DEFAULT_EPICS_DIR,
 ): void {
-  const relPath = join(".pHive", "epics", entryName);
+  const relPath = join(epicsRel, entryName);
+  // gitignore patterns always use "/" separators.
+  const pattern = `${epicsRel.split("\\").join("/").replace(/\/+$/, "")}/${entryName}`;
   let ignored: boolean;
   try {
     execFileSync("git", ["-C", workspacePath, "check-ignore", "-q", relPath], { stdio: "pipe" });
@@ -210,9 +225,9 @@ export function ensureEpicNotGitIgnored(
 
   const gitignorePath = join(workspacePath, ".gitignore");
   const allowlistHeader =
-    layout === "flat" ? `!.pHive/epics/${entryName}` : `!.pHive/epics/${entryName}/`;
+    layout === "flat" ? `!${pattern}` : `!${pattern}/`;
   const allowlistLines =
-    layout === "flat" ? [allowlistHeader] : [allowlistHeader, `!.pHive/epics/${entryName}/**`];
+    layout === "flat" ? [allowlistHeader] : [allowlistHeader, `!${pattern}/**`];
   const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
   if (existing.includes(allowlistHeader)) return; // already allowlisted somehow -- nothing to do
   const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
@@ -274,20 +289,22 @@ function currentBranch(cwd: string): string | null {
 //     this ran before), it no-ops without an empty commit.
 //   - Commits with a fixed inline identity so it never depends on the run host's global git config.
 //   - Pushes the run-scoped branch (run/<run_id>, the branch the worktree path already cut off
-//     `dev`) to `origin`. NEVER force-pushes.
+//     the run's base branch, `dev` by default) to `origin`. NEVER force-pushes.
 //   - Never throws: any git failure is captured and reported in the result, so a push problem can
 //     never wedge completion detection or the run's terminal transition.
 export function commitAndPushPlan(
-  record: Pick<RunRecord, "run_id" | "workspace_path" | "workspace_kind">,
+  record: Pick<RunRecord, "run_id" | "workspace_path" | "workspace_kind" | "tool" | "tool_id" | "base_branch">,
   epics: CompletedEpic[],
 ): PlanPushResult {
+  const epicsRel = toolForRecord(record).completion_detector.epics_dir;
+  const baseBranch = baseBranchForRecord(record);
   if (record.workspace_kind !== "worktree") {
     return { committed: false, pushed: false, branch: null, reason: "fresh_init workspace has no remote to push to -- skipped" };
   }
   const cwd = record.workspace_path;
 
   for (const epic of epics) {
-    gitCapture(cwd, ["add", "--", join(".pHive", "epics", epic.entry_name)]);
+    gitCapture(cwd, ["add", "--", join(epicsRel, epic.entry_name)]);
   }
   gitCapture(cwd, ["add", "--", ".gitignore"]); // best-effort; harmless if unchanged/absent
 
@@ -315,17 +332,20 @@ export function commitAndPushPlan(
   if (pushed.code !== 0) {
     return { committed: true, pushed: false, branch, reason: `committed, push failed: ${pushed.stderr.trim()}` };
   }
-  // Gate-2: also land the plan bundle on the target repo's `dev` branch, which is where the build
-  // lane checks out to find a committed .pHive/epics/<epic> plan. The run branch was cut from dev,
-  // so HEAD is dev + this one plan commit and fast-forwards cleanly. Best-effort + NEVER force: if
-  // dev moved on origin since the worktree was cut this is skipped and reported, and the plan is
-  // still durably pushed on the run branch above.
+  // Gate-2: also land the plan bundle on the target repo's base branch (`dev` by default -- see
+  // tool-descriptor.ts resolveBaseBranch), which is where the build lane checks out to find a
+  // committed plan. The run branch was cut from that base, so HEAD is base + this one plan commit
+  // and fast-forwards cleanly. Best-effort + NEVER force: if the base moved on origin since the
+  // worktree was cut this is skipped and reported, and the plan is still durably pushed on the run
+  // branch above.
   const devPush =
-    branch === "dev"
+    branch === baseBranch
       ? { code: 0, stdout: "", stderr: "" }
-      : gitCapture(cwd, ["push", "origin", "HEAD:refs/heads/dev"]);
+      : gitCapture(cwd, ["push", "origin", `HEAD:refs/heads/${baseBranch}`]);
   const devNote =
-    devPush.code === 0 ? "; plan landed on dev for the build lane" : `; dev fast-forward skipped: ${devPush.stderr.trim()}`;
+    devPush.code === 0
+      ? `; plan landed on ${baseBranch} for the build lane`
+      : `; ${baseBranch} fast-forward skipped: ${devPush.stderr.trim()}`;
   return { committed: true, pushed: true, branch, reason: `plan committed + pushed to origin/${branch}${devNote}` };
 }
 
@@ -401,10 +421,11 @@ export function checkAndMarkComplete(runId: string): boolean {
   // Already terminal (complete, or aborted by a concurrent abortRun): nothing left to record.
   if (isTerminalStatus(record.status)) return true;
   const baselineIds = new Set(record.baseline_epic_ids ?? []);
-  const epics = findCompletedEpics(record.workspace_path, baselineIds);
+  const detector = toolForRecord(record).completion_detector;
+  const epics = findCompletedEpics(record.workspace_path, baselineIds, detector);
   if (epics.length === 0) return false;
   for (const epic of epics) {
-    ensureEpicNotGitIgnored(record.workspace_path, epic.entry_name, epic.layout);
+    ensureEpicNotGitIgnored(record.workspace_path, epic.entry_name, epic.layout, detector.epics_dir);
   }
   // Auto-commit + push the plan into the target repo so downstream build agents can check it out
   // (PAN-6745). Never throws -- a git failure is captured on the result and must not block the

@@ -116,7 +116,8 @@ test("a failed resumed turn leaves the question pending and the run waiting_on_h
     channel: "human",
     answers: [{ question_id: questionId, answer: "mango" }],
   });
-  assert.deepEqual(ok, { result: {} });
+  assert.equal(ok.outcome, "resumed");
+  assert.deepEqual(ok.result, {});
   assert.equal(d.turns, 3);
   assert.equal(d.prompts[2], "mango");
 

@@ -95,10 +95,10 @@ test("ABI smoke: startRun -> getQuestions -> submitAnswers -> getOutput, end to 
   fails("getOutput", { run_id: runId }, "NOT_READY");
   fails("submitAnswers", { run_id: runId, channel: "agent", answers: [{ question_id: q.id, answer: "web" }] }, "WRONG_CHANNEL");
 
-  assert.deepEqual(
-    ok("submitAnswers", { run_id: runId, channel: "human", answers: [{ question_id: q.id, answer: "web" }] }),
-    { result: {} },
-  );
+  const answered = ok("submitAnswers", { run_id: runId, channel: "human", answers: [{ question_id: q.id, answer: "web" }] });
+  assert.deepEqual(answered.result, {});
+  assert.equal(answered.outcome, "resumed");
+  assert.equal(answered.run_id, runId);
 
   const done = ok("getRunStatus", { run_id: runId });
   assert.equal(done.status, "complete");

@@ -6,6 +6,15 @@ All notable changes to Minerva are documented in this file.
 
 ### Added
 
+- **Resume without an answer, and a fallback when the session is gone** (PANT-1249): runs record
+  an epoch-numbered park, and `getRunStatus` returns it as a `pantheon:park-record/v1`. The new
+  `resumeRun` method resumes a time- or signal-parked run with no answer and drives one turn;
+  its required `park_epoch` is the idempotency key.
+  Resumes are claim → turn → settle, so a duplicate returns `already_resumed` without a turn and
+  a crash mid-resume leaves the question answerable. When the drive session no longer resolves,
+  the turn is rebuilt from the run's worktree (`resumed_via: "state"`). `submitAnswers` now
+  returns `{result: {}, outcome, run_id, park_epoch, resumed_via?}` and refuses a multi-answer
+  set whole. `state_ref` is file-local, so cross-device resume is out of scope.
 - **Operator token on core-api writes** (PANT-1093): `POST /api/route/select` (driver and agnostic
   planner) and plan-runner's `/api/backlog/issues` writes now send `x-pantheon-operator-token`, so
   `PANTHEON_REQUIRE_OPERATOR_TOKEN=enforce` no longer 401s every headless plan run at route

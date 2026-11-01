@@ -42,6 +42,7 @@ import { listEnvelopes } from "./envelope-detection.ts";
 import { emitTelemetryEvent } from "./telemetry.ts";
 import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
 import { withOperatorToken } from "./operator-token.ts";
+import { MinervaError } from "./errors.ts";
 
 const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
@@ -116,6 +117,36 @@ export class HeimdallRouteError extends Error {
     super(message);
     this.name = "HeimdallRouteError";
   }
+}
+
+// PANT-1249 (p2-02): the run's provider session no longer resolves -- the runtime refused the
+// --resume/--session id (expired, pruned, or written on another host). Not a turn failure: the
+// run's state is still on disk, so kickoff-engine rebuilds the turn from state_ref instead of
+// erroring. A driver may throw this directly; spawnRuntime's plain non-zero-exit Error is
+// recognised by its stderr (isSessionGoneError).
+export class SessionGoneError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionGoneError";
+  }
+}
+
+// What each runtime prints when it cannot resume a session id: claude ("No conversation found
+// with session ID"), opencode ("Session not found"), codex ("No session found"). Matched only on
+// an Error's message; timeouts and routing failures are never session-gone.
+const SESSION_GONE_PATTERNS = [
+  /no conversation found/i,
+  /no session found/i,
+  /\bsession\b[^\n]*\b(?:not found|expired|does not exist)\b/i,
+  /could not resume/i,
+  /unknown session/i,
+];
+
+export function isSessionGoneError(err: unknown): boolean {
+  if (err instanceof SessionGoneError) return true;
+  if (!(err instanceof Error) || err instanceof TurnTimeoutError || err instanceof HeimdallRouteError) return false;
+  if (err instanceof MinervaError) return false;
+  return SESSION_GONE_PATTERNS.some((re) => re.test(err.message));
 }
 
 // Core-api's routing-decision identifiers, carried back to the run record so a decision can be
@@ -996,6 +1027,12 @@ interface EnvelopePointer {
 
 const POINTER_PREFIX = "forked-hive-driver:";
 export const NO_PENDING_SENTINEL = "forked-hive-driver:no-pending-envelope";
+
+// Whether a run's session_id is ForkedHiveDriver's on-disk handle (an envelope pointer or the
+// no-pending sentinel) rather than a provider session: such a run always resumes from state.
+export function isEnvelopeHandle(sessionId: string): boolean {
+  return sessionId.startsWith(POINTER_PREFIX);
+}
 
 export function encodeEnvelopePointer(pointer: EnvelopePointer): string {
   return `${POINTER_PREFIX}${JSON.stringify(pointer)}`;

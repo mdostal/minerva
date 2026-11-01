@@ -2,7 +2,7 @@ import { MinervaError, type ErrorCode } from "./errors.ts";
 import { HeimdallRouteError } from "./driver.ts";
 import { capabilities } from "./capabilities.ts";
 import { getRunStatus, listRuns, isUuidShaped } from "./run-manager.ts";
-import { startRun, getQuestions, submitAnswers } from "./kickoff-engine.ts";
+import { startRun, getQuestions, submitAnswers, resumeRun } from "./kickoff-engine.ts";
 import { getOutput } from "./output-emitter.ts";
 import { abortRun } from "./cleanup-ledger.ts";
 import { getMetrics } from "./metrics-summary.ts";
@@ -29,6 +29,7 @@ const handlers: Record<string, Handler> = {
   listRuns,
   getQuestions,
   submitAnswers,
+  resumeRun,
   getOutput,
   abortRun,
   getMetrics,
@@ -44,7 +45,7 @@ export function registeredMethods(): string[] {
 // reaches run-manager.ts's runDir()/runRecordPath() path-join. Every one of these is guarded
 // here, at the ABI boundary, BEFORE the handler (and therefore run-manager.ts) is ever reached --
 // never inside run-manager.ts itself (see run-manager.ts's isUuidShaped doc comment for why).
-const RUN_ID_METHODS = new Set(["getRunStatus", "getQuestions", "submitAnswers", "getOutput", "abortRun"]);
+const RUN_ID_METHODS = new Set(["getRunStatus", "getQuestions", "submitAnswers", "resumeRun", "getOutput", "abortRun"]);
 
 function isValidEnvelope(req: unknown): req is Envelope {
   return (

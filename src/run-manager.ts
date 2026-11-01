@@ -18,7 +18,7 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { MinervaError } from "./errors.ts";
 import type { PlanDefaults } from "./plan-defaults.ts";
@@ -102,6 +102,50 @@ export interface Question {
   escalated_at?: string;
 }
 
+// --- Park and resume (PANT-1249, p2-02; the L1 interaction-lifecycle contract in pantheon-v2) ---
+
+// Why a run is parked. Mirrors the contract's stored ParkReason kinds; provider-limit is derived
+// from a failure and never stored. Every park is status waiting_on_human -- the reason, not a new
+// RunStatus, tells the kinds apart.
+export type ParkReason =
+  | { kind: "awaiting-answer"; question_id: string; open_qids: string[] }
+  | { kind: "awaiting-time"; not_before: string; renewals: number }
+  | { kind: "awaiting-signal"; signal_key: string; not_after?: string };
+
+export interface Park {
+  // Increases by one each time the run parks; (run_id, epoch) is the idempotency key of a resume.
+  epoch: number;
+  reason: ParkReason;
+  parked_at: string;
+  // The host that parked the run; its worktree (state_ref) lives there.
+  host: string;
+  // How the next turn reattaches: "session" resumes the provider session (falling back to a
+  // rebuild from state when it is gone); "state" always rebuilds from the run's on-disk state.
+  resume: { method: "session" | "state"; session_id?: string };
+}
+
+// The single-writer claim a resume holds while its turn runs. Nothing else is marked until the
+// turn has finished, so a process that dies holding the claim leaves the park exactly as it was;
+// a dead claim is released by releaseAbandonedResume and the same answer or cause is accepted
+// again.
+export interface ResumeClaim {
+  epoch: number;
+  pid: number;
+  host: string;
+  started_at: string;
+  question_id?: string;
+  cause?: "time" | "signal";
+}
+
+// An answer that arrived after its park was gone (run finished, aborted, or the question was
+// superseded). Recorded, never applied and never dropped.
+export interface StaleAnswer {
+  question_id: string;
+  answer: string | string[];
+  received_at: string;
+  reason: string;
+}
+
 export interface RunRecord {
   run_id: string;
   workspace_path: string;
@@ -166,6 +210,17 @@ export interface RunRecord {
   tool?: ToolDescriptor;
   base_branch?: string;
   metrics?: RunMetrics;
+  // Park/resume state (PANT-1249). All optional so records written before them still parse.
+  // `park_epoch` counts every park the run has had; `park` is the open one (null while running);
+  // `resuming` is a live resume's claim; `last_resumed_epoch` is the newest park a resume has
+  // completed, which makes a duplicate resume of it answer already_resumed. `drive_prompt` is the
+  // first turn's prompt, re-issued to rebuild a run whose session is gone.
+  park_epoch?: number;
+  park?: Park | null;
+  resuming?: ResumeClaim | null;
+  last_resumed_epoch?: number;
+  drive_prompt?: string;
+  stale_answers?: StaleAnswer[];
 }
 
 function minervaHome(): string {
@@ -591,8 +646,77 @@ export function getRunStatus(params: Record<string, unknown>): Record<string, un
   if (typeof runId !== "string") {
     throw new MinervaError("VALIDATION_FAILED", "getRunStatus requires a string run_id");
   }
+  const record = releaseAbandonedResume(runId);
+  return { status: record.status, metrics: record.metrics ?? null, park: parkRecordOf(record) };
+}
+
+// A resume claim older than this is abandoned even if its pid still answers (pid reuse, or a
+// claim written on another host, whose pid cannot be checked from here). Comfortably longer than
+// a turn with its timeout retries.
+const DEFAULT_RESUME_CLAIM_STALE_MS = 6 * 60 * 60 * 1000;
+
+function resumeClaimStaleMs(): number {
+  const raw = Number(process.env.MINERVA_RESUME_CLAIM_STALE_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RESUME_CLAIM_STALE_MS;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e?.code === "EPERM";
+  }
+}
+
+export function newResumeClaim(epoch: number, item: Pick<ResumeClaim, "question_id" | "cause">): ResumeClaim {
+  return { epoch, pid: process.pid, host: hostname(), started_at: new Date().toISOString(), ...item };
+}
+
+export function isLiveResumeClaim(claim: ResumeClaim | null | undefined): claim is ResumeClaim {
+  if (!claim) return false;
+  if (Date.now() - Date.parse(claim.started_at) > resumeClaimStaleMs()) return false;
+  return claim.host !== hostname() || pidAlive(claim.pid);
+}
+
+export function claimOwner(claim: ResumeClaim): string {
+  return `minerva pid ${claim.pid} on ${claim.host}`;
+}
+
+// The patch that releases an abandoned claim: the claim goes, and a run the dead resume had moved
+// to in_progress is parked again. The question it was delivering never left pending.
+export function abandonedClaimPatch(record: RunRecord): Partial<RunRecord> | null {
+  if (!record.resuming || isLiveResumeClaim(record.resuming)) return null;
+  return isTerminalStatus(record.status) ? { resuming: null } : { resuming: null, status: "waiting_on_human" };
+}
+
+// Recover from a resume whose process died mid-turn (PANT-1249): called by every read that
+// reports the run's state, so a crashed resume never leaves it wedged in_progress.
+export function releaseAbandonedResume(runId: string): RunRecord {
   const record = readRunRecord(runId);
-  return { status: record.status, metrics: record.metrics ?? null };
+  if (!record.resuming || isLiveResumeClaim(record.resuming)) return record;
+  return mutateRunRecord(runId, abandonedClaimPatch).record;
+}
+
+// The open park as a `pantheon:park-record/v1` (pantheon-v2 contracts/l1/interaction-lifecycle.ts),
+// or null when the run is not parked. state_ref is file-local: the run's worktree on this host.
+// Minerva does not push the branch at park time, so a run resumes only on the host that parked it;
+// cross-device resume is out of scope (docs/architecture.md, "Park and resume").
+export function parkRecordOf(record: RunRecord): Record<string, unknown> | null {
+  const park = record.park;
+  if (!park || isTerminalStatus(record.status)) return null;
+  return {
+    schema: "pantheon:park-record/v1",
+    integration: "minerva",
+    run_id: record.run_id,
+    park_epoch: park.epoch,
+    reason: park.reason,
+    parked_at: park.parked_at,
+    open_qids: park.reason.kind === "awaiting-answer" ? park.reason.open_qids : [],
+    state_ref: { kind: "file", path: record.workspace_path },
+    resume: park.resume,
+    workspace: { host: park.host, path: record.workspace_path },
+  };
 }
 
 // Every readable run record under MINERVA_HOME. A record that fails to parse is counted in

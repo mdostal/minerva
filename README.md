@@ -81,7 +81,7 @@ flowchart TB
         direction TB
         cli["bin/minerva.ts — JSON-over-stdio ABI\n(fresh process per call)"]
         mcp["minerva mcp — MCP server\n(same dispatch(), alternate transport)"]
-        dispatch["dispatch — capabilities · startRun\ngetQuestions · submitAnswers · getOutput\ngetRunStatus · listRuns · abortRun"]
+        dispatch["dispatch — capabilities · startRun\ngetQuestions · submitAnswers · getOutput\nresumeRun · getRunStatus · listRuns · abortRun"]
         engine["Kickoff+Plan engine\n(drives plugin-hive kickoff + plan)"]
         driver{"Driver\n(swappable via MINERVA_DRIVER)"}
         spawn["SpawnDriver — claude -p / --resume (default)"]
@@ -103,7 +103,7 @@ Minerva's **public interface is the Pantheon subprocess ABI** itself: a JSON-ove
 `{method, params}` → `{result}` / `{error}` envelope, wire-compatible with plugin-hive's
 task-tracking adapter ABI (v1.0.0). Every call is a fresh process; run state persists on the
 filesystem under `~/.minerva/runs`. There is **no daemon** — nothing advances a run on its own;
-a run only moves when a caller invokes `submitAnswers`.
+a run only moves when a caller invokes `submitAnswers` (or `resumeRun` for a time- or signal-parked run).
 
 ## How it fits
 

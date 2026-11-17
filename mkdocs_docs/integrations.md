@@ -171,7 +171,7 @@ minerva() { npx tsx bin/minerva.ts; }
 ```
 
 Nothing else is configured: no Pantheon URL, no token, no model credential. Each call prints
-`minerva: operator token unavailable (no core-api URL configured)` on stderr. That line is
+`minerva: caller token unavailable (no core-api URL configured)` on stderr. That line is
 expected without Pantheon, and the call still succeeds.
 
 ### Start: the check cannot finish

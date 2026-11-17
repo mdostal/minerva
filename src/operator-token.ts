@@ -1,12 +1,22 @@
-// operator-token.ts — the operator token Minerva sends on every write to Pantheon core-api (PANT-1093).
+// operator-token.ts — the caller token Minerva sends on every write to Pantheon core-api
+// (PANT-1093; Pantheon first-cut-trust 1c).
 //
-// Under PANTHEON_REQUIRE_OPERATOR_TOKEN=enforce core-api answers 401 to any mutating /api/* call
-// without the `x-pantheon-operator-token` header. Minerva's writes (POST /api/route/select, the
-// /api/backlog/issues writes in plan-runner) sent none, so enforce killed every headless plan run
-// at route selection.
+// core-api's guard (PANTHEON_REQUIRE_OPERATOR_TOKEN) refuses a mutating /api/* call without a known
+// token in the `x-pantheon-operator-token` header. The header name is historical: since
+// first-cut-trust it carries either the operator token or a named caller token from Pantheon's
+// config/pantheon-callers.yaml. Minerva runs as a dispatched board agent inside the multica
+// runtimes, so its token is the `runtime-agent` caller token, whose route scope covers exactly what
+// Minerva writes (POST /api/route/select, the /api/backlog/issues writes in plan-runner).
 //
-// The token is resolved the way every other god resolves it: ask core-api to inject it onto the
-// shared secrets volume (POST /api/secrets/inject, itself exempt from the guard precisely so a
+// Minerva never asks for the operator token. Before first-cut-trust it did (hard-coded
+// `provider=pantheon,kind=operator-token`), which let any agent in the runtime read the key that
+// passes every route. core-api now refuses that selector into a runtime's own secrets dir (403),
+// and Minerva refuses to send it at all: a MINERVA_OPERATOR_TOKEN_TAGS carrying
+// `kind=operator-token` is logged and nothing is injected. There is no fallback to the old
+// selector; it can only fail (403 on the runtime's dir) or leak (on a shared dir).
+//
+// The token is resolved the way every other god resolves its own: ask core-api to inject it onto
+// this caller's secrets dir (POST /api/secrets/inject, itself exempt from the guard precisely so a
 // caller can fetch the token it cannot yet present), read the file, delete it. Same contract as
 // pantheon-v2's lib/operator-token-client.ts:
 //
@@ -16,9 +26,15 @@
 //     logged once, so a token outage degrades (works under `warn`, surfaces as a 401 in
 //     bin/operator-token-check.sh under `enforce`) instead of hard-failing here.
 //
-// Env: PANTHEON_SECRETS_SHARED_DIR (default /pantheon-secrets; the inject is skipped when it does
-// not exist, i.e. outside a container that mounts the volume), MINERVA_OPERATOR_TOKEN_INJECT=off
-// (set by the test suite so it never asks a live core-api for a secret).
+// Env:
+//   MINERVA_OPERATOR_TOKEN_TAGS   the Portunus tag selector of Minerva's caller token (default
+//                                 provider=pantheon,kind=caller-token,caller=runtime-agent). Never
+//                                 the operator token's: a selector with kind=operator-token is refused.
+//   PANTHEON_SECRETS_SHARED_DIR   the dir core-api injects into: the runtime's own secrets dir
+//                                 (default /pantheon-secrets; the inject is skipped when it does
+//                                 not exist, i.e. outside a container that mounts the volume).
+//   MINERVA_OPERATOR_TOKEN_INJECT=off  skips the inject (set by the test suite so it never asks a
+//                                 live core-api for a secret).
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -26,9 +42,13 @@ import { readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { resolvePantheonCoreApiUrl } from "./pantheon-core-api.ts";
 
+/** The header core-api's guard reads a token from (pantheon-v2 core/api/middleware/operator-token.ts). */
 export const OPERATOR_TOKEN_HEADER = "x-pantheon-operator-token";
-export const OPERATOR_TOKEN_TAGS = "provider=pantheon,kind=operator-token";
-const TOKEN_ENV_KEY = "PANTHEON_OPERATOR_TOKEN";
+/** Pantheon's `runtime-agent` caller (config/pantheon-callers.yaml): the board agents and Minerva. */
+export const DEFAULT_CALLER_TOKEN_TAGS = "provider=pantheon,kind=caller-token,caller=runtime-agent";
+/** The tag that names the operator token. A selector carrying it is never requested. */
+const OPERATOR_TOKEN_KIND = "kind=operator-token";
+const TOKEN_ENV_KEY = "PANTHEON_CALLER_TOKEN";
 const DEFAULT_REFRESH_INTERVAL_MS = 60_000;
 const INJECT_TIMEOUT_MS = 5_000;
 
@@ -68,23 +88,42 @@ export function parseEnvFile(contents: string, key: string): string | undefined 
   return undefined;
 }
 
+/**
+ * Minerva's token selector: MINERVA_OPERATOR_TOKEN_TAGS, else the runtime-agent caller token.
+ * Returns a reason instead when the selector names the operator token (any `kind=operator-token`
+ * item, as core-api's own check reads it) or is not a `key=value,...` list.
+ */
+export function callerTokenTags(env: NodeJS.ProcessEnv = process.env): { tags: string } | { reason: string } {
+  const tags = env.MINERVA_OPERATOR_TOKEN_TAGS?.trim() || DEFAULT_CALLER_TOKEN_TAGS;
+  const items = tags.split(",").map((item) => item.trim());
+  if (items.some((item) => item.replace(/\s*=\s*/, "=").toLowerCase() === OPERATOR_TOKEN_KIND)) {
+    return { reason: `MINERVA_OPERATOR_TOKEN_TAGS names the operator token (${OPERATOR_TOKEN_KIND}); Minerva never requests it, set its own caller token's selector` };
+  }
+  if (items.some((item) => !/^[^=\s]+\s*=\s*\S/.test(item))) {
+    return { reason: `MINERVA_OPERATOR_TOKEN_TAGS is not a tag selector (key=value,...): ${tags}` };
+  }
+  return { tags: items.join(",") };
+}
+
 // Returns the token, or the reason it could not be resolved. Never throws;
 // `off` resolves to nothing, silently.
 async function resolveToken(deps: OperatorTokenDeps): Promise<{ token: string } | { reason: string } | null> {
   const env = deps.env ?? process.env;
   if (env.MINERVA_OPERATOR_TOKEN_INJECT === "off") return null;
+  const selector = callerTokenTags(env);
+  if ("reason" in selector) return selector;
   const base = resolvePantheonCoreApiUrl(env);
   if (!base) return { reason: "no core-api URL configured" };
   const sharedDir = env.PANTHEON_SECRETS_SHARED_DIR?.trim() || "/pantheon-secrets";
   if (!(deps.dirExists ?? existsSync)(sharedDir)) return { reason: `secrets volume ${sharedDir} is not mounted` };
 
   const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as unknown as InjectFetch);
-  const filePath = join(sharedDir, `minerva-operator-token-${(deps.generateId ?? randomUUID)()}.env`);
+  const filePath = join(sharedDir, `minerva-caller-token-${(deps.generateId ?? randomUUID)()}.env`);
   try {
     const res = await fetchImpl(`${base.replace(/\/+$/, "")}/api/secrets/inject`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tags: OPERATOR_TOKEN_TAGS, target: "file", path: filePath, format: "env", key: TOKEN_ENV_KEY }),
+      body: JSON.stringify({ tags: selector.tags, target: "file", path: filePath, format: "env", key: TOKEN_ENV_KEY }),
       signal: AbortSignal.timeout(INJECT_TIMEOUT_MS),
     });
     if (!res.ok) return { reason: `inject answered HTTP ${res.status}` };
@@ -98,7 +137,8 @@ async function resolveToken(deps: OperatorTokenDeps): Promise<{ token: string } 
 }
 
 /**
- * The request headers for a core-api write: `base` plus the operator token when it resolves.
+ * The request headers for a core-api write: `base` plus Minerva's caller token, as
+ * `x-pantheon-operator-token`, when it resolves.
  * Never throws; without a token the headers go out unchanged.
  */
 export async function withOperatorToken(
@@ -111,7 +151,7 @@ export async function withOperatorToken(
     if (resolved && "reason" in resolved && !loggedReasons.has(resolved.reason)) {
       loggedReasons.add(resolved.reason);
       (deps.logger ?? console).warn(
-        `minerva: operator token unavailable (${resolved.reason}); core-api writes go out without it`,
+        `minerva: caller token unavailable (${resolved.reason}); core-api writes go out without it`,
       );
     }
     cache = { token: resolved && "token" in resolved ? resolved.token : cache?.token, at: now() };

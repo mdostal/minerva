@@ -4,6 +4,17 @@ All notable changes to Minerva are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Minerva sends its own caller token, never the operator token** (Pantheon first-cut-trust 1c):
+  the token on core-api writes is now selected by `MINERVA_OPERATOR_TOKEN_TAGS`, default
+  `provider=pantheon,kind=caller-token,caller=runtime-agent` (the runtimes' agent token), injected
+  into `$PANTHEON_SECRETS_SHARED_DIR` and sent as `x-pantheon-operator-token`. The hard-coded
+  `provider=pantheon,kind=operator-token` selector is gone, with no fallback: a selector carrying
+  `kind=operator-token` is refused with a warning and nothing is injected. The inject file is now
+  `minerva-caller-token-<uuid>.env` (key `PANTHEON_CALLER_TOKEN`), and the degrade warning reads
+  `minerva: caller token unavailable (...)`.
+
 ### Added
 
 - **Operator token on core-api writes** (PANT-1093): `POST /api/route/select` (driver and agnostic

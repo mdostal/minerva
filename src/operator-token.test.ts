@@ -1,8 +1,9 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_CALLER_TOKEN_TAGS,
   OPERATOR_TOKEN_HEADER,
-  OPERATOR_TOKEN_TAGS,
+  callerTokenTags,
   parseEnvFile,
   resetOperatorTokenCache,
   withOperatorToken,
@@ -26,7 +27,7 @@ function fakeVolume(opts: { token?: string | (() => string | undefined); status?
       injects.push({ url, headers: init.headers, body });
       const status = opts.status ?? 200;
       const token = typeof opts.token === "function" ? opts.token() : opts.token ?? "tok-1";
-      if (status === 200 && token !== undefined) files.set(body.path as string, `PANTHEON_OPERATOR_TOKEN=${token}\n`);
+      if (status === 200 && token !== undefined) files.set(body.path as string, `${body.key as string}=${token}\n`);
       return { ok: status === 200, status };
     },
     readFile: async (p) => {
@@ -53,13 +54,13 @@ test("withOperatorToken injects via /api/secrets/inject, reads the file, deletes
   assert.equal(v.injects[0]!.url, "http://core-api:3012/api/secrets/inject");
   assert.equal(v.injects[0]!.headers[OPERATOR_TOKEN_HEADER], undefined, "the inject itself carries no token");
   assert.deepEqual(v.injects[0]!.body, {
-    tags: OPERATOR_TOKEN_TAGS,
+    tags: "provider=pantheon,kind=caller-token,caller=runtime-agent",
     target: "file",
-    path: "/vol/minerva-operator-token-uuid-1.env",
+    path: "/vol/minerva-caller-token-uuid-1.env",
     format: "env",
-    key: "PANTHEON_OPERATOR_TOKEN",
+    key: "PANTHEON_CALLER_TOKEN",
   });
-  assert.deepEqual(v.deleted, ["/vol/minerva-operator-token-uuid-1.env"]);
+  assert.deepEqual(v.deleted, ["/vol/minerva-caller-token-uuid-1.env"]);
   assert.equal(v.files.size, 0);
   assert.deepEqual(v.warnings, []);
 });
@@ -101,7 +102,7 @@ test("an unresolvable token degrades: headers go out unchanged and the reason is
   }
   assert.equal(v.injects.length, 3);
   assert.equal(v.warnings.length, 1);
-  assert.match(v.warnings[0]!, /operator token unavailable \(inject answered HTTP 500\)/);
+  assert.match(v.warnings[0]!, /caller token unavailable \(inject answered HTTP 500\)/);
   assert.deepEqual(v.deleted.length, 3, "the inject file is cleaned up even when the inject fails");
 });
 
@@ -135,6 +136,58 @@ test("the core-api URL follows Minerva's precedence (MINERVA_PANTHEON_CORE_API_U
   const env = { ...v.deps.env, MINERVA_PANTHEON_CORE_API_URL: "http://override:1" };
   await withOperatorToken({}, { ...v.deps, env });
   assert.equal(v.injects[0]!.url, "http://override:1/api/secrets/inject");
+});
+
+// Pantheon first-cut-trust 1c: Minerva fetches its own caller token, never the operator token.
+
+test("without MINERVA_OPERATOR_TOKEN_TAGS the selector is the runtime-agent caller token", () => {
+  assert.equal(DEFAULT_CALLER_TOKEN_TAGS, "provider=pantheon,kind=caller-token,caller=runtime-agent");
+  assert.deepEqual(callerTokenTags({}), { tags: DEFAULT_CALLER_TOKEN_TAGS });
+  assert.deepEqual(callerTokenTags({ MINERVA_OPERATOR_TOKEN_TAGS: "  " }), { tags: DEFAULT_CALLER_TOKEN_TAGS });
+});
+
+test("MINERVA_OPERATOR_TOKEN_TAGS sets the selector Minerva injects", async () => {
+  const v = fakeVolume();
+  const env = { ...v.deps.env, MINERVA_OPERATOR_TOKEN_TAGS: " provider=pantheon, kind=caller-token, caller=minerva " };
+  const headers = await withOperatorToken({}, { ...v.deps, env });
+  assert.equal(headers[OPERATOR_TOKEN_HEADER], "tok-1");
+  assert.equal(v.injects[0]!.body.tags, "provider=pantheon,kind=caller-token,caller=minerva");
+});
+
+test("a selector naming the operator token is never requested: no inject, no header, one warning", async () => {
+  for (const tags of [
+    "provider=pantheon,kind=operator-token",
+    "kind=operator-token,project=pantheon",
+    "provider=pantheon, KIND = Operator-Token",
+  ]) {
+    resetOperatorTokenCache();
+    const v = fakeVolume();
+    v.deps.refreshIntervalMs = 1;
+    const deps = { ...v.deps, env: { ...v.deps.env, MINERVA_OPERATOR_TOKEN_TAGS: tags } };
+    for (let i = 0; i < 2; i++) {
+      assert.deepEqual(await withOperatorToken({ a: "b" }, deps), { a: "b" }, tags);
+      v.advance(1);
+    }
+    assert.equal(v.injects.length, 0, `${tags} must not reach core-api`);
+    assert.equal(v.warnings.length, 1, tags);
+    assert.match(v.warnings[0]!, /names the operator token/);
+  }
+});
+
+test("a selector that is not key=value pairs is refused before the inject", async () => {
+  const v = fakeVolume();
+  const deps = { ...v.deps, env: { ...v.deps.env, MINERVA_OPERATOR_TOKEN_TAGS: "runtime-agent" } };
+  assert.deepEqual(await withOperatorToken({}, deps), {});
+  assert.equal(v.injects.length, 0);
+  assert.match(v.warnings[0]!, /not a tag selector/);
+});
+
+test("the inject goes to the caller's own dir from PANTHEON_SECRETS_SHARED_DIR", async () => {
+  const v = fakeVolume();
+  const env = { ...v.deps.env, PANTHEON_SECRETS_SHARED_DIR: "/pantheon-secrets/multica-runtime" };
+  const deps = { ...v.deps, env, dirExists: (d: string) => d === "/pantheon-secrets/multica-runtime" };
+  assert.equal((await withOperatorToken({}, deps))[OPERATOR_TOKEN_HEADER], "tok-1");
+  assert.equal(v.injects[0]!.body.path, "/pantheon-secrets/multica-runtime/minerva-caller-token-uuid-1.env");
 });
 
 test("parseEnvFile tolerates export, quotes and surrounding lines", () => {

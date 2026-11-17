@@ -1,7 +1,7 @@
 {
   "name": "pantheon-minerva",
   "version": "0.3.0",
-  "description": "Minerva — the Pantheon's Planner. Agent-drivable idea-to-spec engine.",
+  "description": "Headless engine that drives an interactive tool, parks on disk when it needs an answer, and resumes later. plugin-hive kickoff+plan is the default tool.",
   "type": "module",
   "license": "MIT",
   "author": "Mathew Dostal",
@@ -28,8 +28,10 @@
     "node": ">=20.19"
   },
   "scripts": {
-    "test": "tsx --test --test-force-exit --test-concurrency=1 \"src/**/*.test.ts\" \"bin/**/*.test.ts\" \"tests/**/*.test.ts\"",
+    "test": "tsx --import ./tests/setup/no-live-consus.mjs --import ./tests/setup/no-live-operator-token.mjs --test --test-force-exit --test-concurrency=1 \"src/**/*.test.ts\" \"bin/**/*.test.ts\" \"tests/**/*.test.ts\"",
+    "test:hermetic": "bash scripts/test-hermetic.sh",
     "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck",
     "ci": "npm test && npm run typecheck"
   },
   "devDependencies": {

@@ -37,8 +37,12 @@ export interface Envelope {
   path: string;
 }
 
-function questionsDir(workspacePath: string): string {
-  return join(workspacePath, ".pHive", "questions");
+// Workspace-relative envelope dir. plugin-hive's is the default; a run's tool descriptor
+// (tool-descriptor.ts, question_source) can name another.
+export const DEFAULT_QUESTIONS_DIR = ".pHive/questions";
+
+function questionsDir(workspacePath: string, questionsRel: string): string {
+  return join(workspacePath, questionsRel);
 }
 
 // Read-only. Never throws -- returns null on any read/parse failure or structural mismatch,
@@ -101,10 +105,10 @@ function parseEnvelopeFile(path: string): Envelope | null {
   };
 }
 
-// Read-only. Enumerates every parseable envelope under workspacePath/.pHive/questions/. Returns
-// an empty array when the directory is absent -- never throws.
-export function listEnvelopes(workspacePath: string): Envelope[] {
-  const dir = questionsDir(workspacePath);
+// Read-only. Enumerates every parseable envelope under workspacePath/<questionsRel> (default
+// .pHive/questions/). Returns an empty array when the directory is absent -- never throws.
+export function listEnvelopes(workspacePath: string, questionsRel: string = DEFAULT_QUESTIONS_DIR): Envelope[] {
+  const dir = questionsDir(workspacePath, questionsRel);
   if (!existsSync(dir)) return [];
 
   let files: string[];

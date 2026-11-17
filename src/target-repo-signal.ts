@@ -15,17 +15,43 @@
 //
 // Config-driven (project idiom): MINERVA_REPO_CHECKOUT_BASE overrides where slugs are checked out;
 // it defaults to ~/Documents/work/dostal/code, where the plugin repos already live.
+// MINERVA_GIT_CLONE_PROTOCOL (https|ssh, default https) picks how a bare slug is cloned; https is the
+// default because runner containers usually have no github.com host key (PANT-902).
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { resolveBaseBranch } from "./tool-descriptor.ts";
 
 // Local base directory where target/plugin repos are checked out. A resolved owner/repo slug maps
 // to <base>/<repo>. Config-driven so a different deployment can relocate it without a code change.
 export function repoCheckoutBase(): string {
   return process.env.MINERVA_REPO_CHECKOUT_BASE ?? join(homedir(), "Documents", "work", "dostal", "code");
 }
+
+export type GitCloneProtocol = "https" | "ssh";
+
+// Protocol used to clone a bare owner/repo slug. Explicit URLs are never rewritten. An unknown value
+// throws rather than silently falling back, so a typo can't mask an operator's intent.
+export function gitCloneProtocol(): GitCloneProtocol {
+  const raw = process.env.MINERVA_GIT_CLONE_PROTOCOL?.trim().toLowerCase();
+  if (!raw) return "https";
+  if (raw === "https" || raw === "ssh") return raw;
+  throw new Error(`MINERVA_GIT_CLONE_PROTOCOL must be "https" or "ssh", got "${process.env.MINERVA_GIT_CLONE_PROTOCOL}"`);
+}
+
+// Clone URL for a bare owner/repo slug under the configured protocol.
+export function slugCloneUrl(slug: string, protocol: GitCloneProtocol = gitCloneProtocol()): string {
+  return protocol === "ssh" ? `git@github.com:${slug}.git` : `https://github.com/${slug}.git`;
+}
+
+// Runs one git command; throws on a non-zero exit. Injectable so tests can stub git out entirely.
+export type GitRunner = (args: string[], opts?: { env?: NodeJS.ProcessEnv }) => void;
+
+const defaultGitRunner: GitRunner = (args, opts) => {
+  execFileSync("git", args, { stdio: "pipe", ...(opts?.env ? { env: opts.env } : {}) });
+};
 
 // Extract the FIRST `target_repo: <value>` line from a text blob — byte-for-byte the same signal
 // the build lane reads. Case-insensitive key, whitespace-tolerant, value is the first token after
@@ -84,10 +110,12 @@ export interface ResolvedCheckout {
 
 // Map a target_repo value (slug | URL | local path) to a concrete LOCAL git checkout, cloning on
 // demand and guaranteeing a `dev` branch exists so a run worktree can be cut from it.
-//   - slug/URL   -> <base>/<repoName>, cloned from git@github.com:<slug>.git (or the URL) if absent.
+//   - slug       -> <base>/<repoName>, cloned from slugCloneUrl(slug) (https unless
+//                   MINERVA_GIT_CLONE_PROTOCOL=ssh) if absent.
+//   - URL        -> <base>/<repoName>, cloned from the URL exactly as given if absent.
 //   - local path -> used verbatim (legacy --target-repo behavior), still dev-branch-guaranteed.
 // Throws only on a genuine clone failure (a target that literally cannot be checked out).
-export function resolveLocalCheckout(value: string): ResolvedCheckout {
+export function resolveLocalCheckout(value: string, runGit: GitRunner = defaultGitRunner): ResolvedCheckout {
   const v = value.trim();
   const { slug, repoName } = normalizeTargetRepoValue(v);
   const isUrl = /:\/\/|git@/i.test(v) || /github\.com[/:]/i.test(v);
@@ -96,7 +124,7 @@ export function resolveLocalCheckout(value: string): ResolvedCheckout {
   // as-is. This preserves the existing `--target-repo <abs path>` behavior exactly.
   if (!isUrl && !isSlug(v)) {
     const localPath = expandHome(v);
-    ensureDevBranch(localPath);
+    ensureDevBranch(localPath, runGit);
     return { localPath, slug, cloned: false };
   }
 
@@ -104,7 +132,7 @@ export function resolveLocalCheckout(value: string): ResolvedCheckout {
   const localPath = join(repoCheckoutBase(), repoName);
   let cloned = false;
   if (!existsSync(localPath)) {
-    const cloneUrl = isUrl ? v : `git@github.com:${slug}.git`;
+    const cloneUrl = isUrl ? v : slugCloneUrl(slug!);
     // SECURITY: `v` can originate from a Multica ticket's free-text description/title
     // (bin/minerva-plan.ts's --ticket flow, via parseTargetRepoLine), not just an operator-typed
     // CLI flag -- so it must be treated as untrusted. `isUrl`'s classification (`git@`/`://`/
@@ -120,13 +148,14 @@ export function resolveLocalCheckout(value: string): ResolvedCheckout {
     // GitHub clones (including the git@host:owner/repo scp-like syntax, which git resolves via
     // the ssh transport). `ext`, `fd`, and everything else are excluded, closing this class
     // outright even if a future change reintroduces a looser isUrl heuristic upstream.
-    execFileSync("git", ["clone", cloneUrl, localPath], {
-      stdio: "pipe",
-      env: { ...process.env, GIT_ALLOW_PROTOCOL: "file:https:ssh" },
-    });
+    try {
+      runGit(["clone", cloneUrl, localPath], { env: { ...process.env, GIT_ALLOW_PROTOCOL: "file:https:ssh" } });
+    } catch (err) {
+      throw new Error(cloneFailureMessage(cloneUrl, isUrl, err), { cause: err });
+    }
     cloned = true;
   }
-  ensureDevBranch(localPath);
+  ensureDevBranch(localPath, runGit);
   return { localPath, slug, cloned };
 }
 
@@ -146,34 +175,45 @@ function expandHome(p: string): string {
   return p.startsWith("~") ? join(homedir(), p.slice(1)) : p;
 }
 
-function tryGit(cwd: string, args: string[]): boolean {
+function cloneFailureMessage(cloneUrl: string, isUrl: boolean, err: unknown): string {
+  const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
+  const detail = stderr || (err instanceof Error ? err.message : String(err));
+  const hint = isUrl
+    ? "The URL is used exactly as given; pass an https:// URL, or make sure the runner has ssh access to the host."
+    : `Slugs are cloned over ${gitCloneProtocol()}; set MINERVA_GIT_CLONE_PROTOCOL=https|ssh to change that, or pass an explicit URL.`;
+  return `target_repo clone failed for ${cloneUrl}: ${detail}\n${hint}`;
+}
+
+function tryGit(runGit: GitRunner, cwd: string, args: string[]): boolean {
   try {
-    execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe" });
+    runGit(["-C", cwd, ...args]);
     return true;
   } catch {
     return false;
   }
 }
 
-// Guarantee the checkout has a local `dev` branch for a worktree to be cut from. A freshly cloned
-// repo only has its default branch checked out, so `dev` must be materialized. Best-effort refresh
-// of local dev to origin/dev keeps run worktrees cut from current dev (Minerva is the only writer
-// of these managed checkouts, and `dev` is never the checked-out branch of the bare/default clone,
-// so a force-update of the ref is safe). Never throws -- a git hiccup here must not wedge planning.
-function ensureDevBranch(localPath: string): void {
-  tryGit(localPath, ["fetch", "origin", "--prune"]);
-  const hasOriginDev = tryGit(localPath, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/dev"]);
-  const hasLocalDev = tryGit(localPath, ["rev-parse", "--verify", "--quiet", "refs/heads/dev"]);
+// Guarantee the checkout has a local base branch (`dev` unless MINERVA_BASE_BRANCH says otherwise;
+// see tool-descriptor.ts resolveBaseBranch) for a worktree to be cut from. A freshly cloned repo
+// only has its default branch checked out, so the base must be materialized. Best-effort refresh
+// of the local base to origin's keeps run worktrees cut from the current base (Minerva is the only
+// writer of these managed checkouts, and the base is never the checked-out branch of the
+// bare/default clone, so a force-update of the ref is safe). Never throws -- a git hiccup here
+// must not wedge planning.
+function ensureDevBranch(localPath: string, runGit: GitRunner, base: string = resolveBaseBranch({})): void {
+  tryGit(runGit, localPath, ["fetch", "origin", "--prune"]);
+  const hasOriginDev = tryGit(runGit, localPath, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${base}`]);
+  const hasLocalDev = tryGit(runGit, localPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${base}`]);
   if (hasOriginDev) {
-    if (hasLocalDev) tryGit(localPath, ["branch", "-f", "dev", "origin/dev"]);
-    else tryGit(localPath, ["branch", "dev", "origin/dev"]);
+    if (hasLocalDev) tryGit(runGit, localPath, ["branch", "-f", base, `origin/${base}`]);
+    else tryGit(runGit, localPath, ["branch", base, `origin/${base}`]);
     return;
   }
   if (!hasLocalDev) {
-    // No dev anywhere -> create it off the current default HEAD and publish it so the run branch
-    // (and downstream build lane, which integrates into dev) has a real dev to target.
-    tryGit(localPath, ["branch", "dev"]);
-    tryGit(localPath, ["push", "-u", "origin", "dev"]);
+    // No base anywhere -> create it off the current default HEAD and publish it so the run branch
+    // (and downstream build lane, which integrates into the base) has a real base to target.
+    tryGit(runGit, localPath, ["branch", base]);
+    tryGit(runGit, localPath, ["push", "-u", "origin", base]);
   }
 }
 

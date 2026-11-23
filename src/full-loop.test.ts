@@ -85,8 +85,7 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
     planning: { runtime: "gemini", model: "gemini-2.0-flash-exp" },
   });
   
-  const previousHeimdallUrl = process.env.MINERVA_HEIMDALL_URL;
-  const previousExact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  const previousPantheonUrl = process.env.MINERVA_PANTHEON_CORE_API_URL;
   const previousTestMode = process.env.MINERVA_TEST_MODE;
   const previousCli = process.env.HIVE_PLAN_AGNOSTIC_CLI;
   const previousOpencode = process.env.OPENCODE_BIN;
@@ -96,8 +95,7 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
   // same throwaway repo createSeedRepo() already built above as MINERVA_SEED_REPO.
   const previousSeedRepo = process.env.MINERVA_SEED_REPO;
 
-  process.env.MINERVA_HEIMDALL_URL = heimdall.url;
-  delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_PANTHEON_CORE_API_URL = heimdall.url;
   delete process.env.MINERVA_TEST_MODE;
   process.env.OPENCODE_BIN = "echo";
   process.env.HIVE_PLAN_AGNOSTIC_CLI = fakeCli;
@@ -129,8 +127,7 @@ test("full autonomous loop: claude kickoff + gemini planning", async () => {
   } finally {
     heimdall.server.close();
     __setDriverForTest(defaultDriver);
-    if (previousHeimdallUrl) process.env.MINERVA_HEIMDALL_URL = previousHeimdallUrl; else delete process.env.MINERVA_HEIMDALL_URL;
-    if (previousExact) process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousExact; else delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+    if (previousPantheonUrl) process.env.MINERVA_PANTHEON_CORE_API_URL = previousPantheonUrl; else delete process.env.MINERVA_PANTHEON_CORE_API_URL;
     if (previousTestMode) process.env.MINERVA_TEST_MODE = previousTestMode; else delete process.env.MINERVA_TEST_MODE;
     if (previousCli) process.env.HIVE_PLAN_AGNOSTIC_CLI = previousCli; else delete process.env.HIVE_PLAN_AGNOSTIC_CLI;
     if (previousOpencode) process.env.OPENCODE_BIN = previousOpencode; else delete process.env.OPENCODE_BIN;
@@ -142,15 +139,13 @@ test("fallback path: Heimdall down -> claude/claude gracefully degrades", async 
   const seedRepo = createSeedRepo();
   const fakeCli = createFakeAgnosticCli();
 
-  const previousHeimdallUrl = process.env.MINERVA_HEIMDALL_URL;
-  const previousExact = process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  const previousPantheonUrl = process.env.MINERVA_PANTHEON_CORE_API_URL;
   const previousTestMode = process.env.MINERVA_TEST_MODE;
   const previousCli = process.env.HIVE_PLAN_AGNOSTIC_CLI;
   const previousOpencode = process.env.OPENCODE_BIN;
   const previousSeedRepo = process.env.MINERVA_SEED_REPO;
 
-  process.env.MINERVA_HEIMDALL_URL = "http://localhost:1";
-  delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+  process.env.MINERVA_PANTHEON_CORE_API_URL = "http://localhost:1";
   delete process.env.MINERVA_TEST_MODE;
   process.env.OPENCODE_BIN = "echo";
   process.env.HIVE_PLAN_AGNOSTIC_CLI = fakeCli;
@@ -195,8 +190,7 @@ test("fallback path: Heimdall down -> claude/claude gracefully degrades", async 
     assert.ok(output.epic.stories.length > 0, "Stories should exist");
   } finally {
     __setDriverForTest(defaultDriver);
-    if (previousHeimdallUrl) process.env.MINERVA_HEIMDALL_URL = previousHeimdallUrl; else delete process.env.MINERVA_HEIMDALL_URL;
-    if (previousExact) process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL = previousExact; else delete process.env.MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL;
+    if (previousPantheonUrl) process.env.MINERVA_PANTHEON_CORE_API_URL = previousPantheonUrl; else delete process.env.MINERVA_PANTHEON_CORE_API_URL;
     if (previousTestMode) process.env.MINERVA_TEST_MODE = previousTestMode; else delete process.env.MINERVA_TEST_MODE;
     if (previousCli) process.env.HIVE_PLAN_AGNOSTIC_CLI = previousCli; else delete process.env.HIVE_PLAN_AGNOSTIC_CLI;
     if (previousOpencode) process.env.OPENCODE_BIN = previousOpencode; else delete process.env.OPENCODE_BIN;

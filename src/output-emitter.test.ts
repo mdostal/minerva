@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "nod
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call } from "./test-cli.ts";
+import { call, CLAUDE_AUTH_AVAILABLE, STUB_CLAUDE_ACTIVE } from "./test-cli.ts";
 import { findCompletedEpic, findCompletedEpics, ensureEpicNotGitIgnored, commitAndPushPlan, checkAndMarkComplete } from "./output-emitter.ts";
 import { allocateRun, readRunRecord } from "./run-manager.ts";
 import { parse as parseYaml } from "yaml";
@@ -56,6 +56,13 @@ test("getOutput on an incomplete run returns NOT_READY, never a partial artifact
 test("a run that writes epic.yaml + story files is detected as complete and served via getOutput", () => {
   const runId = call("startRun", { idea: "a recipe organizer" }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
+
+  if (STUB_CLAUDE_ACTIVE) {
+    const rec = JSON.parse(readFileSync(join(minervaHome, "runs", runId, "run.yaml"), "utf8"));
+    mkdirSync(join(rec.workspace_path, ".pHive", "epics", "recipe-organizer", "stories"), { recursive: true });
+    writeFileSync(join(rec.workspace_path, ".pHive", "epics", "recipe-organizer", "epic.yaml"), "name: recipe-organizer\ntitle: Recipe Organizer\nstories:\n  - id: story-1\n");
+    writeFileSync(join(rec.workspace_path, ".pHive", "epics", "recipe-organizer", "stories", "story-1.yaml"), "id: story-1\ntitle: Build the recipe list view\n");
+  }
 
   // Simulate plugin-hive's real /plan skill finishing: it writes epic.yaml + story YAMLs
   // directly to the workspace using its own Write tool access (confirmed this really happens
@@ -260,6 +267,13 @@ test("startRun against a target_repo with a pre-existing epic on dev correctly r
 
   const runId = call("startRun", { idea: "a genuinely new idea", target_repo: targetRepo }, env()).result.run_id;
   const q1 = call("getQuestions", { run_id: runId, channel: "human" }, env()).result.questions[0];
+
+  if (STUB_CLAUDE_ACTIVE) {
+    const rec = JSON.parse(readFileSync(join(minervaHome, "runs", runId, "run.yaml"), "utf8"));
+    mkdirSync(join(rec.workspace_path, ".pHive", "epics", "genuinely-new-epic", "stories"), { recursive: true });
+    writeFileSync(join(rec.workspace_path, ".pHive", "epics", "genuinely-new-epic", "epic.yaml"), "name: genuinely-new-epic\ntitle: Genuinely New\nstories:\n  - id: story-1\n");
+    writeFileSync(join(rec.workspace_path, ".pHive", "epics", "genuinely-new-epic", "stories", "story-1.yaml"), "id: story-1\ntitle: A new story\n");
+  }
 
   const finishInstruction =
     "My answer: mango. Now use your Write tool to create the file " +

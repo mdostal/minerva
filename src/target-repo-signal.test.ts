@@ -14,13 +14,18 @@ import {
   stampTargetRepo,
   resolveLocalCheckout,
   repoCheckoutBase,
+  gitCloneProtocol,
+  type GitRunner,
 } from "./target-repo-signal.ts";
 
 const cleanups: string[] = [];
 const savedBase = process.env.MINERVA_REPO_CHECKOUT_BASE;
+const savedProtocol = process.env.MINERVA_GIT_CLONE_PROTOCOL;
 afterEach(() => {
   if (savedBase === undefined) delete process.env.MINERVA_REPO_CHECKOUT_BASE;
   else process.env.MINERVA_REPO_CHECKOUT_BASE = savedBase;
+  if (savedProtocol === undefined) delete process.env.MINERVA_GIT_CLONE_PROTOCOL;
+  else process.env.MINERVA_GIT_CLONE_PROTOCOL = savedProtocol;
   while (cleanups.length) rmSync(cleanups.pop()!, { recursive: true, force: true });
 });
 
@@ -116,4 +121,67 @@ test("resolveLocalCheckout: a git-clone-injection payload via the ext:: transpor
     "expected git itself to refuse the ext:: transport, not silently run it",
   );
   assert.equal(existsSync(canary), false, "the injected command must never actually execute");
+});
+
+// Stubbed git (PANT-902): record every git invocation and return the URL `git clone` was handed.
+// Nothing touches the network or the filesystem; the base dir is a fresh, empty temp dir so the
+// clone branch always runs.
+function captureClone(value: string): { cloneUrl: string | undefined; calls: string[][] } {
+  const root = mkdtempSync(join(tmpdir(), "minerva-trs-stub-"));
+  cleanups.push(root);
+  process.env.MINERVA_REPO_CHECKOUT_BASE = root;
+  const calls: string[][] = [];
+  const runGit: GitRunner = (args) => {
+    calls.push(args);
+  };
+  resolveLocalCheckout(value, runGit);
+  return { cloneUrl: calls.find((a) => a[0] === "clone")?.[1], calls };
+}
+
+test("resolveLocalCheckout: clones a bare slug over https by default", () => {
+  delete process.env.MINERVA_GIT_CLONE_PROTOCOL;
+  assert.equal(captureClone("mdostal/cron-maker").cloneUrl, "https://github.com/mdostal/cron-maker.git");
+});
+
+test("resolveLocalCheckout: clones a bare slug over ssh when MINERVA_GIT_CLONE_PROTOCOL=ssh", () => {
+  process.env.MINERVA_GIT_CLONE_PROTOCOL = "ssh";
+  assert.equal(captureClone("mdostal/cron-maker").cloneUrl, "git@github.com:mdostal/cron-maker.git");
+  process.env.MINERVA_GIT_CLONE_PROTOCOL = "https";
+  assert.equal(captureClone("mdostal/cron-maker").cloneUrl, "https://github.com/mdostal/cron-maker.git");
+});
+
+test("resolveLocalCheckout: explicit ssh and https URLs are passed through untouched, whatever the protocol setting", () => {
+  const urls = [
+    "git@github.com:mdostal/cron-maker.git",
+    "https://github.com/mdostal/cron-maker",
+    "ssh://git@github.com/mdostal/cron-maker.git",
+  ];
+  for (const protocol of ["https", "ssh"]) {
+    process.env.MINERVA_GIT_CLONE_PROTOCOL = protocol;
+    for (const url of urls) assert.equal(captureClone(url).cloneUrl, url, `${url} under ${protocol}`);
+  }
+});
+
+test("gitCloneProtocol: rejects an unknown value instead of guessing", () => {
+  process.env.MINERVA_GIT_CLONE_PROTOCOL = "git";
+  assert.throws(() => gitCloneProtocol(), /MINERVA_GIT_CLONE_PROTOCOL must be "https" or "ssh"/);
+});
+
+test("resolveLocalCheckout: a clone failure names the URL and MINERVA_GIT_CLONE_PROTOCOL", () => {
+  const root = mkdtempSync(join(tmpdir(), "minerva-trs-stub-"));
+  cleanups.push(root);
+  process.env.MINERVA_REPO_CHECKOUT_BASE = root;
+  delete process.env.MINERVA_GIT_CLONE_PROTOCOL;
+  const failingGit: GitRunner = (args) => {
+    if (args[0] === "clone") {
+      throw Object.assign(new Error("Command failed: git clone"), { stderr: Buffer.from("fatal: repository not found") });
+    }
+  };
+  assert.throws(
+    () => resolveLocalCheckout("mdostal/does-not-exist", failingGit),
+    (err: Error) =>
+      err.message.includes("https://github.com/mdostal/does-not-exist.git") &&
+      err.message.includes("fatal: repository not found") &&
+      err.message.includes("MINERVA_GIT_CLONE_PROTOCOL"),
+  );
 });

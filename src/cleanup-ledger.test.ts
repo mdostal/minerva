@@ -5,10 +5,10 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call, createSeedRepo } from "./test-cli.ts";
+import { call, createSeedRepo, CLAUDE_AUTH_AVAILABLE, STUB_CLAUDE_ACTIVE } from "./test-cli.ts";
 
 let minervaHome: string;
 let seedRepo: string;
@@ -105,6 +105,12 @@ test("abortRun is idempotent -- calling it twice does not double-append the ledg
 test("completion (via output-emitter) also appends exactly one ledger + event record", () => {
   const runId = call("startRun", { idea: "a bug tracker" }, env()).result.run_id;
   const { question: q1, channel } = getPendingQuestion(runId);
+
+  if (STUB_CLAUDE_ACTIVE) {
+    const rec = JSON.parse(readFileSync(join(minervaHome, "runs", runId, "run.yaml"), "utf8"));
+    mkdirSync(join(rec.workspace_path, ".pHive", "epics", "bug-tracker"), { recursive: true });
+    writeFileSync(join(rec.workspace_path, ".pHive", "epics", "bug-tracker", "epic.yaml"), "name: bug-tracker\ntitle: Bug Tracker\n");
+  }
 
   const finishInstruction =
     "My answer: yes. Now use your Write tool to create the file " +

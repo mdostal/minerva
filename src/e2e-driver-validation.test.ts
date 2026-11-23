@@ -89,7 +89,7 @@ test("E2E driver validation: env routing initializes ForkedHiveDriver and comple
     MINERVA_SEED_REPO: seedRepo,
     MINERVA_DRIVER: "forked",
     MINERVA_PLAN_AGNOSTIC: "off",
-    MINERVA_HEIMDALL_AVAILABLE_ROUTE_URL: routeUrl(fakeRuntime),
+    MINERVA_PANTHEON_ROUTE_SELECT_URL: routeUrl(fakeRuntime),
   };
 
   try {

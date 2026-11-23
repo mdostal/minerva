@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { call } from "./test-cli.ts";
+import { call, CLAUDE_AUTH_AVAILABLE } from "./test-cli.ts";
 
 let minervaHome: string;
 let existingRepo: string; // throwaway repo WITH a dev branch, for the worktree case

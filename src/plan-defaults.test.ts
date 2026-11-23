@@ -5,8 +5,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { MinervaError } from "./errors.ts";
 import {
   BUILTIN_PLAN_DEFAULTS,
@@ -275,4 +276,112 @@ test("resolve: prose question with no kind uses the free-text default", () => {
 test("drivePromptSuffix: empty when unset, prefixed with a blank line when set", () => {
   assert.equal(drivePromptSuffix(BUILTIN_PLAN_DEFAULTS), "");
   assert.equal(drivePromptSuffix({ ...AGENT, drive_prompt_suffix: "skip sign-off" }), "\n\nskip sign-off");
+});
+
+// --- PANT-996: operator-defaults file (per-run file, match lists, select_strategy "park") ----
+
+const OPERATOR_DEFAULTS = join(dirname(fileURLToPath(import.meta.url)), "..", "config", "operator-defaults.yaml");
+
+test("load: per-run defaults.file is merged as a layer under the inline per-run overrides", () => {
+  const dir = mkdtempSync(join(tmpdir(), "minerva-pd-run-file-"));
+  const file = join(dir, "operator.yaml");
+  writeFileSync(file, "mode: auto\ntech_stack: Go\nanswers:\n  - match: database\n    answer: Postgres\n");
+  try {
+    withEnv({}, () => {
+      const d = loadPlanDefaults({ file, tech_stack: "Rust", answers: [{ match: "queue", answer: "NATS" }] });
+      assert.equal(d.mode, "auto"); // from the file
+      assert.equal(d.tech_stack, "Rust"); // inline wins over the file
+      assert.deepEqual(d.answers.map((r) => r.answer), ["NATS", "Postgres"]); // inline rules first
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("load: per-run defaults.file sits above the env file and env mode", () => {
+  const dir = mkdtempSync(join(tmpdir(), "minerva-pd-run-file-env-"));
+  const envFile = join(dir, "env.yaml");
+  const runFile = join(dir, "run.yaml");
+  writeFileSync(envFile, "mode: agent\ntech_stack: Python\n");
+  writeFileSync(runFile, "mode: auto\n");
+  try {
+    withEnv({ MINERVA_PLAN_DEFAULTS: envFile, MINERVA_PLAN_DEFAULTS_MODE: "off" }, () => {
+      const d = loadPlanDefaults({ file: runFile });
+      assert.equal(d.mode, "auto");
+      assert.equal(d.tech_stack, "Python"); // untouched by the run file, so the env file's stands
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("load: a missing per-run defaults.file fails loudly (explicit input, unlike the env file)", () => {
+  withEnv({}, () => {
+    assert.throws(
+      () => loadPlanDefaults({ file: "/nonexistent/operator-defaults.yaml" }),
+      (e: unknown) => e instanceof MinervaError && /Could not read startRun params\.defaults file/.test(e.message),
+    );
+    assert.throws(() => loadPlanDefaults({ file: 42 }), MinervaError);
+  });
+});
+
+test("load: match accepts a non-empty string[]; select_strategy accepts park", () => {
+  withEnv({}, () => {
+    const d = loadPlanDefaults({ select_strategy: "park", answers: [{ match: ["a", "b"], answer: "x" }] });
+    assert.equal(d.select_strategy, "park");
+    assert.deepEqual(d.answers[0]!.match, ["a", "b"]);
+    assert.throws(() => loadPlanDefaults({ answers: [{ match: [], answer: "x" }] }), MinervaError);
+    assert.throws(() => loadPlanDefaults({ answers: [{ match: [1], answer: "x" }] }), MinervaError);
+  });
+});
+
+test("resolve: a match list hits on any of its substrings", () => {
+  const d: PlanDefaults = { ...AGENT, answers: [{ match: ["git flow", "base branch"], answer: "dev" }] };
+  assert.equal(resolveDefaultAnswer(q({ text: "Which BASE BRANCH do PRs target?" }), d, "idea"), "dev");
+  assert.equal(resolveDefaultAnswer(q({ text: "What git flow do we use?" }), d, "idea"), "dev");
+});
+
+test("resolve: select_strategy park leaves an uncovered select parked, but explicit answers still apply", () => {
+  const d: PlanDefaults = {
+    ...AUTO,
+    select_strategy: "park",
+    free_text_default: "should not be used for selects",
+    answers: [{ qid: "known", answer: "option B" }],
+  };
+  const sel = { kind: "single-select" as const, options: ["Recommended: A", "option B"] };
+  assert.equal(resolveDefaultAnswer(q({ ...sel, qid: "unknown" }), d, "idea"), null);
+  assert.equal(resolveDefaultAnswer(q({ ...sel, kind: "multi-select", qid: "unknown" }), d, "idea"), null);
+  assert.equal(resolveDefaultAnswer(q({ ...sel, qid: "known" }), d, "idea"), "option B");
+});
+
+test("operator-defaults.yaml: loads, answers the known operator questions, parks everything else", () => {
+  withEnv({}, () => {
+    const d = loadPlanDefaults({ file: OPERATOR_DEFAULTS });
+    assert.equal(d.mode, "auto");
+    assert.equal(d.skip_sign_off, false);
+    assert.equal(d.select_strategy, "park");
+    assert.equal(d.free_text_default, null);
+
+    const answered = (text: string, channel: "agent" | "human" = "human"): string => {
+      const a = resolveDefaultAnswer(q({ text, channel, kind: "free-text" }), d, "idea");
+      assert.equal(typeof a, "string", `expected an operator answer for: ${text}`);
+      return a as string;
+    };
+    assert.match(answered("What git flow / branching strategy should this project use?"), /Branch off `dev`/);
+    assert.match(answered("Which base branch should PRs target?", "agent"), /never rebase/);
+    assert.match(answered("How should we verify the change is done?"), /live check on hive/);
+    assert.match(answered("Should merging wait for the CI pipeline to pass?"), /CI is never a gate/);
+    assert.match(answered("Can the planner call another god directly?"), /Pantheon core-api/);
+    assert.match(answered("Should we add a polling worker to watch for updates?"), /No new polling loops/);
+
+    // Not covered -> null (the run parks), whatever the question's shape or channel.
+    const uncovered: ResolvableQuestion[] = [
+      q({ text: "What is the core product strategy?", channel: "human", kind: "free-text" }),
+      q({ text: "Which database should we use?", channel: "agent", kind: "free-text" }),
+      q({ text: "Pick a UI library", channel: "agent", kind: "single-select", options: ["Recommended: X", "Y"] }),
+      q({ text: "Ready for sign-off on scope?", channel: "agent", kind: "single-select", options: ["Approve", "Revise"] }),
+      q({ text: "Anything else we should know about this decision?", channel: "agent" }),
+    ];
+    for (const u of uncovered) assert.equal(resolveDefaultAnswer(u, d, "idea"), null, u.text);
+  });
 });

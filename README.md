@@ -160,6 +160,8 @@ Other methods: `getRunStatus`, `listRuns`, `abortRun`. Useful env vars:
 | `MINERVA_OPERATOR_TOKEN_TAGS` | Portunus tag selector of Minerva's own caller token. Every core-api write (route select, backlog writes) sends it as `x-pantheon-operator-token`, injected via `POST /api/secrets/inject` and cached for 60s; when it can't be resolved the write goes out without it and the reason is logged once. Never the operator token: a selector with `kind=operator-token` (or one that isn't `key=value,...`) is refused, logged once, and nothing is injected | `provider=pantheon,kind=caller-token,caller=runtime-agent` |
 | `PANTHEON_SECRETS_SHARED_DIR` | Secrets dir core-api injects the caller token into: in Pantheon, the runtime's own dir (e.g. `/pantheon-secrets/multica-runtime`). The inject is skipped when it doesn't exist | `/pantheon-secrets` |
 | `MINERVA_OPERATOR_TOKEN_INJECT` | `off` skips the caller-token inject (the test suite sets it so tests never ask a live core-api for a secret) | unset |
+| `MINERVA_CLAUDE_TOKEN_TAGS` | Portunus tag selector of the Claude credential handed to spawned `claude` children when neither `CLAUDE_CODE_OAUTH_TOKEN` nor `~/.zshrc` provides one (PANT-1169). Injected via `POST /api/secrets/inject` once per process, read, deleted; the value goes only into the child's env. Unresolvable: the child spawns as before and the reason is logged once | `$MULTICA_RUNTIME_CLAUDE_TOKEN_TAGS`, else `provider=anthropic,project=ffevents` |
+| `MINERVA_CLAUDE_CREDENTIAL_INJECT` | `off` skips the Claude credential inject (the test suite sets it) | unset |
 | `MINERVA_GIT_CLONE_PROTOCOL` | Clone protocol for a bare `owner/repo` `target_repo` slug: `https` or `ssh`. Explicit URLs are used as given. | `https` |
 
 ```bash

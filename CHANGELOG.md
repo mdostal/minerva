@@ -17,6 +17,13 @@ All notable changes to Minerva are documented in this file.
 
 ### Added
 
+- **Claude credential for spawned children** (PANT-1169, #99): when neither
+  `CLAUDE_CODE_OAUTH_TOKEN` nor `~/.zshrc` provides one, Minerva resolves the Claude credential
+  through Pantheon's `POST /api/secrets/inject` (`MINERVA_CLAUDE_TOKEN_TAGS`, default the runtime's
+  `MULTICA_RUNTIME_CLAUDE_TOKEN_TAGS`, else `provider=anthropic,project=ffevents`), deletes the file,
+  and hands the value to each spawned `claude` child (spawn, subagent, forked and agnostic drivers).
+  Inside the Multica runtime every planning run used to die on `Not logged in` before its first
+  turn. Standalone use is unchanged; `MINERVA_CLAUDE_CREDENTIAL_INJECT=off` skips it.
 - **Operator token on core-api writes** (PANT-1093): `POST /api/route/select` (driver and agnostic
   planner) and plan-runner's `/api/backlog/issues` writes now send `x-pantheon-operator-token`, so
   `PANTHEON_REQUIRE_OPERATOR_TOKEN=enforce` no longer 401s every headless plan run at route

@@ -10,6 +10,8 @@
 // test spawns with the inherited NODE_OPTIONS loads it too, even if its env otherwise drops the flag.
 
 process.env.MINERVA_OPERATOR_TOKEN_INJECT = "off";
+// Same for the Claude credential spawned children get (src/claude-credential.ts, PANT-1169).
+process.env.MINERVA_CLAUDE_CREDENTIAL_INJECT = "off";
 
 const importFlag = `--import=${new URL(import.meta.url).href}`;
 if (!(process.env.NODE_OPTIONS ?? "").includes(importFlag)) {

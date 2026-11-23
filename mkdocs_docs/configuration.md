@@ -15,6 +15,8 @@
 | `MINERVA_OPERATOR_TOKEN_TAGS` | Portunus tag selector of Minerva's own caller token, sent as `x-pantheon-operator-token` on every core-api write (see [Pantheon caller token](#pantheon-caller-token)). Never the operator token. | `provider=pantheon,kind=caller-token,caller=runtime-agent` |
 | `PANTHEON_SECRETS_SHARED_DIR` | Secrets dir core-api injects that token into; in Pantheon, the runtime's own dir | `/pantheon-secrets` |
 | `MINERVA_OPERATOR_TOKEN_INJECT` | `off` skips the token inject (the test suite sets it) | unset |
+| `MINERVA_CLAUDE_TOKEN_TAGS` | Portunus tag selector of the Claude credential handed to spawned `claude` children when neither `CLAUDE_CODE_OAUTH_TOKEN` nor `~/.zshrc` provides one (see [Claude credential for spawned children](#claude-credential-for-spawned-children)). Injected via `POST /api/secrets/inject` once per process, read, deleted; the value goes only into the child's env. Unresolvable: the child spawns as before and the reason is logged once | `$MULTICA_RUNTIME_CLAUDE_TOKEN_TAGS`, else `provider=anthropic,project=ffevents` |
+| `MINERVA_CLAUDE_CREDENTIAL_INJECT` | `off` skips the Claude credential inject (the test suite sets it) | unset |
 | `MINERVA_PLAN_DEFAULTS` | Path to a plan-defaults YAML/JSON config file | unset |
 | `MINERVA_PLAN_DEFAULTS_MODE` | Quick mode switch: `off`, `agent`, or `auto` | `off` |
 | `MINERVA_HIVE_PLUGIN_DIR` | Path to a local `plugin-hive-fork` checkout — required for `MINERVA_DRIVER=forked` until plugin-hive#341 merges | unset |
@@ -38,6 +40,18 @@ Minerva never requests the operator token. A `MINERVA_OPERATOR_TOKEN_TAGS` carry
 `kind=operator-token` is refused with a warning on stderr and nothing is injected; there is no
 fallback to it. A token that can't be resolved leaves the write unauthenticated, with the reason
 logged once: core-api then answers 401 under `enforce`.
+
+### Claude credential for spawned children
+
+Every driver spawns the runtime CLI as a child process (`claude -p`, `claude --bg`, the agnostic
+planner CLI). In Pantheon's Multica runtime the provider credential is injected into the agent's
+own process only, so a child inherits none and answers `Not logged in`. Minerva builds each
+child's env with this precedence: `CLAUDE_CODE_OAUTH_TOKEN` already set, then the token exported in
+`~/.zshrc`, then a token it asks core-api to inject (`MINERVA_CLAUDE_TOKEN_TAGS`) into
+`$PANTHEON_SECRETS_SHARED_DIR`. The file is deleted as soon as it is read; the value stays in memory
+and goes only into the child's env, never into Minerva's own. Only a `claude` route asks for it.
+When core-api or the secrets dir is missing (standalone use) nothing changes and the reason is
+logged once; a failed inject is retried at most once a minute.
 
 ### Driver selection
 

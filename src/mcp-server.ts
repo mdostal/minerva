@@ -27,7 +27,7 @@ const SERVER_VERSION = "0.1.0";
 // validate-run-id-uuid-shape story: mirrors dispatch.ts's RUN_ID_METHODS. mcp-server.ts is the
 // other of the two ABI boundaries in front of run-manager.ts's runDir()/runRecordPath()
 // path-join, so it rejects a non-UUID run_id here, before ever forwarding to dispatch().
-const RUN_ID_TOOLS = new Set(["getRunStatus", "getQuestions", "submitAnswers", "getOutput", "abortRun"]);
+const RUN_ID_TOOLS = new Set(["getRunStatus", "getQuestions", "submitAnswers", "resumeRun", "getOutput", "abortRun"]);
 
 const TOOLS: Tool[] = [
   {
@@ -62,8 +62,9 @@ const TOOLS: Tool[] = [
   {
     name: "getRunStatus",
     description:
-      "Get a run's current status: 'in_progress' | 'waiting_on_human' | 'complete' | 'aborted'. " +
-      "Polling this never advances the run on its own -- only submitAnswers does.",
+      "Get a run's current status: 'in_progress' | 'waiting_on_human' | 'complete' | 'aborted', " +
+      "plus `park`: the open park as a pantheon:park-record/v1 (null when not parked). " +
+      "Polling this never advances the run on its own -- only submitAnswers or resumeRun does.",
     inputSchema: {
       type: "object",
       properties: { run_id: { type: "string" } },
@@ -100,7 +101,10 @@ const TOOLS: Tool[] = [
       "that ever advances a parked run -- never call this with a fabricated or guessed answer on " +
       "the 'human' channel; only submit an answer a real human actually gave. Answers one " +
       "question per call. If the resumed turn fails, the question stays pending and the run " +
-      "stays waiting_on_human, so the call can be retried.",
+      "stays waiting_on_human, so the call can be retried. Idempotent: re-submitting an answered " +
+      "question returns outcome 'already_resumed' and drives nothing. Returns {outcome, run_id, " +
+      "park_epoch, resumed_via?}; resumed_via 'state' means the session was gone and the run was " +
+      "rebuilt from its workspace.",
     inputSchema: {
       type: "object",
       properties: {
@@ -110,7 +114,7 @@ const TOOLS: Tool[] = [
           type: "array",
           description:
             "Exactly one pending question being answered, as [{question_id, answer}]. More than " +
-            "one entry is rejected with VALIDATION_FAILED; submit one answer per call.",
+            "one entry is refused whole with VALIDATION_FAILED (nothing applied); submit one answer per call.",
           items: {
             type: "object",
             properties: {
@@ -125,6 +129,33 @@ const TOOLS: Tool[] = [
         },
       },
       required: ["run_id", "channel", "answers"],
+    },
+  },
+  {
+    name: "resumeRun",
+    description:
+      "Resume a run parked on time or a signal, with no answer. cause must fit the open park " +
+      "(getRunStatus's park.reason): 'time' for awaiting-time, 'signal' with the park's " +
+      "signal_key for awaiting-signal; anything else is outcome 'refused' and drives nothing. " +
+      "park_epoch (getRunStatus's park.park_epoch) is required and is the idempotency key: a repeat " +
+      "with the same epoch returns 'already_resumed' without a second turn.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run_id: { type: "string" },
+        cause: { type: "string", enum: ["time", "signal"] },
+        evidence: {
+          type: "object",
+          properties: {
+            observed_at: { type: "string", description: "ISO timestamp the time passed or the signal arrived." },
+            signal_key: { type: "string" },
+            detail: { type: "object" },
+          },
+          required: ["observed_at"],
+        },
+        park_epoch: { type: "integer", minimum: 0 },
+      },
+      required: ["run_id", "cause", "evidence", "park_epoch"],
     },
   },
   {

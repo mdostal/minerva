@@ -112,6 +112,22 @@ Check the current status of a run.
 |-------|------|-------------|
 | `status` | string | One of: `in_progress`, `waiting_on_human`, `complete`, `aborted` |
 | `metrics` | RunMetrics \| null | Per-run planning metrics (`null` for runs recorded before metrics existed) |
+| `park` | ParkRecord \| null | The open park, shaped as `pantheon:park-record/v1`; `null` when the run is not parked or is finished |
+
+**`ParkRecord` shape** (pantheon-v2 `contracts/l1/interaction-lifecycle.ts`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `schema` | `"pantheon:park-record/v1"` | |
+| `integration` | `"minerva"` | |
+| `run_id` | string | |
+| `park_epoch` | number | Increments on every park. A resume names the epoch it is resuming. |
+| `reason` | object | `{kind:"awaiting-answer", question_id, open_qids}`, `{kind:"awaiting-time", not_before, renewals}` or `{kind:"awaiting-signal", signal_key, not_after?}` |
+| `parked_at` | string | ISO 8601 |
+| `open_qids` | string[] | Pending question ids |
+| `state_ref` | object | `{kind:"file", path}`: the run's worktree on the parking host. It is file-local, so a resume on another device is out of scope. |
+| `resume` | object | `{method:"session", session_id}` when the drive session can be resumed, `{method:"state"}` when the next turn must rebuild from `state_ref` |
+| `workspace` | object | `{host, path}` |
 
 **`RunMetrics` shape:**
 
@@ -265,7 +281,22 @@ completes, or `max_auto_answers` (default `40`) answers have been given. With pl
 mode `off`, nothing is auto-answered.
 
 Each call answers exactly **one** question: `answers` must contain exactly one entry. A request
-with more than one entry is rejected with `VALIDATION_FAILED` and the run is left unchanged.
+with more than one entry is refused whole with `VALIDATION_FAILED`: no answer in it is applied and
+the run is left unchanged. (Staged multi-answer sets are PANT-925.)
+
+**Idempotent.** The question stays pending until the resumed turn has been recorded, and a
+claim on the run keeps a concurrent caller out while the turn runs. Re-submitting a question
+that was already answered returns `outcome: "already_resumed"` and drives no turn; a call
+landing while another caller's turn is still running returns `already_resumed` too (same
+question) or `claimed` (a different one). A claim left by a crashed process (dead pid on the
+same host, or older than `MINERVA_RESUME_CLAIM_STALE_MS`, default 6 h) is released on the next
+read, so the question is answerable again.
+
+**Fallback when the session is gone.** If the recorded drive session no longer resolves, or
+the run never recorded one, the turn is rebuilt from `state_ref` (the run's worktree): a fresh
+session gets the run's original drive prompt plus the answer. The reply says
+`resumed_via: "state"`. If the worktree is gone too, the call fails with `VALIDATION_FAILED`
+and the question stays pending.
 
 If the resumed turn fails (timeout after retries, auth, routing), the error is returned and the
 question goes back to `pending` with the run back in `waiting_on_human`. The same question can be
@@ -278,6 +309,7 @@ answered again with another `submitAnswers` call.
 | `run_id` | string (UUID) | The run to advance |
 | `channel` | `"agent"` \| `"human"` | Must match the enforced `channel` of every answered question |
 | `answers` | Answer[] | Exactly one answer |
+| `park_epoch` | number? | The epoch you read from `getRunStatus`. A stale epoch returns `stale_handle` and records the answer under `stale_answers` without driving a turn. |
 
 **`Answer` shape:**
 
@@ -286,8 +318,15 @@ answered again with another `submitAnswers` call.
 | `question_id` | string | The question `id` from `getQuestions` |
 | `answer` | string \| string[] | The answer text; a string array for `multi-select` questions |
 
-**Returns:** an empty object on success. Note that the handler currently wraps it, so the wire
-response is `{"result":{"result":{}}}`.
+**Returns:** a ResumeResult. The legacy empty `result` object is kept for older callers.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `result` | `{}` | Legacy field |
+| `outcome` | string | `resumed`, `already_resumed`, `stale_handle` or `claimed` |
+| `run_id` | string | |
+| `park_epoch` | number | The epoch this call resolved against |
+| `resumed_via` | `"session"` \| `"state"`? | Present when `outcome` is `resumed` |
 
 **Errors:**
 
@@ -295,7 +334,7 @@ response is `{"result":{"result":{}}}`.
 |------|---------|
 | `WRONG_CHANNEL` | `channel` in the request doesn't match the question's enforced `channel` |
 | `NOT_FOUND` | `run_id` doesn't exist, or `question_id` is not a pending question on it |
-| `VALIDATION_FAILED` | Malformed payload (e.g. `answers` empty or with more than one entry, or an entry missing `question_id`), or the run has no drive session to resume |
+| `VALIDATION_FAILED` | Malformed payload (e.g. `answers` empty or with more than one entry, or an entry missing `question_id`), or the session is gone and the worktree cannot be rebuilt |
 
 **Example:**
 ```bash
@@ -306,7 +345,56 @@ echo '{"method":"submitAnswers","params":{
 }}' | npx tsx bin/minerva.ts
 ```
 ```json
-{"result":{"result":{}}}
+{"result":{"result":{},"outcome":"resumed","run_id":"<run_id>","park_epoch":1,"resumed_via":"session"}}
+```
+
+---
+
+## `resumeRun`
+
+Resume a run that is parked on **time** or a **signal**, with no answer. One turn is driven
+and the run advances: it completes, parks on a new question, or fails.
+
+`cause` must fit the open park (`getRunStatus`'s `park.reason`). Use `"time"` for an
+`awaiting-time` park, once `evidence.observed_at` is at or after `not_before`. Use `"signal"`
+for an `awaiting-signal` park, with `evidence.signal_key` equal to the park's `signal_key`.
+Anything else, including a run parked on a question, returns `outcome: "refused"` with
+`problems` and drives nothing. Answers go through `submitAnswers`.
+
+The same claim, idempotency and session-gone fallback as `submitAnswers` apply. A repeat of a
+resume that already ran (same `park_epoch`) returns `already_resumed` without a second turn,
+even after the run has moved on to a new park.
+
+**Params:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run_id` | string (UUID) | The run to resume |
+| `cause` | `"time"` \| `"signal"` | Why the run is being resumed |
+| `evidence` | object | `{observed_at, signal_key?, detail?}`: when the time passed or the signal arrived |
+| `park_epoch` | number | **Required.** The epoch you read from `getRunStatus` (`park.park_epoch`). It is the idempotency key: a repeat with the same epoch returns `already_resumed`, and an epoch the run has not reached, or has left without being resumed, returns `stale_handle`. |
+
+**Returns:** a ResumeResult: `{outcome, run_id, park_epoch}` plus `resumed_via` when `outcome`
+is `resumed`, `problems` when it is `refused`, and `claimed_by` when it is `claimed`.
+
+**Errors:**
+
+| Code | Meaning |
+|------|---------|
+| `NOT_FOUND` | `run_id` doesn't exist |
+| `VALIDATION_FAILED` | Malformed `cause` or `evidence`, missing `park_epoch`, or the session is gone and the worktree cannot be rebuilt |
+
+**Example:**
+```bash
+echo '{"method":"resumeRun","params":{
+  "run_id":"<run_id>",
+  "cause":"time",
+  "evidence":{"observed_at":"2026-10-31T18:00:00.000Z"},
+  "park_epoch":2
+}}' | npx tsx bin/minerva.ts
+```
+```json
+{"result":{"outcome":"resumed","run_id":"<run_id>","park_epoch":2,"resumed_via":"session"}}
 ```
 
 ---

@@ -445,13 +445,19 @@ test("submitAnswers' Answer type accepts a string[] answer (multi-select), not j
 
   // A string[] answer must pass the answers[]-shape check specifically -- confirmed by asserting
   // the rejection is NOT the shape-check's own error message, even though the call still fails
-  // downstream (no active drive session in this fast, live-API-free test) for an unrelated
-  // reason. This confirms the type extension is honored at the runtime validation layer, not
-  // just the TypeScript type declaration.
+  // downstream for an unrelated reason. The run has no session, so it would be rebuilt from its
+  // workspace (PANT-1249); removing the workspace stops that at the rebuild's own check, before
+  // any driver runs, keeping this test fast and live-API-free. This confirms the type extension
+  // is honored at the runtime validation layer, not just the TypeScript type declaration.
+  rmSync(readRunRecord(runId).workspace_path, { recursive: true, force: true });
   await assert.rejects(
     () => submitAnswers({ run_id: runId, channel: "human", answers: [{ question_id: "q-1", answer: ["apple", "mango"] }] }),
     (e) =>
       e instanceof MinervaError &&
+      /cannot be rebuilt/.test(e.message) &&
       !/non-empty answers array/.test(e.message),
   );
+  // The failed delivery left the question answerable and the run parked.
+  assert.equal(readRunRecord(runId).questions[0]!.status, "pending");
+  assert.equal(readRunRecord(runId).status, "waiting_on_human");
 });

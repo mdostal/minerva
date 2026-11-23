@@ -3,6 +3,8 @@
 // escalation-classification.ts) in one combined --json-schema call. See docs/architecture.md
 // "No Autonomous Progress" and AD-2.
 
+import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 import { MinervaError } from "./errors.ts";
 import {
   allocateRun,
@@ -15,14 +17,33 @@ import {
   recordHumanEscalations,
   recordAutoResolution,
   updateRunMetricsDriver,
+  abandonedClaimPatch,
+  releaseAbandonedResume,
+  isLiveResumeClaim,
+  newResumeClaim,
+  claimOwner,
   type Question,
   type Channel,
   type RunRecord,
+  type Park,
+  type ParkReason,
+  type ResumeClaim,
 } from "./run-manager.ts";
 import { abortRun } from "./cleanup-ledger.ts";
 import { extractClassifiedQuestion } from "./escalation-classification.ts";
 import { checkAndMarkComplete } from "./output-emitter.ts";
-import { SpawnDriver, SubagentDriver, ForkedHiveDriver, TurnTimeoutError, laneOf, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
+import {
+  SpawnDriver,
+  SubagentDriver,
+  ForkedHiveDriver,
+  TurnTimeoutError,
+  isSessionGoneError,
+  isEnvelopeHandle,
+  laneOf,
+  type Driver,
+  type DriverInput,
+  type DriverResult,
+} from "./driver.ts";
 import { resolveAgnosticPlanDriver, resolvePlanningRoute, agnosticPlanDriverFromRecord, type AgnosticPlanDriver } from "./agnostic-plan-driver.ts";
 import { loadPlanDefaults, resolveDefaultAnswer, drivePromptSuffix, type PlanDefaults } from "./plan-defaults.ts";
 import { resolveTargetRepo } from "./repo-resolution.ts";
@@ -222,21 +243,41 @@ function buildDrivePrompt(idea: string, defaults: PlanDefaults, tool: ToolDescri
 // skill has actually finished and written its epic.yaml would otherwise still be forced to
 // emit SOME filler question text -- the filesystem check routes around that entirely, ignoring
 // whatever the schema-forced response said once completion is detected.
-export async function recordTurn(runId: string, rawResult: string): Promise<void> {
+//
+// `settle` (PANT-1249) is what a resumed turn commits about itself -- the question it answered,
+// the new session_id, the released claim -- written in the SAME locked write that parks the next
+// question, so there is no moment where a question is marked answered but nothing is parked and
+// nothing holds a claim (the crash window that used to wedge a run in_progress).
+export interface TurnSettlement {
+  answered?: string;
+  patch?: Partial<RunRecord>;
+}
+
+export async function recordTurn(runId: string, rawResult: string, settle: TurnSettlement = {}): Promise<void> {
+  const settled = (record: RunRecord): Partial<RunRecord> & { questions: Question[] } => ({
+    ...settle.patch,
+    questions: settle.answered
+      ? record.questions.map((q) => (q.id === settle.answered ? { ...q, status: "answered" as const } : q))
+      : record.questions,
+  });
   if (checkAndMarkComplete(runId)) {
     // Run is terminal (complete or aborted) -- no pending question to append, ever. Optional
     // leftovers of an envelope set can no longer be answered either.
     mutateRunRecord(runId, (record) => {
-      const questions = supersedeClosedSets(record.questions, undefined);
-      return questions === record.questions ? null : { questions };
+      const base = settled(record);
+      const questions = supersedeClosedSets(base.questions, undefined);
+      if (!settle.patch && !settle.answered && questions === record.questions && !record.park) return null;
+      return { ...base, questions, park: null };
     });
     return;
   }
   const set = extractQuestionSet(rawResult);
   // Built from the freshest record under the run lock (PANT-904): an abortRun that landed while
   // this turn was in flight wins -- the run stays aborted and no question is parked on it.
-  mutateRunRecord(runId, (record) => {
-    if (isTerminalStatus(record.status)) return null;
+  mutateRunRecord(runId, (current) => {
+    const base = settled(current);
+    if (isTerminalStatus(current.status)) return settle.patch || settle.answered ? { ...base, park: null } : null;
+    const record: RunRecord = { ...current, ...base };
     if (set) {
       // PANT-923: the driver surfaced a whole open question set (ForkedHiveDriver's pending
       // envelope). Park every question of it at once. After a sibling is answered the driver
@@ -255,7 +296,7 @@ export async function recordTurn(runId: string, rawResult: string): Promise<void
           required: entry.required,
         });
       }
-      return { status: "waiting_on_human", questions: [...kept, ...added] };
+      return parkOnQuestions(record, base, [...kept, ...added]);
     }
     const id = `q-${record.questions.length + 1}`;
     // Prose drivers park one question per turn (the one-question guard in
@@ -264,11 +305,43 @@ export async function recordTurn(runId: string, rawResult: string): Promise<void
       ...buildQuestion(id, extractClassifiedQuestion(rawResult), extractQuestionShape(rawResult)),
       set_id: id,
     };
-    return {
-      status: "waiting_on_human",
-      questions: [...supersedeClosedSets(record.questions, id), question],
-    };
+    return parkOnQuestions(record, base, [...supersedeClosedSets(record.questions, id), question]);
   });
+}
+
+// The patch that parks a run awaiting an answer to its pending questions, opening a new park
+// epoch. `record` already carries the turn's settlement (its new session_id).
+function parkOnQuestions(record: RunRecord, base: Partial<RunRecord>, questions: Question[]): Partial<RunRecord> {
+  const pending = questions.filter((q) => q.status === "pending").map((q) => q.id);
+  const patch: Partial<RunRecord> = { ...base, status: "waiting_on_human", questions };
+  if (pending.length === 0) return patch;
+  return { ...patch, ...openPark(record, { kind: "awaiting-answer", question_id: pending[0]!, open_qids: pending }) };
+}
+
+function resumeMethodOf(sessionId: string | null): Park["resume"] {
+  if (!sessionId || isEnvelopeHandle(sessionId)) return { method: "state" };
+  return { method: "session", session_id: sessionId };
+}
+
+function openPark(record: RunRecord, reason: ParkReason): Pick<RunRecord, "park" | "park_epoch"> {
+  const epoch = (record.park_epoch ?? 0) + 1;
+  return {
+    park_epoch: epoch,
+    park: { epoch, reason, parked_at: new Date().toISOString(), host: hostname(), resume: resumeMethodOf(record.session_id) },
+  };
+}
+
+// Park a running run on time or a signal (PANT-1249). The callers that decide WHEN to wait on
+// time or a signal are later stories (p3-01, p3-02); this only records the park so resumeRun can
+// resume it. The run reads waiting_on_human like any other park; its reason tells the kinds apart.
+export function parkRun(runId: string, reason: Exclude<ParkReason, { kind: "awaiting-answer" }>): Park {
+  const { record } = mutateRunRecord(runId, (current) => {
+    if (isTerminalStatus(current.status)) {
+      throw new MinervaError("VALIDATION_FAILED", `Run ${runId} is ${current.status}; a finished run cannot park`);
+    }
+    return { status: "waiting_on_human", ...openPark(current, reason) };
+  });
+  return record.park!;
 }
 
 function buildQuestion(
@@ -399,37 +472,12 @@ async function autoAnswerLoop(runId: string): Promise<void> {
       return;
     }
 
-    if (!record.session_id) return; // no live session to resume against -- cannot drive further
-
-    // Mark answered + re-drive, mirroring submitAnswers exactly (its own "No Autonomous Progress"
-    // advancement path). The pre-baked answer is the operator's, supplied ahead of time.
-    const updatedQuestions = record.questions.map((q) =>
-      q.id === pending.id ? { ...q, status: "answered" as const } : q,
-    );
-    updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
-
-    const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-    let session_id: string;
-    let raw_result: string;
-    let route_decision: DriverResult["route_decision"];
-    let route: DriverResult["route"];
-    try {
-      ({ session_id, raw_result, route_decision, route } = await runTurnResumable(driverForRecord(record), {
-        cwd: record.workspace_path,
-        sessionId: record.session_id,
-        prompt: answerPrompt,
-        qid: pending.qid,
-        ...toolTurnInput(record),
-      }));
-    } catch (err) {
-      // Same stranding risk as submitAnswers (PANT-903): leave the gate answerable.
-      restorePendingQuestion(runId, pending.id);
-      throw err;
-    }
-    recordDriverTurn(runId, route_decision, laneOf(route));
+    // Delivered through the SAME claim -> turn -> settle path submitAnswers uses (its own "No
+    // Autonomous Progress" advancement path). The pre-baked answer is the operator's, supplied
+    // ahead of time. A run whose session is gone is rebuilt from state, as for a human answer.
+    const delivered = await resumeWithAnswer(runId, pending.id, pending.channel, answer);
+    if (delivered.outcome !== "resumed") return;
     recordAutoResolution(runId);
-    updateRunRecord(runId, { session_id });
-    await recordTurn(runId, raw_result);
     answered++;
   }
   // Guardrail tripped: leave whatever recordTurn last set (waiting_on_human or complete). Bounded,
@@ -495,12 +543,12 @@ export async function startRun(params: Record<string, unknown>): Promise<Record<
     updateRunMetricsDriver(runId, planDriver.runtime);
   }
 
-  const record = readRunRecord(runId);
-  const driver = driverForRecord(record);
-
   // On the agnostic path the driver's first turn wants the bare idea (the ported CLI wraps it in
   // the DECOMPOSE contract); the claude path keeps the native `/plugin-hive:plan …` slash command.
+  // Persisted so a run whose session is later gone can be rebuilt from it (PANT-1249).
   const drivePrompt = planDriver ? idea : buildDrivePrompt(idea, defaults, tool);
+  const record = updateRunRecord(runId, { drive_prompt: drivePrompt });
+  const driver = driverForRecord(record);
 
   // auto-cleanup-orphaned-runs-on-first-turn-failure: allocateRun() above already durably wrote
   // this run's record (status "in_progress") and its workspace/worktree, BEFORE this very first
@@ -556,10 +604,15 @@ export function getQuestions(params: Record<string, unknown>): Record<string, un
   if (channel !== "agent" && channel !== "human") {
     throw new MinervaError("VALIDATION_FAILED", 'getQuestions requires channel "agent" or "human"');
   }
-  const record = readRunRecord(runId);
-  // Read-only: escalations are counted once when a question is parked on the human queue
+  // Escalations are counted once when a question is parked on the human queue
   // (recordHumanEscalations, after each drive), never per read -- polling must not inflate them.
-  const questions = record.questions.filter((q) => q.status === "pending" && q.channel === channel);
+  // The only write a read can make is releasing a resume claim whose process died (PANT-1249).
+  const record = releaseAbandonedResume(runId);
+  // A question a live resume is delivering right now is no longer waiting on anyone.
+  const delivering = isLiveResumeClaim(record.resuming) ? record.resuming.question_id : undefined;
+  const questions = record.questions.filter(
+    (q) => q.status === "pending" && q.channel === channel && q.id !== delivering,
+  );
   return { questions };
 }
 
@@ -584,13 +637,189 @@ export function isAnswerArray(value: unknown): value is Answer[] {
   );
 }
 
-// Undo a mark-answered after its resumed turn failed: the question goes back to pending and the
-// run back to waiting_on_human (what recordTurn set when it surfaced the question), so a later
-// answer can advance it again.
-function restorePendingQuestion(runId: string, questionId: string): void {
-  const current = readRunRecord(runId);
-  const questions = current.questions.map((q) => (q.id === questionId ? { ...q, status: "pending" as const } : q));
-  updateRunRecord(runId, { questions, status: "waiting_on_human" });
+// --- Resume (PANT-1249, p2-02) ---------------------------------------------------------------
+//
+// Every way a parked run moves again -- a human or agent answer (submitAnswers), a pre-baked
+// answer (autoAnswerLoop), time passing or a signal arriving (resumeRun) -- goes through one
+// path, in this order:
+//
+//   1. claim: under the run lock, release a claim whose process died, decide the outcome
+//      (already_resumed / stale_handle / refused / claimed), else write the claim and set the run
+//      in_progress. The question stays pending; nothing is marked delivered yet.
+//   2. turn: resume the provider session; when it no longer resolves (or the run never had one),
+//      rebuild from state_ref -- the run's worktree -- by re-issuing the original drive prompt.
+//   3. settle: one locked write marks the question answered, stores the new session_id,
+//      releases the claim and parks the next question (recordTurn's `settle`).
+//
+// A crash anywhere before 3 leaves the question pending under a dead claim, which the next read
+// releases: the run is recoverable, never wedged. A failed turn releases the claim at once.
+
+type ResumeEvidence = { observed_at: string; signal_key?: string; detail?: Record<string, unknown> };
+
+type ResumeItem =
+  | { kind: "answer"; question: Question; answer: string | string[] }
+  | { kind: "cause"; cause: "time" | "signal"; evidence: ResumeEvidence };
+
+function epochOf(record: RunRecord): number {
+  return record.park?.epoch ?? record.park_epoch ?? 0;
+}
+
+// Driver.runTurn's prompt is always a plain string -- a multi-select answer (string[]) is joined
+// into readable prose, matching how a human would phrase multiple selections in a chat message.
+function answerText(answer: string | string[]): string {
+  return Array.isArray(answer) ? answer.join(", ") : answer;
+}
+
+function causeText(item: Extract<ResumeItem, { kind: "cause" }>): string {
+  const what =
+    item.cause === "time"
+      ? "the time it was waiting for has passed"
+      : `the signal it was waiting for${item.evidence.signal_key ? ` (${item.evidence.signal_key})` : ""} has arrived`;
+  const detail = item.evidence.detail ? ` Detail: ${JSON.stringify(item.evidence.detail)}.` : "";
+  return `This run was parked waiting on ${item.cause}; ${what} (observed at ${item.evidence.observed_at}).${detail} Continue from where you left off.`;
+}
+
+// The prompt the run started with. Records written before drive_prompt existed rebuild it from
+// the frozen idea, defaults and tool, exactly as startRun built it.
+function drivePromptOf(record: RunRecord): string {
+  if (record.drive_prompt) return record.drive_prompt;
+  const idea = record.idea ?? "";
+  if (record.plan_runtime && record.plan_runtime.toLowerCase() !== "claude") return idea;
+  return buildDrivePrompt(idea, record.defaults ?? loadPlanDefaults(), toolForRecord(record));
+}
+
+// The degraded path (mandatory in the lifecycle contract): a fresh turn in the run's worktree,
+// re-issuing the drive prompt so the planning skill re-reads its own on-disk progress, plus what
+// is being delivered. state_ref is file-local, so this works only on the host that parked the run.
+function rebuildInput(record: RunRecord, item: ResumeItem): DriverInput {
+  if (!existsSync(record.workspace_path)) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      `Run ${record.run_id} cannot be rebuilt: its session is gone and its workspace ${record.workspace_path} ` +
+        `no longer exists on this host. Its state is file-local, so it can only resume where it parked.`,
+    );
+  }
+  const delivered =
+    item.kind === "answer"
+      ? `The question "${item.question.text}" has been answered: ${answerText(item.answer)}`
+      : causeText(item);
+  return {
+    cwd: record.workspace_path,
+    sessionId: null,
+    prompt:
+      `${drivePromptOf(record)}\n\nResuming this run from its on-disk state: the earlier session could not ` +
+      `be resumed. Your progress so far is in this workspace; continue from it. ${delivered}`,
+    ...toolTurnInput(record),
+  };
+}
+
+// The resume attempt on the run's own session, or null when there is none to use: no session_id
+// at all, or a cause resume of a forked run (its envelope pointer only knows how to take an answer).
+function sessionInput(record: RunRecord, item: ResumeItem): DriverInput | null {
+  if (!record.session_id) return null;
+  if (item.kind === "cause" && isEnvelopeHandle(record.session_id)) return null;
+  return {
+    cwd: record.workspace_path,
+    sessionId: record.session_id,
+    prompt: item.kind === "answer" ? answerText(item.answer) : causeText(item),
+    ...(item.kind === "answer" ? { qid: item.question.qid } : {}),
+    ...toolTurnInput(record),
+  };
+}
+
+function releaseClaim(runId: string, claim: ResumeClaim): void {
+  mutateRunRecord(runId, (record) =>
+    record.resuming?.pid === claim.pid && record.resuming.started_at === claim.started_at
+      ? { resuming: null, status: "waiting_on_human" }
+      : null,
+  );
+}
+
+// Steps 2 and 3, for a run whose claim is already written. Returns how the turn reattached.
+async function driveClaimedResume(record: RunRecord, claim: ResumeClaim, item: ResumeItem): Promise<"session" | "state"> {
+  const d = driverForRecord(record);
+  let result: DriverResult | null = null;
+  let resumedVia: "session" | "state" = "state";
+  try {
+    const viaSession = sessionInput(record, item);
+    if (viaSession) {
+      try {
+        result = await runTurnResumable(d, viaSession);
+        resumedVia = isEnvelopeHandle(record.session_id!) ? "state" : "session";
+      } catch (err) {
+        if (!isSessionGoneError(err)) throw err;
+      }
+    }
+    if (!result) result = await runTurnResumable(d, rebuildInput(record, item));
+  } catch (err) {
+    // The turn never happened, so nothing was delivered: release the claim and the run is parked
+    // again on the same question (PANT-903). The caller still gets the error.
+    releaseClaim(record.run_id, claim);
+    throw err;
+  }
+  recordDriverTurn(record.run_id, result.route_decision, laneOf(result.route));
+  await recordTurn(record.run_id, result.raw_result, {
+    answered: item.kind === "answer" ? item.question.id : undefined,
+    patch: { session_id: result.session_id, resuming: null, park: null, last_resumed_epoch: claim.epoch },
+  });
+  return resumedVia;
+}
+
+interface ClaimVerdict {
+  result?: Record<string, unknown>;
+  claim?: ResumeClaim;
+  record?: RunRecord;
+}
+
+// Step 1 for an answer, then steps 2 and 3. Shared by submitAnswers and autoAnswerLoop.
+async function resumeWithAnswer(
+  runId: string,
+  questionId: string,
+  channel: Channel,
+  answer: string | string[],
+): Promise<Record<string, unknown>> {
+  const verdict: ClaimVerdict = {};
+  mutateRunRecord(runId, (current) => {
+    const recovery = abandonedClaimPatch(current);
+    const record: RunRecord = { ...current, ...recovery };
+    const question = record.questions.find((q) => q.id === questionId);
+    if (!question) {
+      throw new MinervaError("NOT_FOUND", `No question ${questionId} on run ${runId}`);
+    }
+    if (question.channel !== channel) {
+      throw new MinervaError("WRONG_CHANNEL", `Question ${questionId} is on channel "${question.channel}", not "${channel}"`);
+    }
+    const epoch = epochOf(record);
+    if (question.status === "answered") {
+      verdict.result = { outcome: "already_resumed", run_id: runId, park_epoch: record.last_resumed_epoch ?? epoch };
+      return recovery;
+    }
+    if (question.status === "superseded" || isTerminalStatus(record.status)) {
+      // The park this answer was meant for is gone. Record the answer, never apply or drop it.
+      const recorded_at = new Date().toISOString();
+      const why = isTerminalStatus(record.status) ? `run is ${record.status}` : "question was superseded";
+      verdict.result = { outcome: "stale_handle", run_id: runId, park_epoch: epoch, recorded_at };
+      return {
+        ...recovery,
+        stale_answers: [...(record.stale_answers ?? []), { question_id: questionId, answer, received_at: recorded_at, reason: why }],
+      };
+    }
+    if (isLiveResumeClaim(record.resuming)) {
+      verdict.result =
+        record.resuming.question_id === questionId
+          ? { outcome: "already_resumed", run_id: runId, park_epoch: record.resuming.epoch }
+          : { outcome: "claimed", run_id: runId, park_epoch: record.resuming.epoch, claimed_by: claimOwner(record.resuming) };
+      return recovery;
+    }
+    verdict.claim = newResumeClaim(epoch, { question_id: questionId });
+    verdict.record = { ...record, resuming: verdict.claim, status: "in_progress" };
+    return { ...recovery, resuming: verdict.claim, status: "in_progress" };
+  });
+  if (verdict.result) return verdict.result;
+  const record = verdict.record!;
+  const question = record.questions.find((q) => q.id === questionId)!;
+  const resumedVia = await driveClaimedResume(record, verdict.claim!, { kind: "answer", question, answer });
+  return { outcome: "resumed", run_id: runId, park_epoch: verdict.claim!.epoch, resumed_via: resumedVia };
 }
 
 export async function submitAnswers(params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -607,79 +836,122 @@ export async function submitAnswers(params: Record<string, unknown>): Promise<Re
   if (!isAnswerArray(answers) || answers.length === 0) {
     throw new MinervaError("VALIDATION_FAILED", "submitAnswers requires a non-empty answers array of {question_id, answer}");
   }
-  // PANT-903: the engine drives exactly one question per turn, so only one answer can ever be
-  // applied per call. Reject extras loudly instead of silently dropping them (batch staging of
-  // partial answers is PANT-697).
+  // PANT-903 / PANT-1249: an answer set is accepted whole or refused whole, never truncated. The
+  // engine delivers one answer per turn and cannot stage the rest of a set, so a set of more than
+  // one is refused whole -- before anything is read or written (staging is PANT-925).
   if (answers.length > 1) {
     throw new MinervaError(
       "VALIDATION_FAILED",
-      `submitAnswers got ${answers.length} answers; submit one answer per call (batch staging is PANT-697)`,
+      `submitAnswers got ${answers.length} answers; the set is refused whole and nothing was applied. ` +
+        `Submit one answer per call (staging a set is PANT-925).`,
     );
   }
-
-  const record = readRunRecord(runId);
   const { question_id: questionId, answer } = answers[0] as Answer;
-  const question = record.questions.find((q) => q.id === questionId && q.status === "pending");
 
-  if (!question) {
-    throw new MinervaError("NOT_FOUND", `No pending question ${questionId} on run ${runId}`);
+  const result = await resumeWithAnswer(runId, questionId, channel, answer);
+  if (result.outcome === "resumed") {
+    // After a human (or agent) answers an escalated question, resume auto-answering any further
+    // routine gates from the pre-baked defaults, so answering one strategic question doesn't
+    // leave the run stalled on the next mechanical one. No-op when mode is "off".
+    await autoAnswerLoop(runId);
+    recordHumanEscalations(runId);
   }
-  if (question.channel !== channel) {
-    throw new MinervaError(
-      "WRONG_CHANNEL",
-      `Question ${questionId} is on channel "${question.channel}", not "${channel}"`,
-    );
+  // `result: {}` is kept for callers written against the earlier empty reply.
+  return { result: {}, ...result };
+}
+
+function isResumeEvidence(value: unknown): value is ResumeEvidence {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const e = value as Record<string, unknown>;
+  if (typeof e.observed_at !== "string" || Number.isNaN(Date.parse(e.observed_at))) return false;
+  if (e.signal_key !== undefined && (typeof e.signal_key !== "string" || e.signal_key.length === 0)) return false;
+  return e.detail === undefined || (typeof e.detail === "object" && e.detail !== null && !Array.isArray(e.detail));
+}
+
+// Why a cause does not fit the open park (the contract's resumeFits); empty when it does.
+function causeProblems(record: RunRecord, cause: "time" | "signal", evidence: ResumeEvidence): string[] {
+  const park = record.park;
+  if (!park || record.status !== "waiting_on_human") return [`run ${record.run_id} is not parked (status ${record.status})`];
+  const reason = park.reason;
+  if (reason.kind === "awaiting-answer") {
+    return [`run is parked awaiting an answer to ${reason.question_id}; answer it with submitAnswers`];
   }
-  if (!record.session_id) {
+  if (reason.kind === "awaiting-time") {
+    if (cause !== "time") return [`run is parked awaiting time, not a ${cause}`];
+    if (Date.parse(evidence.observed_at) < Date.parse(reason.not_before)) {
+      return [`observed_at ${evidence.observed_at} is before the park's not_before ${reason.not_before}`];
+    }
+    return [];
+  }
+  if (cause !== "signal") return [`run is parked awaiting signal ${reason.signal_key}, not ${cause}`];
+  if (evidence.signal_key !== undefined && evidence.signal_key !== reason.signal_key) {
+    return [`signal ${evidence.signal_key} is not the park's signal ${reason.signal_key}`];
+  }
+  return [];
+}
+
+// Resume a run parked on time or a signal, with no answer (PANT-1249). Idempotent on
+// (run_id, park_epoch): pass the park_epoch the caller saw, and a repeat returns already_resumed
+// without driving a second turn.
+export async function resumeRun(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const runId = params.run_id;
+  const cause = params.cause;
+  const evidence = params.evidence;
+  const parkEpoch = params.park_epoch;
+  if (typeof runId !== "string") {
+    throw new MinervaError("VALIDATION_FAILED", "resumeRun requires a string run_id");
+  }
+  if (cause !== "time" && cause !== "signal") {
+    throw new MinervaError("VALIDATION_FAILED", 'resumeRun requires cause "time" or "signal" (answers go to submitAnswers)');
+  }
+  if (!isResumeEvidence(evidence)) {
     throw new MinervaError(
       "VALIDATION_FAILED",
-      `Run ${runId} has no active drive session to resume: its record has no session_id (the driver ` +
-        `returned an empty one on its last turn, e.g. plan-agnostic output without session_id). ` +
-        `The run cannot be advanced; abortRun it and start a new run.`,
+      "resumeRun requires evidence {observed_at: ISO timestamp, signal_key?: string, detail?: object}",
+    );
+  }
+  // Required: the epoch is the idempotency key. Without it a repeat after the run has moved on
+  // could not be told apart from a resume of the new park.
+  if (typeof parkEpoch !== "number" || !Number.isInteger(parkEpoch) || parkEpoch < 0) {
+    throw new MinervaError(
+      "VALIDATION_FAILED",
+      "resumeRun requires park_epoch, a non-negative integer (getRunStatus's park.park_epoch)",
     );
   }
 
-  // Mark answered BEFORE resuming -- this is the run's only advancement path (see
-  // "No Autonomous Progress" in docs/architecture.md). Nothing else may flip a question's
-  // status or re-drive the session.
-  const updatedQuestions = record.questions.map((q) => (q.id === questionId ? { ...q, status: "answered" as const } : q));
-  updateRunRecord(runId, { questions: updatedQuestions, status: "in_progress" });
+  const verdict: ClaimVerdict = {};
+  mutateRunRecord(runId, (current) => {
+    const recovery = abandonedClaimPatch(current);
+    const record: RunRecord = { ...current, ...recovery };
+    const epoch = parkEpoch;
+    if ((record.last_resumed_epoch ?? 0) >= epoch) {
+      verdict.result = { outcome: "already_resumed", run_id: runId, park_epoch: epoch };
+      return recovery;
+    }
+    if (isTerminalStatus(record.status) || record.park?.epoch !== epoch) {
+      verdict.result = { outcome: "stale_handle", run_id: runId, park_epoch: epoch, recorded_at: new Date().toISOString() };
+      return recovery;
+    }
+    if (isLiveResumeClaim(record.resuming)) {
+      verdict.result =
+        record.resuming.cause === cause && record.resuming.epoch === epoch
+          ? { outcome: "already_resumed", run_id: runId, park_epoch: epoch }
+          : { outcome: "claimed", run_id: runId, park_epoch: epoch, claimed_by: claimOwner(record.resuming) };
+      return recovery;
+    }
+    const problems = causeProblems(record, cause, evidence);
+    if (problems.length > 0) {
+      verdict.result = { outcome: "refused", run_id: runId, park_epoch: epoch, problems };
+      return recovery;
+    }
+    verdict.claim = newResumeClaim(epoch, { cause });
+    verdict.record = { ...record, resuming: verdict.claim, status: "in_progress" };
+    return { ...recovery, resuming: verdict.claim, status: "in_progress" };
+  });
+  if (verdict.result) return verdict.result;
 
-  // Driver.runTurn's prompt is always a plain string -- a multi-select answer (string[]) is
-  // joined into readable prose for the driven turn, matching how a human would phrase multiple
-  // selections in a chat message.
-  const answerPrompt = Array.isArray(answer) ? answer.join(", ") : answer;
-  let newSessionId: string;
-  let rawResult: string;
-  let routeDecision: DriverResult["route_decision"];
-  let route: DriverResult["route"];
-  try {
-    ({ session_id: newSessionId, raw_result: rawResult, route_decision: routeDecision, route } = await runTurnResumable(driverForRecord(record), {
-      cwd: record.workspace_path,
-      sessionId: record.session_id,
-      prompt: answerPrompt,
-      qid: question.qid,
-      ...toolTurnInput(record),
-    }));
-  } catch (err) {
-    // PANT-903: the resumed turn never happened, so the answer was never delivered. Put the
-    // question back to pending and the run back to waiting_on_human, so the same question can be
-    // answered again. Without this the run is stranded in_progress with no pending question and
-    // nothing can ever advance it. The caller still gets the error.
-    restorePendingQuestion(runId, questionId);
-    throw err;
-  }
-  recordDriverTurn(runId, routeDecision, laneOf(route));
-  // Persisted after EVERY turn -- SpawnDriver's resumed session_id happens to stay constant in
-  // practice, but the contract doesn't assume that (SubagentDriver's does change per turn).
-  updateRunRecord(runId, { session_id: newSessionId });
-  await recordTurn(runId, rawResult);
-
-  // After a human (or agent) answers an escalated question, resume auto-answering any further
-  // routine gates from the pre-baked defaults, so answering one strategic question doesn't leave
-  // the run stalled on the next mechanical one. No-op when mode is "off".
+  const resumedVia = await driveClaimedResume(verdict.record!, verdict.claim!, { kind: "cause", cause, evidence });
   await autoAnswerLoop(runId);
   recordHumanEscalations(runId);
-
-  return { result: {} };
+  return { outcome: "resumed", run_id: runId, park_epoch: verdict.claim!.epoch, resumed_via: resumedVia };
 }

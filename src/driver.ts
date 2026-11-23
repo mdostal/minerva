@@ -42,8 +42,8 @@ import { listEnvelopes } from "./envelope-detection.ts";
 import { emitTelemetryEvent } from "./telemetry.ts";
 import { resolvePantheonCoreApiUrl, PANTHEON_CORE_API_URL_MISSING } from "./pantheon-core-api.ts";
 import { withOperatorToken } from "./operator-token.ts";
+import { CLAUDE_OAUTH_TOKEN_ENV, injectedClaudeToken, primeClaudeCredential } from "./claude-credential.ts";
 
-const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const DEFAULT_ROUTE_TIMEOUT_MS = 10_000;
 // Heimdall routes by runtime/provider; Minerva needs the spawnable CLI.
 const RUNTIME_CLI: Record<string, string> = {
@@ -427,16 +427,29 @@ function readClaudeOauthTokenFromZshrc(): string | undefined {
   }
 }
 
+// The env every runtime child spawns with. Credential precedence: CLAUDE_CODE_OAUTH_TOKEN already in
+// the env, then ~/.zshrc, then the token resolved through Pantheon's secrets facade
+// (claude-credential.ts, PANT-1169). Synchronous: the facade lookup itself happens in
+// primeSpawnCredential(), awaited before a turn spawns anything.
 export function resolveClaudeSpawnEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...process.env, ...(extraEnv ?? {}) };
   if (!env[CLAUDE_OAUTH_TOKEN_ENV]) {
-    const token = readClaudeOauthTokenFromZshrc();
+    const token = readClaudeOauthTokenFromZshrc() ?? injectedClaudeToken();
     if (token) env[CLAUDE_OAUTH_TOKEN_ENV] = token;
   }
   return env;
 }
 
-function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], parseOutput: (stdout: string) => TurnResult, extraEnv?: NodeJS.ProcessEnv): Promise<TurnResult> {
+// Resolves the facade credential when a claude child would otherwise spawn with none. Never
+// throws; non-claude runtimes never ask for an Anthropic secret.
+export async function primeSpawnCredential(route: RuntimeRoute, extraEnv?: NodeJS.ProcessEnv): Promise<void> {
+  if (route.cli !== RUNTIME_CLI.claude) return;
+  const env = { ...process.env, ...(extraEnv ?? {}) };
+  await primeClaudeCredential(Boolean(env[CLAUDE_OAUTH_TOKEN_ENV]) || Boolean(readClaudeOauthTokenFromZshrc()));
+}
+
+async function spawnRuntime(route: RuntimeRoute, cwd: string, args: string[], parseOutput: (stdout: string) => TurnResult, extraEnv?: NodeJS.ProcessEnv): Promise<TurnResult> {
+  await primeSpawnCredential(route, extraEnv);
   return new Promise((resolve, reject) => {
     const env = resolveClaudeSpawnEnv(extraEnv);
     const child = spawn(route.cli, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
@@ -864,6 +877,8 @@ export class SubagentDriver implements Driver {
   private async turn(input: DriverInput): Promise<DriverResult> {
     const route = await resolveRuntimeRoute();
     const adapter = getAdapter(route.cli);
+    // dispatchBackground/poll/stop spawn synchronously, so the credential is resolved up front.
+    await primeSpawnCredential(route);
     const shortId = dispatchBackground(route, adapter, input.cwd, input.sessionId, input.prompt);
 
     let entry: BackgroundAgentEntry;

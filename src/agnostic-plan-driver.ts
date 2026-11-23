@@ -20,7 +20,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { TurnTimeoutError, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
+import { TurnTimeoutError, primeSpawnCredential, resolveClaudeSpawnEnv, type Driver, type DriverInput, type DriverResult } from "./driver.ts";
 import { resolvePantheonCoreApiUrl } from "./pantheon-core-api.ts";
 import { withOperatorToken } from "./operator-token.ts";
 
@@ -173,9 +173,14 @@ export class AgnosticPlanDriver implements Driver {
       ...turnArgs,
     ];
 
+    // The CLI spawns the runtime itself, so it needs the same credential a direct claude child
+    // gets (PANT-1169): without it, a claude runtime inside the Multica runtime is not logged in.
+    await primeSpawnCredential({ cli: this.runtime, model: this.model });
+    const env = resolveClaudeSpawnEnv();
+
     const stdout = await new Promise<string>((resolve, reject) => {
       // Spawn via the current node binary so PATH/interpreter resolution never bites.
-      const child = spawn(process.execPath, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(process.execPath, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
       let out = "";
       let err = "";
       // See driver.ts's TurnTimeoutError -- same "our own timer, not an external signal" flag
